@@ -1,5 +1,7 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.Symbolic.Stack
@@ -9,15 +11,15 @@ module Data.Macaw.Symbolic.Stack
   , createArrayStack
   ) where
 
+import Data.Macaw.CFG qualified as MC
+import Data.Macaw.Symbolic qualified as MS
 import Data.Parameterized.Context as Ctx
-
-import qualified What4.Interface as WI
-import qualified What4.Symbol as WSym
-
-import qualified Lang.Crucible.Backend as C
-
-import qualified Lang.Crucible.LLVM.DataLayout as CLD
-import qualified Lang.Crucible.LLVM.MemModel as CLM
+import Lang.Crucible.Backend qualified as C
+import Lang.Crucible.Simulator qualified as C
+import Lang.Crucible.LLVM.DataLayout qualified as CLD
+import Lang.Crucible.LLVM.MemModel qualified as CLM
+import What4.Interface qualified as WI
+import What4.Symbol qualified as WSym
 
 -- | Helper, not exported
 stackAlign :: CLD.Alignment
@@ -61,7 +63,9 @@ mallocStack bak mem sz =
 data ArrayStack sym w
   = ArrayStack
     { -- | Pointer to the base of the stack array
-      arrayStackPtr :: CLM.LLVMPtr sym w
+      arrayStackBasePtr :: CLM.LLVMPtr sym w
+      -- | Pointer to the top (end) of the stack array
+    , arrayStackTopPtr :: CLM.LLVMPtr sym w
       -- | SMT array backing the stack allocation
     , arrayStackVal :: WI.SymArray sym (Ctx.SingleCtx (WI.BaseBVType w)) (WI.BaseBVType 8)
     }
@@ -84,6 +88,18 @@ createArrayStack ::
 createArrayStack bak mem sz = do
   let sym = C.backendGetSym bak
   arr <- stackArray sym
-  (ptr, mem1) <- mallocStack bak mem sz
-  mem2 <- CLM.doArrayStore bak mem1 ptr stackAlign arr sz
-  pure (ArrayStack ptr arr, mem2)
+  (base, mem1) <- mallocStack bak mem sz
+  mem2 <- CLM.doArrayStore bak mem1 base stackAlign arr sz
+  top <- CLM.ptrAdd sym ?ptrWidth base sz
+  pure (ArrayStack base top arr, mem2)
+
+-- | Set the stack pointer register.
+_setStackPointerReg ::
+  1 WI.<= MC.ArchAddrWidth arch =>
+  MS.SymArchConstraints arch =>
+  C.IsSymInterface sym =>
+  MS.ArchVals arch ->
+  C.RegEntry sym (MS.ArchRegStruct arch) ->
+  CLM.LLVMPtr sym (MC.ArchAddrWidth arch) ->
+  C.RegEntry sym (MS.ArchRegStruct arch)
+_setStackPointerReg archVals regs = MS.updateReg archVals regs MC.sp_reg
