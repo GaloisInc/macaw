@@ -1,5 +1,7 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TypeOperators #-}
@@ -7,10 +9,12 @@
 module Data.Macaw.Symbolic.Stack
   ( stackArray
   , mallocStack
+  , ExtraStackSlots(..)
   , ArrayStack(..)
   , createArrayStack
   ) where
 
+import Data.BitVector.Sized qualified as BVS
 import Data.Macaw.CFG qualified as MC
 import Data.Macaw.Symbolic qualified as MS
 import Data.Parameterized.Context as Ctx
@@ -60,6 +64,15 @@ mallocStack ::
 mallocStack bak mem sz =
   CLM.doMalloc bak CLM.StackAlloc CLM.Mutable "stack_alloc" mem sz stackAlign
 
+-- | Allocate this many pointer-sized stack slots, which are reserved for
+-- stack-spilled arguments.
+newtype ExtraStackSlots = ExtraStackSlots { getExtraStackSlots :: Int }
+  -- Derive the Read instance using the `newtype` strategy, not the
+  -- `stock` strategy. This allows parsing ExtraStackSlots values in
+  -- optparse-applicative-based command-line parsers using the `Read` instance.
+  deriving newtype (Enum, Eq, Integral, Num, Ord, Read, Real, Show)
+
+-- | An allocartion representing the program stack, backed by an SMT array
 data ArrayStack sym w
   = ArrayStack
     { -- | Pointer to the base of the stack array
@@ -75,6 +88,8 @@ data ArrayStack sym w
 -- * Creates a stack array with 'stackArray'
 -- * Allocates space for the stack with 'mallocStack'
 -- * Writes the stack array to the allocation
+-- * Creates a pointer to the top of the stack, which is the end minus the extra
+--   stack slots
 createArrayStack ::
   C.IsSymBackend sym bak =>
   CLM.HasPtrWidth w =>
@@ -82,15 +97,24 @@ createArrayStack ::
   CLM.HasLLVMAnn sym =>
   bak ->
   CLM.MemImpl sym ->
+  -- | The caller must ensure the size of these is less than the allocation size
+  ExtraStackSlots ->
   -- | Size of stack allocation
   WI.SymExpr sym (WI.BaseBVType w) ->
   IO (ArrayStack sym w, CLM.MemImpl sym)
-createArrayStack bak mem sz = do
+createArrayStack bak mem slots sz = do
   let sym = C.backendGetSym bak
   arr <- stackArray sym
   (base, mem1) <- mallocStack bak mem sz
   mem2 <- CLM.doArrayStore bak mem1 base stackAlign arr sz
-  top <- CLM.ptrAdd sym ?ptrWidth base sz
+
+  end <- CLM.doPtrAddOffset bak mem2 base sz
+  let ptrBytes = WI.intValue ?ptrWidth `div` 8
+  let slots' = fromIntegral (getExtraStackSlots slots)
+  let slotsBytes = slots' * ptrBytes
+  slotsBytesBv <- WI.bvLit sym ?ptrWidth (BVS.mkBV ?ptrWidth slotsBytes)
+  top <- CLM.ptrSub sym ?ptrWidth end slotsBytesBv
+
   pure (ArrayStack base top arr, mem2)
 
 -- | Set the stack pointer register.

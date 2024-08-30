@@ -529,7 +529,7 @@ simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g = do
   let mib = 1024 * kib
   stackSize <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr (2 * mib))
   (MSS.ArrayStack stackBasePtr _stackTopPtr _stackArrayStorage, mem1) <-
-    MSS.createArrayStack bak initMem stackSize
+    MSS.createArrayStack bak initMem (MSS.ExtraStackSlots 0) stackSize
 
   -- Make initial registers, including setting up a stack pointer.
   --
