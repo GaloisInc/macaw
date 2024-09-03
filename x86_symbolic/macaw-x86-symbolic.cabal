@@ -9,6 +9,7 @@ license-file:  LICENSE
 
 library
   build-depends: base >= 4.13,
+                 containers,
                  bv-sized >= 1.0.0,
                  crucible >= 0.4,
                  crucible-llvm,

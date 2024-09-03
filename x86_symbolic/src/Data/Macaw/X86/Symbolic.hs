@@ -44,22 +44,28 @@ module Data.Macaw.X86.Symbolic
   , r15
   , getReg
   , IP, GP, Flag, X87Status, X87Top, X87Tag, FPReg, YMM
+  , x86SysvStack
   ) where
 
 import           Control.Lens ((^.),(%~),(&))
+import qualified Control.Monad as Monad
 import           Control.Monad ( void )
 import           Control.Monad.IO.Class ( liftIO )
+import qualified Data.BitVector.Sized as BVS
 import           Data.Functor.Identity (Identity(..))
 import           Data.Kind
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
+import qualified Data.Sequence as Seq
+import           Data.Word (Word8)
 import           GHC.TypeLits
 
 import qualified Data.Macaw.CFG as M
 import           Data.Macaw.Symbolic
 import           Data.Macaw.Symbolic.Backend
+import qualified Data.Macaw.Symbolic.Stack as MSS
 import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.X86Reg as M
@@ -77,6 +83,8 @@ import qualified Lang.Crucible.CFG.Reg as C
 import qualified Lang.Crucible.CFG.Expr as CE
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Types as C
+import qualified Lang.Crucible.LLVM.Bytes as Bytes
+import qualified Lang.Crucible.LLVM.DataLayout as CLD
 import qualified Lang.Crucible.LLVM.MemModel as MM
 
 ------------------------------------------------------------------------
@@ -471,6 +479,102 @@ instance GenArchInfo LLVMMemory M.X86_64 where
     , lookupReg = x86LookupReg
     , updateReg = x86UpdateReg
     }
+
+-- | Helper, not exported
+writeBytesBackwards ::
+  MM.HasPtrWidth w =>
+  C.IsSymBackend sym bak =>
+  (?memOpts :: MM.MemOptions) =>
+  MM.HasLLVMAnn sym =>
+  bak ->
+  MM.MemImpl sym ->
+  MM.LLVMPtr sym w ->
+  Seq.Seq Word8 ->
+  IO (MM.LLVMPtr sym w, MM.MemImpl sym)
+writeBytesBackwards bak mem ptr bytes = do
+  let sym = C.backendGetSym bak
+  let i8 = MM.bitvectorType (Bytes.toBytes (1 :: Int))
+  z <- WI.natLit sym 0
+  one <- WI.bvOne sym ?ptrWidth
+  let writeByte (p, m) byte = do
+        p' <- MM.ptrSub sym ?ptrWidth p one
+        bv <- WI.bvLit sym (C.knownNat @8) (BVS.mkBV C.knownNat (fromIntegral byte))
+        m' <- MM.storeRaw bak m p' i8 CLD.noAlignment (MM.LLVMValInt z bv)
+        pure (p', m')
+  Monad.foldM writeByte (ptr, mem) (Seq.reverse bytes)
+
+-- | Create an allocation for the stack for x86_64 with the SysV ABI.
+--
+-- On x86_64 with the SysV ABI, the stack grows \"downwards\" from high
+-- addresses to low. The end of the stack is initialized with the ELF auxiliary
+-- vector (not modelled here), and functions expect the following data to be
+-- available above their stack frame (i.e., just above the address in @rsp@):
+--
+-- * Their stack-spilled arguments
+-- * The return address
+--
+-- To model this behavior, this function:
+--
+-- 1. Uses 'MSS.createArrayStack' to allocate the stack, which returns a stack
+--    allocation and a pointer to its end, minus the space for stack-spilled
+--    arguments (see its Haddocks for details)
+-- 2. Decrements the pointer to the top of the stack ('MSS.arrayStackTopPtr') by
+--    8 bytes (i.e., the size of a pointer)
+-- 3. Writes a symbolic return address to the top of the stack
+--
+-- (Unless a concrete list of bytes is passed, in which case the decrement (2)
+-- is by the length of that list, and the write (3) is of those bytes.)
+--
+-- This setup should enable calling most functions without incident, after the
+-- returned pointer is put in @rsp@. Those that expect stack-spilled arguments
+-- may end up reading from the (uninitialized) stack slots.
+--
+-- Notably, the Microsoft x86_64 ABI differs in the stack setup. See
+-- [this link](https://learn.microsoft.com/en-us/cpp/build/stack-usage)
+-- for more detailson that ABI.
+x86SysvStack ::
+  C.IsSymBackend sym bak =>
+  (?memOpts :: MM.MemOptions) =>
+  MM.HasLLVMAnn sym =>
+  bak ->
+  MM.MemImpl sym ->
+  -- | Initialize the end of the stack to a concrete sequence of bytes if the
+  -- value is @Just@, otherwise initialize the end of the stack to 8 fresh,
+  -- symbolic bytes.
+  Maybe (Seq.Seq Word8) ->
+  -- | The caller must ensure the size of these is less than the allocation size
+  MSS.ExtraStackSlots ->
+  -- | Size of stack allocation
+  WI.SymExpr sym (WI.BaseBVType 64) ->
+  IO (MSS.ArrayStack sym 64, MM.MemImpl sym)
+x86SysvStack bak mem topBytes slots sz = do
+  let ptrBytes = 8
+  let ?ptrWidth = C.knownNat @64
+
+  (arrayStack, mem') <- MSS.createArrayStack bak mem slots sz
+  MSS.ArrayStack _base top _array <- pure arrayStack
+
+  let i8 = MM.bitvectorType (Bytes.toBytes (1 :: Int))
+  (top', mem'') <-
+    case topBytes of
+      Nothing -> do
+        -- (2)
+        let sym = C.backendGetSym bak
+        ptrSzBv <- WI.bvLit sym ?ptrWidth (BVS.mkBV ?ptrWidth ptrBytes)
+        top' <- MM.ptrSub sym ?ptrWidth top ptrSzBv
+
+        -- (3)
+        z <- WI.natLit sym 0
+        bv <- WI.freshConstant sym (WI.safeSymbol "x86_64_ret_addr") (WI.BaseBVRepr ?ptrWidth)
+        let val = MM.LLVMValInt z bv
+        let storTy = MM.arrayType (fromIntegral ptrBytes) i8
+        mem'' <- MM.storeRaw bak mem' top' storTy CLD.noAlignment val
+        pure (top', mem'')
+
+      Just bytes -> writeBytesBackwards bak mem' top bytes
+
+  let arrayStack' = arrayStack { MSS.arrayStackTopPtr = top' }
+  return (arrayStack', mem'')
 
 {- Note [Syscalls]
 
