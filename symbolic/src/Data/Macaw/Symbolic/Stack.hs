@@ -27,8 +27,6 @@ stackAlign :: CLD.Alignment
 stackAlign = CLD.noAlignment
 
 -- | Create an SMT array representing the program stack.
---
--- Builds a 'WI.freshConstant' with name "stack_array".
 stackArray ::
   (1 WI.<= w) =>
   CLM.HasPtrWidth w =>
@@ -69,7 +67,7 @@ newtype ExtraStackSlots = ExtraStackSlots { getExtraStackSlots :: Int }
   -- optparse-applicative-based command-line parsers using the `Read` instance.
   deriving newtype (Enum, Eq, Integral, Num, Ord, Read, Real, Show)
 
--- | An allocartion representing the program stack, backed by an SMT array
+-- | An allocation representing the program stack, backed by an SMT array
 data ArrayStack sym w
   = ArrayStack
     { -- | Pointer to the base of the stack array
