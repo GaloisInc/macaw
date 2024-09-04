@@ -314,6 +314,55 @@ freshRegs symArchFns sym =
     (mkInitialRegVal symArchFns sym)
     (MS.crucGenRegAssignment symArchFns)
 
+-- | Make initial registers, including setting up a stack pointer.
+--
+-- The stack pointer points to the middle of the stack allocation. This is a
+-- hack. We do this because each architecture has some expected stack layout
+-- (e.g., x86_64 expects a return address just above the stack pointer;
+-- PPC expects a "back chain"; and AArch32, PPC, and x86_64 all expect
+-- stack-spilled arguments above everything else). Setting the stack pointer
+-- to the middle of the allocation allows reads of fully symbolic data from
+-- above the stack pointer, and this seems to be good enough to make our tests
+-- pass.
+--
+-- The functions in the test-suite do not (and should not) rely on accessing
+-- data in their caller's stack frames, even though that wouldn't cause test
+-- failures with this setup.
+defaultRegs ::
+  CB.IsSymBackend sym bak =>
+  CLM.HasPtrWidth (MC.ArchAddrWidth arch) =>
+  (?memOpts :: CLM.MemOptions) =>
+  MS.SymArchConstraints arch =>
+  CLM.HasLLVMAnn sym =>
+  MT.HasRepr (MC.ArchReg arch) MT.TypeRepr =>
+  bak ->
+  MS.ArchVals arch ->
+  CLM.MemImpl sym ->
+  IO
+    ( CS.RegEntry sym (MS.ArchRegStruct arch)
+    , CLM.LLVMPtr sym (MC.ArchAddrWidth arch)
+    , CLM.MemImpl sym
+    )
+defaultRegs bak archVals mem = do
+  let sym = CB.backendGetSym bak
+
+  let kib = 1024
+  let mib = 1024 * kib
+  stackSize <- WI.bvLit sym ?ptrWidth (BVS.mkBV ?ptrWidth (2 * mib))
+  (MSS.ArrayStack stackBasePtr _stackTopPtr _stackArrayStorage, mem') <-
+    MSS.createArrayStack bak mem (MSS.ExtraStackSlots 0) stackSize
+  stackInitialOffset <- WI.bvLit sym ?ptrWidth (BVS.mkBV ?ptrWidth mib)
+  sp <- CLM.ptrAdd sym ?ptrWidth stackBasePtr stackInitialOffset
+
+  let symArchFns = MS.archFunctions archVals
+  initialRegs <- freshRegs symArchFns sym
+
+  let crucRegTypes = MS.crucArchRegTypes symArchFns
+  let regsRepr = CT.StructRepr crucRegTypes
+  let initialRegsEntry = CS.RegEntry regsRepr initialRegs
+  let regs = MS.updateReg archVals initialRegsEntry MC.sp_reg sp
+  pure (regs, sp, mem')
+
 -- | Create a name for the given 'MD.DiscoveryFunInfo'
 --
 -- If the function has no name, just use its address
@@ -575,41 +624,12 @@ simulateFunction bak execFeatures archVals halloc iMem g = do
 
   InitialMem initMem mmConf <- pure iMem
   let ?ptrWidth = WI.knownRepr
-
-  -- Allocate a stack and insert it into memory
-  --
-  -- The stack allocation uses the SMT array backed memory model (rather than
-  -- the Haskell-level memory model)
-  let kib = 1024
-  let mib = 1024 * kib
-  stackSize <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr (2 * mib))
-  (MSS.ArrayStack stackBasePtr _stackTopPtr _stackArrayStorage, mem1) <-
-    MSS.createArrayStack bak initMem (MSS.ExtraStackSlots 0) stackSize
-
-  -- Make initial registers, including setting up a stack pointer.
-  --
-  -- The stack pointer points to the middle of the stack allocation. This is a
-  -- hack. We do this because each architecture has some expected stack layout
-  -- (e.g., x86_64 expects a return address just above the stack pointer;
-  -- PPC expects a "back chain"; and AArch32, PPC, and x86_64 all expect
-  -- stack-spilled arguments above everything else). Setting the stack pointer
-  -- to the middle of the allocation allows reads of fully symbolic data from
-  -- above the stack pointer, and this seems to be good enough to make our tests
-  -- pass.
-  --
-  -- The functions in the test-suite do not (and should not) rely on accessing
-  -- data in their caller's stack frames, even though that wouldn't cause test
-  -- failures with this setup.
-  initialRegs <- freshRegs symArchFns sym
-  stackInitialOffset <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr mib)
-  sp <- CLM.ptrAdd sym WI.knownRepr stackBasePtr stackInitialOffset
-  let initialRegsEntry = CS.RegEntry regsRepr initialRegs
-  let regsWithStack = MS.updateReg archVals initialRegsEntry MC.sp_reg sp
+  (regs, sp, mem1) <- defaultRegs bak archVals initMem
 
   memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
   let lazySimSt = MS.emptyMacawLazySimulatorState
   let initGlobals = CSG.insertGlobal memVar mem1 CS.emptyGlobals
-  let arguments = CS.RegMap (Ctx.singleton regsWithStack)
+  let arguments = CS.RegMap (Ctx.singleton regs)
   let simAction = CS.runOverrideSim regsRepr (CS.regValue <$> CS.callCFG g arguments)
 
   let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
