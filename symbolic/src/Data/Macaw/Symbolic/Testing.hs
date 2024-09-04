@@ -420,8 +420,19 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
       MS.mkFunCFG (MS.archFunctions archVals) halloc funName (posFn (binaryPath mainInfo)) dfi
 
     let ?recordLLVMAnnotation = \_ _ _ -> return ()
+
+    -- Initialize memory
+    --
+    -- This includes both global static memory (taken from the data segment
+    -- initial contents) and a totally symbolic stack
+    iMem <-
+      case mmPreset of
+        DefaultMemModel -> initialMem binfo bak archInfo archVals
+        LazyMemModel -> lazyInitialMem binfo bak archInfo archVals
+
     (memVar, stackPointer, execResult) <-
-      simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g
+      simulateFunction bak execFeatures archVals halloc iMem g
+
     case execResult of
       CS.TimeoutResult {} -> return SimulationTimeout
       CS.AbortedResult {} -> return SimulationAborted
@@ -546,34 +557,24 @@ simulateFunction :: forall arch sym bak w solver scope st fs ext blocks
                     , WPO.OnlineSolver solver
                     , ?memOpts :: CLM.MemOptions
                     )
-                 => BinariesInfo arch
-                 -> bak
+                 => bak
                  -> [CS.GenericExecutionFeature sym]
-                 -> MAI.ArchitectureInfo arch
                  -> MS.ArchVals arch
                  -> CFH.HandleAllocator
-                 -> MemModelPreset
+                 -> InitialMem (MS.MacawLazySimulatorState sym w) sym arch
                  -> CCC.CFG ext blocks (Ctx.EmptyCtx Ctx.::> MS.ArchRegStruct arch) (MS.ArchRegStruct arch)
                  -> IO ( CS.GlobalVar CLM.Mem
                        , CLM.LLVMPtr sym w
                        , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
                        )
-simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g = do
+simulateFunction bak execFeatures archVals halloc iMem g = do
   let sym = CB.backendGetSym bak
   let symArchFns = MS.archFunctions archVals
   let crucRegTypes = MS.crucArchRegTypes symArchFns
   let regsRepr = CT.StructRepr crucRegTypes
 
-  -- Initialize memory
-  --
-  -- This includes both global static memory (taken from the data segment
-  -- initial contents) and a totally symbolic stack
-
+  InitialMem initMem mmConf <- pure iMem
   let ?ptrWidth = WI.knownRepr
-  (InitialMem initMem mmConf) <-
-    case mmPreset of
-      DefaultMemModel -> initialMem binfo bak archInfo archVals
-      LazyMemModel -> lazyInitialMem binfo bak archInfo archVals
 
   -- Allocate a stack and insert it into memory
   --
