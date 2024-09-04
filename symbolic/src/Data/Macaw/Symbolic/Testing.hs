@@ -617,18 +617,46 @@ simulateFunction :: forall arch sym bak w solver scope st fs ext blocks
                        , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
                        )
 simulateFunction bak execFeatures archVals halloc iMem g = do
+  InitialMem initMem mmConf <- pure iMem
+  let ?ptrWidth = WI.knownRepr
+  (regs, sp, mem) <- defaultRegs bak archVals initMem
+  (memVar, res) <- simMacawCfg bak execFeatures archVals halloc mmConf mem regs g
+  pure (memVar, sp, res)
+
+-- | Simulate a Macaw CFG, given initial registers and memory
+simMacawCfg ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , CLM.HasLLVMAnn sym
+  , MS.SymArchConstraints arch
+  , w ~ MC.ArchAddrWidth arch
+  , 16 <= w
+  , sym ~ WE.ExprBuilder scope st fs
+  , bak ~ CBO.OnlineBackend solver scope st fs
+  , WPO.OnlineSolver solver
+  , ?memOpts :: CLM.MemOptions
+  ) =>
+  bak ->
+  [CS.GenericExecutionFeature sym] ->
+  MS.ArchVals arch ->
+  CFH.HandleAllocator ->
+  MS.MemModelConfig (MS.MacawLazySimulatorState sym w) sym arch CLM.Mem ->
+  CLM.MemImpl sym ->
+  CS.RegEntry sym (MS.ArchRegStruct arch) ->
+  CCC.CFG ext blocks (Ctx.EmptyCtx Ctx.::> MS.ArchRegStruct arch) (MS.ArchRegStruct arch) ->
+  IO ( CS.GlobalVar CLM.Mem
+     , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
+     )
+simMacawCfg bak execFeatures archVals halloc mmConf mem regs g = do
   let sym = CB.backendGetSym bak
   let symArchFns = MS.archFunctions archVals
   let crucRegTypes = MS.crucArchRegTypes symArchFns
   let regsRepr = CT.StructRepr crucRegTypes
 
-  InitialMem initMem mmConf <- pure iMem
-  let ?ptrWidth = WI.knownRepr
-  (regs, sp, mem1) <- defaultRegs bak archVals initMem
-
   memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
   let lazySimSt = MS.emptyMacawLazySimulatorState
-  let initGlobals = CSG.insertGlobal memVar mem1 CS.emptyGlobals
+  let initGlobals = CSG.insertGlobal memVar mem CS.emptyGlobals
   let arguments = CS.RegMap (Ctx.singleton regs)
   let simAction = CS.runOverrideSim regsRepr (CS.regValue <$> CS.callCFG g arguments)
 
@@ -638,7 +666,7 @@ simulateFunction bak execFeatures archVals halloc iMem g = do
     let ctx = CS.initSimContext bak CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl lazySimSt
     let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler regsRepr simAction
     res <- CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
-    return (memVar, sp, res)
+    return (memVar, res)
 
 -- | A wrapper around the symbolic backend that allows us to recover the online
 -- constraints when they are available
