@@ -468,7 +468,7 @@ initialMem ::
   bak ->
   MAI.ArchitectureInfo arch ->
   MS.ArchVals arch ->
-  IO (CLM.MemImpl sym, MS.MemModelConfig p sym arch CLM.Mem)
+  IO (InitialMem p sym arch)
 initialMem binfo bak archInfo archVals = do
   let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
   (mem, memPtrTbl) <-
@@ -479,7 +479,7 @@ initialMem binfo bak archInfo archVals = do
                  , MS.lookupSyscallHandle = lookupSyscall
                  , MS.mkGlobalPointerValidityAssertion = validityCheck
                  }
-  pure (mem, mmConf)
+  pure (InitialMem mem mmConf)
 
 lazyInitialMem ::
   ( ext ~ MS.MacawExt arch
@@ -499,7 +499,7 @@ lazyInitialMem ::
   bak ->
   MAI.ArchitectureInfo arch ->
   MS.ArchVals arch ->
-  IO (CLM.MemImpl sym, MS.MemModelConfig p sym arch CLM.Mem)
+  IO (InitialMem p sym arch)
 lazyInitialMem binfo bak archInfo archVals = do
   let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
   (mem, memPtrTbl) <-
@@ -510,7 +510,13 @@ lazyInitialMem binfo bak archInfo archVals = do
                  , MS.lookupSyscallHandle = lookupSyscall
                  , MS.mkGlobalPointerValidityAssertion = validityCheck
                  }
-  pure (mem, mmConf)
+  pure (InitialMem mem mmConf)
+
+data InitialMem p sym arch
+  = InitialMem
+    { _initMemMem :: CLM.MemImpl sym
+    , _initMemMmConf :: MS.MemModelConfig p sym arch CLM.Mem
+    }
 
 -- | Set up the symbolic execution engine with initial states and execute
 --
@@ -564,7 +570,7 @@ simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g = do
   -- initial contents) and a totally symbolic stack
 
   let ?ptrWidth = WI.knownRepr
-  (initMem, mmConf) <-
+  (InitialMem initMem mmConf) <-
     case mmPreset of
       DefaultMemModel -> initialMem binfo bak archInfo archVals
       LazyMemModel -> lazyInitialMem binfo bak archInfo archVals
