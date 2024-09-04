@@ -28,6 +28,7 @@ This module is meant to be imported qualified.
 
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 
 module Data.Macaw.X86.Symbolic.ABI.SysV
   ( StackPointer
@@ -43,23 +44,22 @@ module Data.Macaw.X86.Symbolic.ABI.SysV
   , allocStack
   ) where
 
--- TODO: sort me!
-import qualified Control.Lens as Lens
-import qualified Lang.Crucible.Backend as C
-import qualified Lang.Crucible.Simulator as C
-import qualified Lang.Crucible.LLVM.MemModel as MM
-import qualified Data.Sequence as Seq
-import qualified Data.Macaw.Symbolic as MS
-import qualified Data.Macaw.Symbolic.Stack as MSS
-import qualified Data.Macaw.X86 as X86
-import qualified Data.Macaw.X86.Symbolic as X86S
+import Control.Lens qualified as Lens
+import Control.Monad qualified as Monad
+import Data.BitVector.Sized qualified as BVS
+import Data.Macaw.Symbolic qualified as MS
+import Data.Macaw.Symbolic.Stack qualified as MSS
+import Data.Macaw.X86 qualified as X86
+import Data.Macaw.X86.Symbolic qualified as X86S
 import Data.Parameterized.Classes (ixF')
-import qualified What4.Interface as WI
-import qualified Data.BitVector.Sized as BVS
-import qualified Lang.Crucible.LLVM.Bytes as Bytes
-import qualified Lang.Crucible.LLVM.DataLayout as CLD
-import qualified Control.Monad as Monad
-import qualified Data.Parameterized.Context as Ctx
+import Data.Parameterized.Context qualified as Ctx
+import Data.Sequence qualified as Seq
+import Lang.Crucible.Backend qualified as C
+import Lang.Crucible.LLVM.Bytes qualified as Bytes
+import Lang.Crucible.LLVM.DataLayout qualified as CLD
+import Lang.Crucible.LLVM.MemModel qualified as MM
+import Lang.Crucible.Simulator qualified as C
+import What4.Interface qualified as WI
 
 -- | Helper, not exported
 ptrBytes :: Integer
