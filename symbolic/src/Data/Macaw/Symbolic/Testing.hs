@@ -302,6 +302,18 @@ mkInitialRegVal archFns sym r = do
     MT.FloatTypeRepr {} -> error ("Float-typed registers are not supported in the macaw-symbolic test harness: " ++ show regName)
     MT.VecTypeRepr {} -> error ("Vector-typed registers are not supported in the macaw-symbolic test harness: " ++ show regName)
 
+
+freshRegs ::
+  CB.IsSymInterface sym =>
+  MT.HasRepr (MC.ArchReg arch) MT.TypeRepr =>
+  MS.MacawSymbolicArchFunctions arch ->
+  sym ->
+  IO (Ctx.Assignment (CS.RegValue' sym) (MS.CtxToCrucibleType (MS.ArchRegContext arch)))
+freshRegs symArchFns sym =
+  MS.macawAssignToCrucM
+    (mkInitialRegVal symArchFns sym)
+    (MS.crucGenRegAssignment symArchFns)
+
 -- | Create a name for the given 'MD.DiscoveryFunInfo'
 --
 -- If the function has no name, just use its address
@@ -581,7 +593,7 @@ simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g = do
   -- The functions in the test-suite do not (and should not) rely on accessing
   -- data in their caller's stack frames, even though that wouldn't cause test
   -- failures with this setup.
-  initialRegs <- MS.macawAssignToCrucM (mkInitialRegVal symArchFns sym) (MS.crucGenRegAssignment symArchFns)
+  initialRegs <- freshRegs symArchFns sym
   stackInitialOffset <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr mib)
   sp <- CLM.ptrAdd sym WI.knownRepr stackBasePtr stackInitialOffset
   let initialRegsEntry = CS.RegEntry regsRepr initialRegs
