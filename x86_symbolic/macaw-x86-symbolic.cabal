@@ -30,6 +30,7 @@ library
   exposed-modules:
     Data.Macaw.X86.Symbolic
     Data.Macaw.X86.Crucible
+    Data.Macaw.X86.Symbolic.ABI.SysV
   other-modules:
     Data.Macaw.X86.Symbolic.Panic
 
