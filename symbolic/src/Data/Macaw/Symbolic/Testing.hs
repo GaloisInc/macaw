@@ -439,14 +439,6 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
                   WSR.Unsat {} -> return (SimulationResult Unsat)
                   WSR.Unknown -> return (SimulationResult Unknown)
 
-discMems ::
-  BinariesInfo arch ->
-  V.Vector (MEL.Memory (MC.ArchAddrWidth arch))
-discMems binfo =
-  let mainInfo = mainBinaryInfo binfo in
-  let soInfos = sharedLibraryInfos binfo in
-  V.map (MD.memory . binaryDiscState) (V.cons mainInfo soInfos)
-
 initialMem ::
   ( ext ~ MS.MacawExt arch
   , CCE.IsSyntaxExtension ext
@@ -469,7 +461,7 @@ initialMem binfo bak archInfo archVals = do
   let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
   (mem, memPtrTbl) <-
     MSM.newMergedGlobalMemoryWith populateRelocation archInfo bak
-      endianness MSM.ConcreteMutable (discMems binfo)
+      endianness MSM.ConcreteMutable (binariesMems binfo)
   let mmConf = (MSM.memModelConfig bak memPtrTbl)
                  { MS.lookupFunctionHandle = lookupFunction archVals binfo
                  , MS.lookupSyscallHandle = lookupSyscall
@@ -500,7 +492,7 @@ lazyInitialMem binfo bak archInfo archVals = do
   let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
   (mem, memPtrTbl) <-
     MSMLazy.newMergedGlobalMemoryWith populateRelocation archInfo bak
-      endianness MSMLazy.ConcreteMutable (discMems binfo)
+      endianness MSMLazy.ConcreteMutable (binariesMems binfo)
   let mmConf = (MSMLazy.memModelConfig bak memPtrTbl)
                  { MS.lookupFunctionHandle = lookupFunction archVals binfo
                  , MS.lookupSyscallHandle = lookupSyscall
@@ -865,6 +857,14 @@ data BinariesInfo arch = BinariesInfo
     -- address-space layout randomization), this assumption will need to be
     -- revisited.
   }
+
+binariesMems ::
+  BinariesInfo arch ->
+  V.Vector (MEL.Memory (MC.ArchAddrWidth arch))
+binariesMems binfo =
+  let mainInfo = mainBinaryInfo binfo in
+  let soInfos = sharedLibraryInfos binfo in
+  V.map (MD.memory . binaryDiscState) (V.cons mainInfo soInfos)
 
 -- | Information about an individual binary.
 data BinaryInfo arch = BinaryInfo
