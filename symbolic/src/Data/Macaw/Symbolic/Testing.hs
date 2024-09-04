@@ -7,7 +7,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
 -- | This module defines common test harness code that can be used in each of the
@@ -69,7 +68,6 @@ import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.List as PL
 import qualified Data.Parameterized.NatRepr as PN
 import           Data.Parameterized.Some ( Some(..) )
-import           Data.Proxy ( Proxy(..) )
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import qualified Data.Text.Encoding.Error as Text
@@ -441,6 +439,75 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
                   WSR.Unsat {} -> return (SimulationResult Unsat)
                   WSR.Unknown -> return (SimulationResult Unknown)
 
+discMems ::
+  BinariesInfo arch ->
+  V.Vector (MEL.Memory (MC.ArchAddrWidth arch))
+discMems binfo =
+  let mainInfo = mainBinaryInfo binfo in
+  let soInfos = sharedLibraryInfos binfo in
+  V.map (MD.memory . binaryDiscState) (V.cons mainInfo soInfos)
+
+initialMem ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , CLM.HasLLVMAnn sym
+  , MS.SymArchConstraints arch
+  , w ~ MC.ArchAddrWidth arch
+  , 16 <= w
+  , sym ~ WE.ExprBuilder scope st fs
+  , bak ~ CBO.OnlineBackend solver scope st fs
+  , WPO.OnlineSolver solver
+  , ?memOpts :: CLM.MemOptions
+  ) =>
+  BinariesInfo arch ->
+  bak ->
+  MAI.ArchitectureInfo arch ->
+  MS.ArchVals arch ->
+  IO (CLM.MemImpl sym, MS.MemModelConfig p sym arch CLM.Mem)
+initialMem binfo bak archInfo archVals = do
+  let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
+  (mem, memPtrTbl) <-
+    MSM.newMergedGlobalMemoryWith populateRelocation archInfo bak
+      endianness MSM.ConcreteMutable (discMems binfo)
+  let mmConf = (MSM.memModelConfig bak memPtrTbl)
+                 { MS.lookupFunctionHandle = lookupFunction archVals binfo
+                 , MS.lookupSyscallHandle = lookupSyscall
+                 , MS.mkGlobalPointerValidityAssertion = validityCheck
+                 }
+  pure (mem, mmConf)
+
+lazyInitialMem ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , CLM.HasLLVMAnn sym
+  , MS.SymArchConstraints arch
+  , w ~ MC.ArchAddrWidth arch
+  , 16 <= w
+  , sym ~ WE.ExprBuilder scope st fs
+  , bak ~ CBO.OnlineBackend solver scope st fs
+  , WPO.OnlineSolver solver
+  , ?memOpts :: CLM.MemOptions
+  , MS.HasMacawLazySimulatorState p sym w
+  ) =>
+  BinariesInfo arch ->
+  bak ->
+  MAI.ArchitectureInfo arch ->
+  MS.ArchVals arch ->
+  IO (CLM.MemImpl sym, MS.MemModelConfig p sym arch CLM.Mem)
+lazyInitialMem binfo bak archInfo archVals = do
+  let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
+  (mem, memPtrTbl) <-
+    MSMLazy.newMergedGlobalMemoryWith populateRelocation archInfo bak
+      endianness MSMLazy.ConcreteMutable (discMems binfo)
+  let mmConf = (MSMLazy.memModelConfig bak memPtrTbl)
+                 { MS.lookupFunctionHandle = lookupFunction archVals binfo
+                 , MS.lookupSyscallHandle = lookupSyscall
+                 , MS.mkGlobalPointerValidityAssertion = validityCheck
+                 }
+  pure (mem, mmConf)
+
 -- | Set up the symbolic execution engine with initial states and execute
 --
 -- It returns:
@@ -486,10 +553,6 @@ simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g = do
   let symArchFns = MS.archFunctions archVals
   let crucRegTypes = MS.crucArchRegTypes symArchFns
   let regsRepr = CT.StructRepr crucRegTypes
-  let mainInfo = mainBinaryInfo binfo
-  let soInfos = sharedLibraryInfos binfo
-  let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
-  let mems = V.map (MD.memory . binaryDiscState) (V.cons mainInfo soInfos)
 
   -- Initialize memory
   --
@@ -499,26 +562,8 @@ simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g = do
   let ?ptrWidth = WI.knownRepr
   (initMem, mmConf) <-
     case mmPreset of
-      DefaultMemModel -> do
-        (initMem, memPtrTbl) <-
-          MSM.newMergedGlobalMemoryWith populateRelocation (Proxy @arch) bak
-            endianness MSM.ConcreteMutable mems
-        let mmConf = (MSM.memModelConfig bak memPtrTbl)
-                       { MS.lookupFunctionHandle = lookupFunction archVals binfo
-                       , MS.lookupSyscallHandle = lookupSyscall
-                       , MS.mkGlobalPointerValidityAssertion = validityCheck
-                       }
-        pure (initMem, mmConf)
-      LazyMemModel -> do
-        (initMem, memPtrTbl) <-
-          MSMLazy.newMergedGlobalMemoryWith populateRelocation (Proxy @arch) bak
-            endianness MSMLazy.ConcreteMutable mems
-        let mmConf = (MSMLazy.memModelConfig bak memPtrTbl)
-                       { MS.lookupFunctionHandle = lookupFunction archVals binfo
-                       , MS.lookupSyscallHandle = lookupSyscall
-                       , MS.mkGlobalPointerValidityAssertion = validityCheck
-                       }
-        pure (initMem, mmConf)
+      DefaultMemModel -> initialMem binfo bak archInfo archVals
+      LazyMemModel -> lazyInitialMem binfo bak archInfo archVals
 
   -- Allocate a stack and insert it into memory
   --
