@@ -109,7 +109,7 @@ riscvResultExtractor :: ( arch ~ MR.RISCV rv
                         )
                      => MS.ArchVals arch
                      -> MST.ResultExtractor sym arch
-riscvResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
+riscvResultExtractor archVals = MST.ResultExtractor $ \regs _mem k -> do
   let re = MS.lookupReg archVals regs MR.GPR_A0
   k PC.knownRepr (CS.regValue re)
 

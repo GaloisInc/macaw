@@ -134,7 +134,7 @@ hasTestPrefix (Some dfi) = do
 -- Since all test functions must return a value to assert as true, this is
 -- straightforward to extract
 x86ResultExtractor :: (CB.IsSymInterface sym) => MS.ArchVals MX.X86_64 -> MST.ResultExtractor sym MX.X86_64
-x86ResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
+x86ResultExtractor archVals = MST.ResultExtractor $ \regs _mem k -> do
   let re = MS.lookupReg archVals regs MX.RAX
   k PC.knownRepr (CS.regValue re)
 

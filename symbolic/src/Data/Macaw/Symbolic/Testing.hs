@@ -338,11 +338,7 @@ defaultRegs ::
   bak ->
   MS.ArchVals arch ->
   CLM.MemImpl sym ->
-  IO
-    ( CS.RegEntry sym (MS.ArchRegStruct arch)
-    , CLM.LLVMPtr sym (MC.ArchAddrWidth arch)
-    , CLM.MemImpl sym
-    )
+  IO (CS.RegEntry sym (MS.ArchRegStruct arch) , CLM.MemImpl sym)
 defaultRegs bak archVals mem = do
   let sym = CB.backendGetSym bak
 
@@ -361,7 +357,7 @@ defaultRegs bak archVals mem = do
   let regsRepr = CT.StructRepr crucRegTypes
   let initialRegsEntry = CS.RegEntry regsRepr initialRegs
   let regs = MS.updateReg archVals initialRegsEntry MC.sp_reg sp
-  pure (regs, sp, mem')
+  pure (regs, mem')
 
 -- | Create a name for the given 'MD.DiscoveryFunInfo'
 --
@@ -479,7 +475,7 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
         DefaultMemModel -> initialMem binfo bak archInfo archVals
         LazyMemModel -> lazyInitialMem binfo bak archInfo archVals
 
-    (memVar, stackPointer, execResult) <-
+    (memVar, execResult) <-
       simulateFunction bak execFeatures archVals halloc iMem g
 
     case execResult of
@@ -496,7 +492,7 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
                          Just postMem -> pure postMem
                          Nothing -> error $ "simulateAndVerify: Could not find global variable: "
                                          ++ Text.unpack (CS.globalName memVar)
-            withResult (gp L.^. CS.gpValue) stackPointer postMem $ \resRepr val -> do
+            withResult (gp L.^. CS.gpValue) postMem $ \resRepr val -> do
               -- The function is assumed to return a value that is intended to be
               -- True.  Try to prove that (by checking the negation for unsat)
               --
@@ -585,9 +581,7 @@ data InitialMem p sym arch
 -- 1. The global variable that holds the memory state (allowing for
 --    inspecting the post-state, which is extracted from the 'CS.ExecResult')
 --
--- 2. The stack pointer for the function
---
--- 3. The result of symbolic execution
+-- 2. The result of symbolic execution
 --
 -- Note that the provided 'CLM.MemImpl' is expected to have its global state
 -- populated as desired.  The default loader populates it with concrete (and
@@ -613,15 +607,14 @@ simulateFunction :: forall arch sym bak w solver scope st fs ext blocks
                  -> InitialMem (MS.MacawLazySimulatorState sym w) sym arch
                  -> CCC.CFG ext blocks (Ctx.EmptyCtx Ctx.::> MS.ArchRegStruct arch) (MS.ArchRegStruct arch)
                  -> IO ( CS.GlobalVar CLM.Mem
-                       , CLM.LLVMPtr sym w
                        , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
                        )
 simulateFunction bak execFeatures archVals halloc iMem g = do
   InitialMem initMem mmConf <- pure iMem
   let ?ptrWidth = WI.knownRepr
-  (regs, sp, mem) <- defaultRegs bak archVals initMem
+  (regs, mem) <- defaultRegs bak archVals initMem
   (memVar, res) <- simMacawCfg bak execFeatures archVals halloc mmConf mem regs g
-  pure (memVar, sp, res)
+  pure (memVar, res)
 
 -- | Simulate a Macaw CFG, given initial registers and memory
 simMacawCfg ::
@@ -695,10 +688,8 @@ defaultExecFeatures backend =
 -- | This type wraps up a function that takes the post-state of a symbolic
 -- execution and extracts the return value from executing that function
 --
--- The details are architecture specific.  Some architectures return values via
--- dedicated registers, while others return values on the stack.
---
--- This function takes the final register state and the post-state of memory,
+-- Which register stores the return value is architecture-specific. This
+-- function takes the final register state and the post-state of memory,
 -- allowing arbitrary access.
 --
 -- Note that the function that clients provide could return any arbitrary
@@ -710,7 +701,6 @@ defaultExecFeatures backend =
 data ResultExtractor sym arch where
   ResultExtractor :: (forall a
                        . CS.RegEntry sym (MS.ArchRegStruct arch)
-                      -> CLM.LLVMPtr sym (MC.ArchAddrWidth arch)
                       -> CLM.MemImpl sym
                       -> (forall n . (1 <= n) => PN.NatRepr n -> CLM.LLVMPtr sym n -> IO a)
                       -> IO a)

@@ -118,7 +118,7 @@ ppcResultExtractor :: ( arch ~ MP.AnyPPC v
                       )
                    => MS.ArchVals arch
                    -> MST.ResultExtractor sym arch
-ppcResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
+ppcResultExtractor archVals = MST.ResultExtractor $ \regs _mem k -> do
   let re = MS.lookupReg archVals regs (MP.PPC_GP (DP.GPR 3))
   k PC.knownRepr (CS.regValue re)
 
