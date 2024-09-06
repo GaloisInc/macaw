@@ -455,8 +455,7 @@ simulateAndVerify :: forall arch sym bak ids w solver scope st fs
                   -> MD.DiscoveryFunInfo arch ids
                   -- ^ The function to simulate and verify
                   -> IO SimulationResult
-simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmPreset (ResultExtractor withResult) dfi =
-  let sym = CB.backendGetSym bak in
+simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmPreset extractor dfi =
   MS.withArchConstraints archVals $ do
     let funName = functionName dfi
     let mainInfo = mainBinaryInfo binfo
@@ -478,34 +477,60 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
     (memVar, execResult) <-
       simulateFunction bak execFeatures archVals halloc iMem g
 
-    case execResult of
-      CS.TimeoutResult {} -> return SimulationTimeout
-      CS.AbortedResult {} -> return SimulationAborted
-      CS.FinishedResult _simCtx partialRes ->
-        case partialRes of
-          CS.PartialRes {} -> return SimulationPartial
-          CS.TotalRes gp -> do
-            when ("test_and_verify_" `Text.isPrefixOf` WF.functionName funName) $
-              proveGoals bak goalSolver
+    summarizeExecution funName goalSolver logger bak memVar extractor execResult
 
-            postMem <- case CSG.lookupGlobal memVar (gp L.^. CS.gpGlobals) of
-                         Just postMem -> pure postMem
-                         Nothing -> error $ "simulateAndVerify: Could not find global variable: "
-                                         ++ Text.unpack (CS.globalName memVar)
-            withResult (gp L.^. CS.gpValue) postMem $ \resRepr val -> do
-              -- The function is assumed to return a value that is intended to be
-              -- True.  Try to prove that (by checking the negation for unsat)
-              --
-              -- The result is treated as true if it is not equal to zero
-              zero <- WI.bvLit sym resRepr (BVS.mkBV resRepr 0)
-              bv_val <- CLM.projectLLVM_bv bak val
-              notZero <- WI.bvNe sym bv_val zero
-              goal <- WI.notPred sym notZero
-              WS.solver_adapter_check_sat goalSolver sym logger [goal] $ \satRes ->
-                case satRes of
-                  WSR.Sat {} -> return (SimulationResult Sat)
-                  WSR.Unsat {} -> return (SimulationResult Unsat)
-                  WSR.Unknown -> return (SimulationResult Unknown)
+summarizeExecution :: 
+  ( CB.IsSymBackend sym bak
+  , CCE.IsSyntaxExtension (MS.MacawExt arch)
+  , MM.MemWidth (MC.ArchAddrWidth arch)
+  , w ~ MC.ArchAddrWidth arch
+  , 16 <= w
+  , MT.KnownNat w
+  , sym ~ WE.ExprBuilder scope st fs
+  , bak ~ CBO.OnlineBackend solver scope st fs
+  , WPO.OnlineSolver solver
+  ) =>
+  WF.FunctionName ->
+  -- | The solver adapter to use to discharge assertions
+  WS.SolverAdapter st ->
+  -- | A logger to (optionally) record solver interaction (for the goal solver)
+  WS.LogData ->
+  bak ->
+  CS.GlobalVar CLM.Mem ->
+  -- | A function to extract the return value of a function from its post-state
+  ResultExtractor sym arch ->
+  CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch)) ->
+  IO SimulationResult
+summarizeExecution funName goalSolver logger bak memVar (ResultExtractor withResult) =
+  \case
+    CS.TimeoutResult {} -> return SimulationTimeout
+    CS.AbortedResult {} -> return SimulationAborted
+    CS.FinishedResult _simCtx partialRes ->
+      case partialRes of
+        CS.PartialRes {} -> return SimulationPartial
+        CS.TotalRes gp -> do
+          when ("test_and_verify_" `Text.isPrefixOf` WF.functionName funName) $
+            proveGoals bak goalSolver
+
+          postMem <- case CSG.lookupGlobal memVar (gp L.^. CS.gpGlobals) of
+                       Just postMem -> pure postMem
+                       Nothing -> error $ "simulateAndVerify: Could not find global variable: "
+                                       ++ Text.unpack (CS.globalName memVar)
+          withResult (gp L.^. CS.gpValue) postMem $ \resRepr val -> do
+            let sym = CB.backendGetSym bak
+            -- The function is assumed to return a value that is intended to be
+            -- True.  Try to prove that (by checking the negation for unsat)
+            --
+            -- The result is treated as true if it is not equal to zero
+            zero <- WI.bvLit sym resRepr (BVS.mkBV resRepr 0)
+            bv_val <- CLM.projectLLVM_bv bak val
+            notZero <- WI.bvNe sym bv_val zero
+            goal <- WI.notPred sym notZero
+            WS.solver_adapter_check_sat goalSolver sym logger [goal] $
+              \case
+                WSR.Sat {} -> return (SimulationResult Sat)
+                WSR.Unsat {} -> return (SimulationResult Unsat)
+                WSR.Unknown -> return (SimulationResult Unknown)
 
 initialMem ::
   ( ext ~ MS.MacawExt arch
