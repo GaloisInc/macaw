@@ -42,7 +42,6 @@ module Data.Macaw.Symbolic.Testing (
 import qualified Control.Exception as X
 import qualified Control.Lens as L
 import           Control.Lens ( (&), (%~) )
-import           Control.Monad ( when )
 import           Control.Monad.Except ( runExceptT )
 import qualified Data.Bits as Bits
 import qualified Data.BitVector.Sized as BVS
@@ -415,11 +414,7 @@ proveGoals bak goalSolver = do
 -- architecture-specific primitives).
 --
 -- In addition to symbolically executing the function to produce a Sat/Unsat
--- result, this function will attempt to verify all generate side conditions if
--- the name of the function being simulated begins with @test_and_verify_@ (as
--- opposed to just @test@).  This is necessary for testing aspects of the
--- semantics that involve the generated side conditions, rather than just the
--- final result.
+-- result, this function will attempt to verify all generated side conditions.
 simulateAndVerify :: forall arch sym bak ids w solver scope st fs
                    . ( CB.IsSymBackend sym bak
                      , CCE.IsSyntaxExtension (MS.MacawExt arch)
@@ -477,7 +472,7 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
     (memVar, execResult) <-
       simulateFunction bak execFeatures archVals halloc iMem g
 
-    summarizeExecution funName goalSolver logger bak memVar extractor execResult
+    summarizeExecution goalSolver logger bak memVar extractor execResult
 
 summarizeExecution :: 
   ( CB.IsSymBackend sym bak
@@ -490,7 +485,6 @@ summarizeExecution ::
   , bak ~ CBO.OnlineBackend solver scope st fs
   , WPO.OnlineSolver solver
   ) =>
-  WF.FunctionName ->
   -- | The solver adapter to use to discharge assertions
   WS.SolverAdapter st ->
   -- | A logger to (optionally) record solver interaction (for the goal solver)
@@ -501,7 +495,7 @@ summarizeExecution ::
   ResultExtractor sym arch ->
   CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch)) ->
   IO SimulationResult
-summarizeExecution funName goalSolver logger bak memVar (ResultExtractor withResult) =
+summarizeExecution goalSolver logger bak memVar (ResultExtractor withResult) =
   \case
     CS.TimeoutResult {} -> return SimulationTimeout
     CS.AbortedResult {} -> return SimulationAborted
@@ -509,8 +503,7 @@ summarizeExecution funName goalSolver logger bak memVar (ResultExtractor withRes
       case partialRes of
         CS.PartialRes {} -> return SimulationPartial
         CS.TotalRes gp -> do
-          when ("test_and_verify_" `Text.isPrefixOf` WF.functionName funName) $
-            proveGoals bak goalSolver
+          proveGoals bak goalSolver
 
           postMem <- case CSG.lookupGlobal memVar (gp L.^. CS.gpGlobals) of
                        Just postMem -> pure postMem

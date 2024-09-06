@@ -1,7 +1,7 @@
 * Overview
 This test suite tests that symbolic execution of AArch32 programs works. It is also a convenient place to test the semantics.  The test harness looks for binaries in the ~pass~ and ~fail~ subdirectories.  In both cases, it enumerates the functions whose names are prefixed by ~test_~, each of which are symbolically executed with fully symbolic initial states.  It treats the return value of each test function as an assertion that it will attempt to prove (i.e., it checks the satisfiability of the assertion).  Test cases in ~pass~ are expected to return a value that is always true, while the test cases in ~fail~ are expected to not always be true (but note that the precise models are not inspected).  The test harness uses yices for path satisfiability checking and z3 to prove goals.  Since path satisfiability checking is enabled, test cases can include loops as long as they symbolically terminate.
 
-In addition to proving that the result of a test case is always true (or not), the test harness will attempt to prove all generated side conditions for tests with names prefixed by ~test_and_verify_~. In both the ~pass~ and ~fail~ directories, these side conditions are expected to pass (or they will cause test failures).
+In addition to proving that the result of a test case is always true (or not), the test harness will attempt to prove all generated side conditions. In both the ~pass~ and ~fail~ directories, these side conditions are expected to pass (or they will cause test failures).
 
 * Usage
 
