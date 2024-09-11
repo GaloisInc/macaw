@@ -452,12 +452,7 @@ simulateAndVerify :: forall arch sym bak ids w solver scope st fs
                   -> IO SimulationResult
 simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmPreset extractor dfi =
   MS.withArchConstraints archVals $ do
-    let funName = functionName dfi
-    let mainInfo = mainBinaryInfo binfo
     halloc <- CFH.newHandleAllocator
-    CCC.SomeCFG g <-
-      MS.mkFunCFG (MS.archFunctions archVals) halloc funName (posFn (binaryPath mainInfo)) dfi
-
     let ?recordLLVMAnnotation = \_ _ _ -> return ()
 
     -- Initialize memory
@@ -470,7 +465,7 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
         LazyMemModel -> lazyInitialMem binfo bak archInfo archVals
 
     (memVar, execResult) <-
-      simulateFunction bak execFeatures archVals halloc iMem g
+      simulateFunction bak execFeatures archVals halloc iMem binfo dfi
 
     summarizeExecution goalSolver logger bak memVar extractor execResult
 
@@ -605,7 +600,7 @@ data InitialMem p sym arch
 -- populated as desired.  The default loader populates it with concrete (and
 -- mutable) values taken from the data segment of the binary (as well as the
 -- immutable contents of the text segment).
-simulateFunction :: forall arch sym bak w solver scope st fs ext blocks
+simulateFunction :: forall arch sym bak w solver scope st fs ext ids
                   . ( ext ~ MS.MacawExt arch
                     , CCE.IsSyntaxExtension ext
                     , CB.IsSymBackend sym bak
@@ -623,16 +618,52 @@ simulateFunction :: forall arch sym bak w solver scope st fs ext blocks
                  -> MS.ArchVals arch
                  -> CFH.HandleAllocator
                  -> InitialMem (MS.MacawLazySimulatorState sym w) sym arch
-                 -> CCC.CFG ext blocks (Ctx.EmptyCtx Ctx.::> MS.ArchRegStruct arch) (MS.ArchRegStruct arch)
+                 -> BinariesInfo arch
+                 -> MD.DiscoveryFunInfo arch ids
                  -> IO ( CS.GlobalVar CLM.Mem
                        , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
                        )
-simulateFunction bak execFeatures archVals halloc iMem g = do
+simulateFunction bak execFeatures archVals halloc iMem binfo dfi = do
   InitialMem initMem mmConf <- pure iMem
   let ?ptrWidth = WI.knownRepr
   (regs, mem) <- defaultRegs bak archVals initMem
-  (memVar, res) <- simMacawCfg bak execFeatures archVals halloc mmConf mem regs g
+  (memVar, res) <- simDiscoveredFunction bak execFeatures archVals halloc mmConf mem regs binfo dfi
   pure (memVar, res)
+
+-- | Simulate a discovered Macaw function, given initial registers and memory
+simDiscoveredFunction ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , CLM.HasLLVMAnn sym
+  , MS.SymArchConstraints arch
+  , w ~ MC.ArchAddrWidth arch
+  , 16 <= w
+  , sym ~ WE.ExprBuilder scope st fs
+  , bak ~ CBO.OnlineBackend solver scope st fs
+  , WPO.OnlineSolver solver
+  , ?memOpts :: CLM.MemOptions
+  ) =>
+  bak ->
+  [CS.GenericExecutionFeature sym] ->
+  MS.ArchVals arch ->
+  CFH.HandleAllocator ->
+  MS.MemModelConfig (MS.MacawLazySimulatorState sym w) sym arch CLM.Mem ->
+  CLM.MemImpl sym ->
+  CS.RegEntry sym (MS.ArchRegStruct arch) ->
+  BinariesInfo arch ->
+  MD.DiscoveryFunInfo arch ids ->
+  -- ^ The function to simulate
+  IO ( CS.GlobalVar CLM.Mem
+     , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
+     )
+simDiscoveredFunction bak execFeatures archVals halloc mmConf mem regs binfo dfi = do
+  let funName = functionName dfi
+  let mainInfo = mainBinaryInfo binfo
+  let pos = posFn (binaryPath mainInfo)
+  CCC.SomeCFG g <-
+    MS.mkFunCFG (MS.archFunctions archVals) halloc funName pos dfi
+  simMacawCfg bak execFeatures archVals halloc mmConf mem regs g
 
 -- | Simulate a Macaw CFG, given initial registers and memory
 simMacawCfg ::
