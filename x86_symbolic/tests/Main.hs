@@ -17,6 +17,7 @@ import qualified Data.Foldable as F
 import qualified Data.Map as Map
 import           Data.Maybe ( mapMaybe )
 import qualified Data.Parameterized.Classes as PC
+import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
@@ -39,22 +40,19 @@ import           Data.Macaw.X86.Symbolic ()
 import qualified Data.Macaw.X86.Symbolic as MXS
 import qualified Data.Macaw.X86.Symbolic.ABI.SysV as SysV
 import qualified What4.Config as WC
+import qualified What4.Expr.Builder as W4
 import qualified What4.Interface as WI
 import qualified What4.ProblemFeatures as WPF
+import qualified What4.Protocol.Online as WPO
 import qualified What4.Solver as WS
 
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.Backend.Online as CBO
+import qualified Lang.Crucible.CFG.Extension as CCE
 import qualified Lang.Crucible.FunctionHandle as CFH
 import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.Types as CT
 import qualified Lang.Crucible.LLVM.MemModel as LLVM
-
-import qualified What4.FloatMode as W4
-import qualified What4.Expr.Builder as W4
-import qualified Data.Parameterized.Context as Ctx
-import qualified What4.Protocol.Online as WPO
-import qualified Lang.Crucible.CFG.Extension as CCE
 
 -- | A Tasty option to tell us to save SMT queries and responses to /tmp for debugging purposes
 data SaveSMT = SaveSMT Bool
