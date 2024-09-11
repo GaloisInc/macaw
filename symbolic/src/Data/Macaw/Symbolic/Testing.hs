@@ -469,7 +469,7 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
 
     summarizeExecution goalSolver logger bak memVar extractor execResult
 
-summarizeExecution :: 
+summarizeExecution ::
   ( CB.IsSymBackend sym bak
   , CCE.IsSyntaxExtension (MS.MacawExt arch)
   , MM.MemWidth (MC.ArchAddrWidth arch)
@@ -624,11 +624,11 @@ simulateFunction :: forall arch sym bak w solver scope st fs ext ids
                        , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
                        )
 simulateFunction bak execFeatures archVals halloc iMem binfo dfi = do
-  InitialMem initMem mmConf <- pure iMem
   let ?ptrWidth = WI.knownRepr
+  InitialMem initMem mmConf <- pure iMem
   (regs, mem) <- defaultRegs bak archVals initMem
-  (memVar, res) <- simDiscoveredFunction bak execFeatures archVals halloc mmConf mem regs binfo dfi
-  pure (memVar, res)
+  let iMem' = InitialMem mem mmConf
+  simDiscoveredFunction bak execFeatures archVals halloc iMem' regs binfo dfi
 
 -- | Simulate a discovered Macaw function, given initial registers and memory
 simDiscoveredFunction ::
@@ -648,8 +648,7 @@ simDiscoveredFunction ::
   [CS.GenericExecutionFeature sym] ->
   MS.ArchVals arch ->
   CFH.HandleAllocator ->
-  MS.MemModelConfig (MS.MacawLazySimulatorState sym w) sym arch CLM.Mem ->
-  CLM.MemImpl sym ->
+  InitialMem (MS.MacawLazySimulatorState sym w) sym arch ->
   CS.RegEntry sym (MS.ArchRegStruct arch) ->
   BinariesInfo arch ->
   MD.DiscoveryFunInfo arch ids ->
@@ -657,14 +656,22 @@ simDiscoveredFunction ::
   IO ( CS.GlobalVar CLM.Mem
      , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
      )
-simDiscoveredFunction bak execFeatures archVals halloc mmConf mem regs binfo dfi = do
+simDiscoveredFunction bak execFeatures archVals halloc iMem regs binfo dfi = do
+  let sym = CB.backendGetSym bak
+  InitialMem mem mmConf <- pure iMem
+  memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
+  extImpl <-
+    MS.withArchEval archVals sym $ \archEvalFn ->
+      pure (MS.macawExtensions archEvalFn memVar mmConf)
+
   let funName = functionName dfi
   let mainInfo = mainBinaryInfo binfo
   let pos = posFn (binaryPath mainInfo)
   CCC.SomeCFG g <-
     MS.mkFunCFG (MS.archFunctions archVals) halloc funName pos dfi
   let regMap = CS.RegMap (Ctx.singleton regs)
-  simMacawCfg bak execFeatures archVals halloc mmConf mem regMap g
+  res <- simMacawCfg bak execFeatures halloc extImpl memVar mem regMap g
+  pure (memVar, res)
 
 -- | Simulate a Macaw CFG, given initial registers and memory
 simMacawCfg ::
@@ -682,31 +689,21 @@ simMacawCfg ::
   ) =>
   bak ->
   [CS.GenericExecutionFeature sym] ->
-  MS.ArchVals arch ->
   CFH.HandleAllocator ->
-  MS.MemModelConfig (MS.MacawLazySimulatorState sym w) sym arch CLM.Mem ->
+  CS.ExtensionImpl (MS.MacawLazySimulatorState sym w) sym (MS.MacawExt arch) ->
+  CS.GlobalVar CLM.Mem ->
   CLM.MemImpl sym ->
   CS.RegMap sym argTys ->
   CCC.CFG ext blocks argTys retTy ->
-  IO ( CS.GlobalVar CLM.Mem
-     , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym retTy)
-     )
-simMacawCfg bak execFeatures archVals halloc mmConf mem args g = do
-  let sym = CB.backendGetSym bak
-
-  memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
+  IO (CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym retTy))
+simMacawCfg bak execFeatures halloc extImpl memVar mem args g = do
   let lazySimSt = MS.emptyMacawLazySimulatorState
+  let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
+  let ctx = CS.initSimContext bak CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl lazySimSt
   let initGlobals = CSG.insertGlobal memVar mem CS.emptyGlobals
   let simAction = CS.runOverrideSim (CCC.cfgReturnType g) (CS.regValue <$> CS.callCFG g args)
-
-  let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
-  extImpl <- 
-    MS.withArchEval archVals sym $ \archEvalFn ->
-      pure (MS.macawExtensions archEvalFn memVar mmConf)
-  let ctx = CS.initSimContext bak CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl lazySimSt
   let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler (CCC.cfgReturnType g) simAction
-  res <- CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
-  return (memVar, res)
+  CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
 
 -- | A wrapper around the symbolic backend that allows us to recover the online
 -- constraints when they are available
