@@ -333,8 +333,7 @@ mkCrucRegCFG :: forall arch ids
                 -- ^ Action to run
             -> IO (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkCrucRegCFG archFns halloc nm action = do
-  let crucRegTypes = crucArchRegTypes archFns
-  let macawStructRepr = C.StructRepr crucRegTypes
+  let macawStructRepr = CG.crucGenRegStructType archFns
   let argTypes = Empty :> macawStructRepr
   h <- C.mkHandle' halloc nm argTypes macawStructRepr
   Some (ng :: NonceGenerator IO s) <- newIONonceGenerator
@@ -496,7 +495,7 @@ mkParsedBlockRegCFG archFns halloc posFn b = crucGenArchConstraints archFns $ do
     let entryAddr = M.pblockAddr strippedBlock
 
     -- Get type for representing Machine registers
-    let regType = C.StructRepr (crucArchRegTypes archFns)
+    let regType = CG.crucGenRegStructType archFns
     let entryPos = posFn entryAddr
     -- Create Crucible "register" (i.e. a mutable variable) for
     -- current value of Macaw machine registers.
@@ -683,7 +682,7 @@ mkBlockSliceRegCFG archFns sliceFns halloc posFn entry body0 terms retEdges_ = c
   where
     entryAddr = M.pblockAddr entry
     entryPos = posFn entryAddr
-    archRegTy = C.StructRepr (crucArchRegTypes archFns)
+    archRegTy = CG.crucGenRegStructType archFns
     -- Addresses of blocks marked as terminators
     termAddrs = S.fromList (fmap M.pblockAddr terms)
     retEdges = Map.fromListWith S.union [(src, S.singleton tgt) | (src, tgt) <- retEdges_]
@@ -809,7 +808,7 @@ mkBlockPathRegCFG arch_fns halloc pos_fn blocks =
     let block_path = first_blocks ++ [last_block]
 
     -- Get type for representing Machine registers
-    let arch_reg_struct_type = C.StructRepr $ crucArchRegTypes arch_fns
+    let arch_reg_struct_type = CG.crucGenRegStructType arch_fns
     let entry_pos = pos_fn entry_addr
     -- Create Crucible "register" (i.e. a mutable variable) for
     -- current value of Macaw machine registers.
@@ -908,7 +907,7 @@ mkFunRegCFG archFns halloc nm posFn fn = crucGenArchConstraints archFns $ do
     -- Get list of blocks
     let blockList = Map.elems (fn^.M.parsedBlocks)
     -- Get type for representing Machine registers
-    let regType = C.StructRepr (crucArchRegTypes archFns)
+    let regType = CG.crucGenRegStructType archFns
     let entryPos = posFn entryAddr
     -- Create Crucible "register" (i.e. a mutable variable) for
     -- current value of Macaw machine registers.
@@ -1360,8 +1359,7 @@ runCodeBlock
           (C.RegEntry sym (ArchRegStruct arch)))
 runCodeBlock bak archFns archEval halloc initMem mmConf g regStruct = do
   mvar <- MM.mkMemVar "macaw:codeblock_llvm_memory" halloc
-  let crucRegTypes = crucArchRegTypes archFns
-  let macawStructRepr = C.StructRepr crucRegTypes
+  let macawStructRepr = CG.crucGenRegStructType archFns
 
   let ctx :: C.SimContext (MacawSimulatorState sym) sym (MacawExt arch)
       ctx = let fnBindings = C.insertHandleMap (C.cfgHandle g)

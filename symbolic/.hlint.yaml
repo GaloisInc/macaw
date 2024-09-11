@@ -1,0 +1,9 @@
+# HLint's default suggestions are opinionated, so we disable all of them by
+# default and enable just a small subset we can agree on.
+
+- ignore: {}  # ignore all
+
+- error:
+    name: Use crucGenRegStructType
+    lhs: "Lang.Crucible.Types.StructRepr (Data.Macaw.Symbolic.CrucGen.crucArchRegTypes x)"
+    rhs: 'Data.Macaw.Symbolic.CrucGen.crucGenRegStructType x'
