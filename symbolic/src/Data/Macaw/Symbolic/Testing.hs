@@ -600,7 +600,7 @@ data InitialMem p sym arch
 -- populated as desired.  The default loader populates it with concrete (and
 -- mutable) values taken from the data segment of the binary (as well as the
 -- immutable contents of the text segment).
-simulateFunction :: forall arch sym bak w solver scope st fs ext ids
+simulateFunction :: forall arch sym bak w ext ids
                   . ( ext ~ MS.MacawExt arch
                     , CCE.IsSyntaxExtension ext
                     , CB.IsSymBackend sym bak
@@ -608,9 +608,6 @@ simulateFunction :: forall arch sym bak w solver scope st fs ext ids
                     , MS.SymArchConstraints arch
                     , w ~ MC.ArchAddrWidth arch
                     , 16 <= w
-                    , sym ~ WE.ExprBuilder scope st fs
-                    , bak ~ CBO.OnlineBackend solver scope st fs
-                    , WPO.OnlineSolver solver
                     , ?memOpts :: CLM.MemOptions
                     )
                  => bak
@@ -637,11 +634,6 @@ simDiscoveredFunction ::
   , CB.IsSymBackend sym bak
   , CLM.HasLLVMAnn sym
   , MS.SymArchConstraints arch
-  , w ~ MC.ArchAddrWidth arch
-  , 16 <= w
-  , sym ~ WE.ExprBuilder scope st fs
-  , bak ~ CBO.OnlineBackend solver scope st fs
-  , WPO.OnlineSolver solver
   , ?memOpts :: CLM.MemOptions
   ) =>
   bak ->
@@ -678,14 +670,6 @@ simMacawCfg ::
   ( ext ~ MS.MacawExt arch
   , CCE.IsSyntaxExtension ext
   , CB.IsSymBackend sym bak
-  , CLM.HasLLVMAnn sym
-  , MS.SymArchConstraints arch
-  , w ~ MC.ArchAddrWidth arch
-  , 16 <= w
-  , sym ~ WE.ExprBuilder scope st fs
-  , bak ~ CBO.OnlineBackend solver scope st fs
-  , WPO.OnlineSolver solver
-  , ?memOpts :: CLM.MemOptions
   ) =>
   bak ->
   [CS.GenericExecutionFeature sym] ->
