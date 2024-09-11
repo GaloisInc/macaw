@@ -140,7 +140,7 @@ writeRetAddr bak mem sp retAddr = do
   let ?ptrWidth = MM.ptrWidth (getRetAddr retAddr)
   ptrSzBv <- WI.bvLit sym ?ptrWidth (BVS.mkBV ?ptrWidth ptrBytes)
   top <- MM.ptrSub sym ?ptrWidth (getStackPointer sp) ptrSzBv
-  let i64 = MM.bitvectorType (Bytes.toBytes (64 :: Int))
+  let i64 = MM.bitvectorType (Bytes.toBytes (8 :: Int))
   let val = MM.ptrToPtrVal (getRetAddr retAddr)
   mem' <- MM.storeRaw bak mem top i64 CLD.noAlignment val
   pure (StackPointer top, mem')

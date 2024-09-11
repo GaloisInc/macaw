@@ -46,6 +46,7 @@ test-suite macaw-x86-symbolic-tests
   hs-source-dirs: tests
   build-depends:
     base >= 4,
+    bv-sized,
     bytestring,
     containers,
     crucible,

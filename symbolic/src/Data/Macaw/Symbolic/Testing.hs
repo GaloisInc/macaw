@@ -29,6 +29,12 @@ module Data.Macaw.Symbolic.Testing (
   MemModelPreset(..),
   describeMemModelPreset,
   toAddrSymMap,
+  freshRegs,
+  InitialMem(..),
+  initialMem,
+  lazyInitialMem,
+  simDiscoveredFunction,
+  summarizeExecution,
   -- * Execution features
   SomeBackend(..),
   defaultExecFeatures,
@@ -337,7 +343,7 @@ defaultRegs ::
   bak ->
   MS.ArchVals arch ->
   CLM.MemImpl sym ->
-  IO (CS.RegEntry sym (MS.ArchRegStruct arch) , CLM.MemImpl sym)
+  IO (CS.RegEntry sym (MS.ArchRegStruct arch), CLM.MemImpl sym)
 defaultRegs bak archVals mem = do
   let sym = CB.backendGetSym bak
 
@@ -583,8 +589,8 @@ lazyInitialMem binfo bak archInfo archVals = do
 
 data InitialMem p sym arch
   = InitialMem
-    { _initMemMem :: CLM.MemImpl sym
-    , _initMemMmConf :: MS.MemModelConfig p sym arch CLM.Mem
+    { initMemMem :: CLM.MemImpl sym
+    , initMemMmConf :: MS.MemModelConfig p sym arch CLM.Mem
     }
 
 -- | Set up the symbolic execution engine with initial states and execute
