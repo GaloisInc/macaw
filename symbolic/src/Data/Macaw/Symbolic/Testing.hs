@@ -475,6 +475,11 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
 
     summarizeExecution goalSolver logger bak memVar extractor execResult
 
+-- | Post-process the results of symbolic execution
+--
+-- In particular, turn a 'CS.ExecResult' into a 'SimulationResult'. If
+-- simulation succeeded, uses the 'ResultExtractor' to assert that the executed
+-- function returned a nonzero value.
 summarizeExecution ::
   ( CB.IsSymBackend sym bak
   , CCE.IsSyntaxExtension (MS.MacawExt arch)
@@ -587,9 +592,14 @@ lazyInitialMem binfo bak archInfo archVals = do
                  }
   pure (InitialMem mem mmConf)
 
+-- | Initial program memory and memory configuration
+--
+-- Returned by 'initialMem' and 'lazyInitialMem'.
 data InitialMem p sym arch
   = InitialMem
-    { initMemMem :: CLM.MemImpl sym
+    { -- | Initial contents of memory, before symbolic execution
+      initMemMem :: CLM.MemImpl sym
+      -- | Memory model configuration
     , initMemMmConf :: MS.MemModelConfig p sym arch CLM.Mem
     }
 
@@ -628,7 +638,7 @@ simulateFunction :: forall arch sym bak w ext ids
                        )
 simulateFunction bak execFeatures archVals halloc iMem binfo dfi = do
   let ?ptrWidth = WI.knownRepr
-  InitialMem initMem mmConf <- pure iMem
+  let InitialMem initMem mmConf = iMem
   (regs, mem) <- defaultRegs bak archVals initMem
   let iMem' = InitialMem mem mmConf
   simDiscoveredFunction bak execFeatures archVals halloc iMem' regs binfo dfi
@@ -656,7 +666,7 @@ simDiscoveredFunction ::
      )
 simDiscoveredFunction bak execFeatures archVals halloc iMem regs binfo dfi = do
   let sym = CB.backendGetSym bak
-  InitialMem mem mmConf <- pure iMem
+  let InitialMem mem mmConf = iMem
   memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
   extImpl <-
     MS.withArchEval archVals sym $ \archEvalFn ->
