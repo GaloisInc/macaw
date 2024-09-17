@@ -106,7 +106,7 @@ armResultExtractor :: ( CB.IsSymInterface sym
                       )
                    => MS.ArchVals MA.ARM
                    -> MST.ResultExtractor sym MA.ARM
-armResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
+armResultExtractor archVals = MST.ResultExtractor $ \regs _mem k -> do
   let re = MS.lookupReg archVals regs (MAR.ARMGlobalBV (ASL.knownGlobalRef @"_R0"))
   k PC.knownRepr (CS.regValue re)
 

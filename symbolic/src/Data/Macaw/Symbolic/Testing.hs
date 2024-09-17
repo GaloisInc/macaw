@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -8,9 +7,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
+
 -- | This module defines common test harness code that can be used in each of the
 -- architecture-specific backends.
 --
@@ -31,6 +29,12 @@ module Data.Macaw.Symbolic.Testing (
   MemModelPreset(..),
   describeMemModelPreset,
   toAddrSymMap,
+  freshRegs,
+  InitialMem(..),
+  initialMem,
+  lazyInitialMem,
+  simDiscoveredFunction,
+  summarizeExecution,
   -- * Execution features
   SomeBackend(..),
   defaultExecFeatures,
@@ -44,7 +48,6 @@ module Data.Macaw.Symbolic.Testing (
 import qualified Control.Exception as X
 import qualified Control.Lens as L
 import           Control.Lens ( (&), (%~) )
-import           Control.Monad ( when )
 import           Control.Monad.Except ( runExceptT )
 import qualified Data.Bits as Bits
 import qualified Data.BitVector.Sized as BVS
@@ -70,7 +73,6 @@ import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.List as PL
 import qualified Data.Parameterized.NatRepr as PN
 import           Data.Parameterized.Some ( Some(..) )
-import           Data.Proxy ( Proxy(..) )
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import qualified Data.Text.Encoding.Error as Text
@@ -305,6 +307,63 @@ mkInitialRegVal archFns sym r = do
     MT.FloatTypeRepr {} -> error ("Float-typed registers are not supported in the macaw-symbolic test harness: " ++ show regName)
     MT.VecTypeRepr {} -> error ("Vector-typed registers are not supported in the macaw-symbolic test harness: " ++ show regName)
 
+
+freshRegs ::
+  CB.IsSymInterface sym =>
+  MT.HasRepr (MC.ArchReg arch) MT.TypeRepr =>
+  MS.MacawSymbolicArchFunctions arch ->
+  sym ->
+  IO (Ctx.Assignment (CS.RegValue' sym) (MS.CtxToCrucibleType (MS.ArchRegContext arch)))
+freshRegs symArchFns sym =
+  MS.macawAssignToCrucM
+    (mkInitialRegVal symArchFns sym)
+    (MS.crucGenRegAssignment symArchFns)
+
+-- | Make initial registers, including setting up a stack pointer.
+--
+-- The stack pointer points to the middle of the stack allocation. This is a
+-- hack. We do this because each architecture has some expected stack layout
+-- (e.g., x86_64 expects a return address just above the stack pointer;
+-- PPC expects a "back chain"; and AArch32, PPC, and x86_64 all expect
+-- stack-spilled arguments above everything else). Setting the stack pointer
+-- to the middle of the allocation allows reads of fully symbolic data from
+-- above the stack pointer, and this seems to be good enough to make our tests
+-- pass.
+--
+-- The functions in the test-suite do not (and should not) rely on accessing
+-- data in their caller's stack frames, even though that wouldn't cause test
+-- failures with this setup.
+defaultRegs ::
+  CB.IsSymBackend sym bak =>
+  CLM.HasPtrWidth (MC.ArchAddrWidth arch) =>
+  (?memOpts :: CLM.MemOptions) =>
+  MS.SymArchConstraints arch =>
+  CLM.HasLLVMAnn sym =>
+  MT.HasRepr (MC.ArchReg arch) MT.TypeRepr =>
+  bak ->
+  MS.ArchVals arch ->
+  CLM.MemImpl sym ->
+  IO (CS.RegEntry sym (MS.ArchRegStruct arch), CLM.MemImpl sym)
+defaultRegs bak archVals mem = do
+  let sym = CB.backendGetSym bak
+
+  let kib = 1024
+  let mib = 1024 * kib
+  stackSize <- WI.bvLit sym ?ptrWidth (BVS.mkBV ?ptrWidth (2 * mib))
+  (MSS.ArrayStack stackBasePtr _stackTopPtr _stackArrayStorage, mem') <-
+    MSS.createArrayStack bak mem (MSS.ExtraStackSlots 0) stackSize
+  stackInitialOffset <- WI.bvLit sym ?ptrWidth (BVS.mkBV ?ptrWidth mib)
+  sp <- CLM.ptrAdd sym ?ptrWidth stackBasePtr stackInitialOffset
+
+  let symArchFns = MS.archFunctions archVals
+  initialRegs <- freshRegs symArchFns sym
+
+  let crucRegTypes = MS.crucArchRegTypes symArchFns
+  let regsRepr = CT.StructRepr crucRegTypes
+  let initialRegsEntry = CS.RegEntry regsRepr initialRegs
+  let regs = MS.updateReg archVals initialRegsEntry MC.sp_reg sp
+  pure (regs, mem')
+
 -- | Create a name for the given 'MD.DiscoveryFunInfo'
 --
 -- If the function has no name, just use its address
@@ -361,11 +420,7 @@ proveGoals bak goalSolver = do
 -- architecture-specific primitives).
 --
 -- In addition to symbolically executing the function to produce a Sat/Unsat
--- result, this function will attempt to verify all generate side conditions if
--- the name of the function being simulated begins with @test_and_verify_@ (as
--- opposed to just @test@).  This is necessary for testing aspects of the
--- semantics that involve the generated side conditions, rather than just the
--- final result.
+-- result, this function will attempt to verify all generated side conditions.
 simulateAndVerify :: forall arch sym bak ids w solver scope st fs
                    . ( CB.IsSymBackend sym bak
                      , CCE.IsSyntaxExtension (MS.MacawExt arch)
@@ -401,46 +456,152 @@ simulateAndVerify :: forall arch sym bak ids w solver scope st fs
                   -> MD.DiscoveryFunInfo arch ids
                   -- ^ The function to simulate and verify
                   -> IO SimulationResult
-simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmPreset (ResultExtractor withResult) dfi =
-  let sym = CB.backendGetSym bak in
+simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmPreset extractor dfi =
   MS.withArchConstraints archVals $ do
-    let funName = functionName dfi
-    let mainInfo = mainBinaryInfo binfo
     halloc <- CFH.newHandleAllocator
-    CCC.SomeCFG g <-
-      MS.mkFunCFG (MS.archFunctions archVals) halloc funName (posFn (binaryPath mainInfo)) dfi
-
     let ?recordLLVMAnnotation = \_ _ _ -> return ()
-    (memVar, stackPointer, execResult) <-
-      simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g
-    case execResult of
-      CS.TimeoutResult {} -> return SimulationTimeout
-      CS.AbortedResult {} -> return SimulationAborted
-      CS.FinishedResult _simCtx partialRes ->
-        case partialRes of
-          CS.PartialRes {} -> return SimulationPartial
-          CS.TotalRes gp -> do
-            when ("test_and_verify_" `Text.isPrefixOf` WF.functionName funName) $
-              proveGoals bak goalSolver
 
-            postMem <- case CSG.lookupGlobal memVar (gp L.^. CS.gpGlobals) of
-                         Just postMem -> pure postMem
-                         Nothing -> error $ "simulateAndVerify: Could not find global variable: "
-                                         ++ Text.unpack (CS.globalName memVar)
-            withResult (gp L.^. CS.gpValue) stackPointer postMem $ \resRepr val -> do
-              -- The function is assumed to return a value that is intended to be
-              -- True.  Try to prove that (by checking the negation for unsat)
-              --
-              -- The result is treated as true if it is not equal to zero
-              zero <- WI.bvLit sym resRepr (BVS.mkBV resRepr 0)
-              bv_val <- CLM.projectLLVM_bv bak val
-              notZero <- WI.bvNe sym bv_val zero
-              goal <- WI.notPred sym notZero
-              WS.solver_adapter_check_sat goalSolver sym logger [goal] $ \satRes ->
-                case satRes of
-                  WSR.Sat {} -> return (SimulationResult Sat)
-                  WSR.Unsat {} -> return (SimulationResult Unsat)
-                  WSR.Unknown -> return (SimulationResult Unknown)
+    -- Initialize memory
+    --
+    -- This includes both global static memory (taken from the data segment
+    -- initial contents) and a totally symbolic stack
+    iMem <-
+      case mmPreset of
+        DefaultMemModel -> initialMem binfo bak archInfo archVals
+        LazyMemModel -> lazyInitialMem binfo bak archInfo archVals
+
+    (memVar, execResult) <-
+      simulateFunction bak execFeatures archVals halloc iMem binfo dfi
+
+    summarizeExecution goalSolver logger bak memVar extractor execResult
+
+-- | Post-process the results of symbolic execution
+--
+-- In particular, turn a 'CS.ExecResult' into a 'SimulationResult'. If
+-- simulation succeeded, uses the 'ResultExtractor' to assert that the executed
+-- function returned a nonzero value.
+summarizeExecution ::
+  ( CB.IsSymBackend sym bak
+  , CCE.IsSyntaxExtension (MS.MacawExt arch)
+  , MM.MemWidth (MC.ArchAddrWidth arch)
+  , w ~ MC.ArchAddrWidth arch
+  , 16 <= w
+  , MT.KnownNat w
+  , sym ~ WE.ExprBuilder scope st fs
+  , bak ~ CBO.OnlineBackend solver scope st fs
+  , WPO.OnlineSolver solver
+  ) =>
+  -- | The solver adapter to use to discharge assertions
+  WS.SolverAdapter st ->
+  -- | A logger to (optionally) record solver interaction (for the goal solver)
+  WS.LogData ->
+  bak ->
+  CS.GlobalVar CLM.Mem ->
+  -- | A function to extract the return value of a function from its post-state
+  ResultExtractor sym arch ->
+  CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch)) ->
+  IO SimulationResult
+summarizeExecution goalSolver logger bak memVar (ResultExtractor withResult) =
+  \case
+    CS.TimeoutResult {} -> return SimulationTimeout
+    CS.AbortedResult {} -> return SimulationAborted
+    CS.FinishedResult _simCtx partialRes ->
+      case partialRes of
+        CS.PartialRes {} -> return SimulationPartial
+        CS.TotalRes gp -> do
+          proveGoals bak goalSolver
+
+          postMem <- case CSG.lookupGlobal memVar (gp L.^. CS.gpGlobals) of
+                       Just postMem -> pure postMem
+                       Nothing -> error $ "simulateAndVerify: Could not find global variable: "
+                                       ++ Text.unpack (CS.globalName memVar)
+          withResult (gp L.^. CS.gpValue) postMem $ \resRepr val -> do
+            let sym = CB.backendGetSym bak
+            -- The function is assumed to return a value that is intended to be
+            -- True.  Try to prove that (by checking the negation for unsat)
+            --
+            -- The result is treated as true if it is not equal to zero
+            zero <- WI.bvLit sym resRepr (BVS.mkBV resRepr 0)
+            bv_val <- CLM.projectLLVM_bv bak val
+            notZero <- WI.bvNe sym bv_val zero
+            goal <- WI.notPred sym notZero
+            WS.solver_adapter_check_sat goalSolver sym logger [goal] $
+              \case
+                WSR.Sat {} -> return (SimulationResult Sat)
+                WSR.Unsat {} -> return (SimulationResult Unsat)
+                WSR.Unknown -> return (SimulationResult Unknown)
+
+initialMem ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , CLM.HasLLVMAnn sym
+  , MS.SymArchConstraints arch
+  , w ~ MC.ArchAddrWidth arch
+  , 16 <= w
+  , sym ~ WE.ExprBuilder scope st fs
+  , bak ~ CBO.OnlineBackend solver scope st fs
+  , WPO.OnlineSolver solver
+  , ?memOpts :: CLM.MemOptions
+  ) =>
+  BinariesInfo arch ->
+  bak ->
+  MAI.ArchitectureInfo arch ->
+  MS.ArchVals arch ->
+  IO (InitialMem p sym arch)
+initialMem binfo bak archInfo archVals = do
+  let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
+  (mem, memPtrTbl) <-
+    MSM.newMergedGlobalMemoryWith populateRelocation archInfo bak
+      endianness MSM.ConcreteMutable (binariesMems binfo)
+  let mmConf = (MSM.memModelConfig bak memPtrTbl)
+                 { MS.lookupFunctionHandle = lookupFunction archVals binfo
+                 , MS.lookupSyscallHandle = lookupSyscall
+                 , MS.mkGlobalPointerValidityAssertion = validityCheck
+                 }
+  pure (InitialMem mem mmConf)
+
+lazyInitialMem ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , CLM.HasLLVMAnn sym
+  , MS.SymArchConstraints arch
+  , w ~ MC.ArchAddrWidth arch
+  , 16 <= w
+  , sym ~ WE.ExprBuilder scope st fs
+  , bak ~ CBO.OnlineBackend solver scope st fs
+  , WPO.OnlineSolver solver
+  , ?memOpts :: CLM.MemOptions
+  , MS.HasMacawLazySimulatorState p sym w
+  ) =>
+  BinariesInfo arch ->
+  bak ->
+  MAI.ArchitectureInfo arch ->
+  MS.ArchVals arch ->
+  IO (InitialMem p sym arch)
+lazyInitialMem binfo bak archInfo archVals = do
+  let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
+  (mem, memPtrTbl) <-
+    MSMLazy.newMergedGlobalMemoryWith populateRelocation archInfo bak
+      endianness MSMLazy.ConcreteMutable (binariesMems binfo)
+  let mmConf = (MSMLazy.memModelConfig bak memPtrTbl)
+                 { MS.lookupFunctionHandle = lookupFunction archVals binfo
+                 , MS.lookupSyscallHandle = lookupSyscall
+                 , MS.mkGlobalPointerValidityAssertion = validityCheck
+                 }
+  pure (InitialMem mem mmConf)
+
+-- | Initial program memory and memory configuration
+--
+-- Returned by 'initialMem' and 'lazyInitialMem'.
+data InitialMem p sym arch
+  = InitialMem
+    { -- | Initial contents of memory, before symbolic execution
+      initMemMem :: CLM.MemImpl sym
+      -- | Memory model configuration
+    , initMemMmConf :: MS.MemModelConfig p sym arch CLM.Mem
+    }
 
 -- | Set up the symbolic execution engine with initial states and execute
 --
@@ -449,15 +610,13 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
 -- 1. The global variable that holds the memory state (allowing for
 --    inspecting the post-state, which is extracted from the 'CS.ExecResult')
 --
--- 2. The stack pointer for the function
---
--- 3. The result of symbolic execution
+-- 2. The result of symbolic execution
 --
 -- Note that the provided 'CLM.MemImpl' is expected to have its global state
 -- populated as desired.  The default loader populates it with concrete (and
 -- mutable) values taken from the data segment of the binary (as well as the
 -- immutable contents of the text segment).
-simulateFunction :: forall arch sym bak w solver scope st fs ext blocks
+simulateFunction :: forall arch sym bak w ext ids
                   . ( ext ~ MS.MacawExt arch
                     , CCE.IsSyntaxExtension ext
                     , CB.IsSymBackend sym bak
@@ -465,105 +624,86 @@ simulateFunction :: forall arch sym bak w solver scope st fs ext blocks
                     , MS.SymArchConstraints arch
                     , w ~ MC.ArchAddrWidth arch
                     , 16 <= w
-                    , sym ~ WE.ExprBuilder scope st fs
-                    , bak ~ CBO.OnlineBackend solver scope st fs
-                    , WPO.OnlineSolver solver
                     , ?memOpts :: CLM.MemOptions
                     )
-                 => BinariesInfo arch
-                 -> bak
+                 => bak
                  -> [CS.GenericExecutionFeature sym]
-                 -> MAI.ArchitectureInfo arch
                  -> MS.ArchVals arch
                  -> CFH.HandleAllocator
-                 -> MemModelPreset
-                 -> CCC.CFG ext blocks (Ctx.EmptyCtx Ctx.::> MS.ArchRegStruct arch) (MS.ArchRegStruct arch)
+                 -> InitialMem (MS.MacawLazySimulatorState sym w) sym arch
+                 -> BinariesInfo arch
+                 -> MD.DiscoveryFunInfo arch ids
                  -> IO ( CS.GlobalVar CLM.Mem
-                       , CLM.LLVMPtr sym w
                        , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
                        )
-simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g = do
-  let sym = CB.backendGetSym bak
-  let symArchFns = MS.archFunctions archVals
-  let crucRegTypes = MS.crucArchRegTypes symArchFns
-  let regsRepr = CT.StructRepr crucRegTypes
-  let mainInfo = mainBinaryInfo binfo
-  let soInfos = sharedLibraryInfos binfo
-  let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
-  let mems = V.map (MD.memory . binaryDiscState) (V.cons mainInfo soInfos)
-
-  -- Initialize memory
-  --
-  -- This includes both global static memory (taken from the data segment
-  -- initial contents) and a totally symbolic stack
-
+simulateFunction bak execFeatures archVals halloc iMem binfo dfi = do
   let ?ptrWidth = WI.knownRepr
-  (initMem, mmConf) <-
-    case mmPreset of
-      DefaultMemModel -> do
-        (initMem, memPtrTbl) <-
-          MSM.newMergedGlobalMemoryWith populateRelocation (Proxy @arch) bak
-            endianness MSM.ConcreteMutable mems
-        let mmConf = (MSM.memModelConfig bak memPtrTbl)
-                       { MS.lookupFunctionHandle = lookupFunction archVals binfo
-                       , MS.lookupSyscallHandle = lookupSyscall
-                       , MS.mkGlobalPointerValidityAssertion = validityCheck
-                       }
-        pure (initMem, mmConf)
-      LazyMemModel -> do
-        (initMem, memPtrTbl) <-
-          MSMLazy.newMergedGlobalMemoryWith populateRelocation (Proxy @arch) bak
-            endianness MSMLazy.ConcreteMutable mems
-        let mmConf = (MSMLazy.memModelConfig bak memPtrTbl)
-                       { MS.lookupFunctionHandle = lookupFunction archVals binfo
-                       , MS.lookupSyscallHandle = lookupSyscall
-                       , MS.mkGlobalPointerValidityAssertion = validityCheck
-                       }
-        pure (initMem, mmConf)
+  let InitialMem initMem mmConf = iMem
+  (regs, mem) <- defaultRegs bak archVals initMem
+  let iMem' = InitialMem mem mmConf
+  simDiscoveredFunction bak execFeatures archVals halloc iMem' regs binfo dfi
 
-  -- Allocate a stack and insert it into memory
-  --
-  -- The stack allocation uses the SMT array backed memory model (rather than
-  -- the Haskell-level memory model)
-  let kib = 1024
-  let mib = 1024 * kib
-  stackSize <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr (2 * mib))
-  (MSS.ArrayStack stackBasePtr _stackTopPtr _stackArrayStorage, mem1) <-
-    MSS.createArrayStack bak initMem (MSS.ExtraStackSlots 0) stackSize
-
-  -- Make initial registers, including setting up a stack pointer.
-  --
-  -- The stack pointer points to the middle of the stack allocation. This is a
-  -- hack. We do this because each architecture has some expected stack layout
-  -- (e.g., x86_64 expects a return address just above the stack pointer;
-  -- PPC expects a "back chain"; and AArch32, PPC, and x86_64 all expect
-  -- stack-spilled arguments above everything else). Setting the stack pointer
-  -- to the middle of the allocation allows reads of fully symbolic data from
-  -- above the stack pointer, and this seems to be good enough to make our tests
-  -- pass.
-  --
-  -- The functions in the test-suite do not (and should not) rely on accessing
-  -- data in their caller's stack frames, even though that wouldn't cause test
-  -- failures with this setup.
-  initialRegs <- MS.macawAssignToCrucM (mkInitialRegVal symArchFns sym) (MS.crucGenRegAssignment symArchFns)
-  stackInitialOffset <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr mib)
-  sp <- CLM.ptrAdd sym WI.knownRepr stackBasePtr stackInitialOffset
-  let initialRegsEntry = CS.RegEntry regsRepr initialRegs
-  let regsWithStack = MS.updateReg archVals initialRegsEntry MC.sp_reg sp
-
+-- | Simulate a discovered Macaw function, given initial registers and memory
+simDiscoveredFunction ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , CLM.HasLLVMAnn sym
+  , MS.SymArchConstraints arch
+  , ?memOpts :: CLM.MemOptions
+  ) =>
+  bak ->
+  [CS.GenericExecutionFeature sym] ->
+  MS.ArchVals arch ->
+  CFH.HandleAllocator ->
+  InitialMem (MS.MacawLazySimulatorState sym w) sym arch ->
+  CS.RegEntry sym (MS.ArchRegStruct arch) ->
+  BinariesInfo arch ->
+  MD.DiscoveryFunInfo arch ids ->
+  -- ^ The function to simulate
+  IO ( CS.GlobalVar CLM.Mem
+     , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
+     )
+simDiscoveredFunction bak execFeatures archVals halloc iMem regs binfo dfi = do
+  let sym = CB.backendGetSym bak
+  let InitialMem mem mmConf = iMem
   memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
-  let lazySimSt = MS.emptyMacawLazySimulatorState
-  let initGlobals = CSG.insertGlobal memVar mem1 CS.emptyGlobals
-  let arguments = CS.RegMap (Ctx.singleton regsWithStack)
-  let simAction = CS.runOverrideSim regsRepr (CS.regValue <$> CS.callCFG g arguments)
+  extImpl <-
+    MS.withArchEval archVals sym $ \archEvalFn ->
+      pure (MS.macawExtensions archEvalFn memVar mmConf)
 
+  let funName = functionName dfi
+  let mainInfo = mainBinaryInfo binfo
+  let pos = posFn (binaryPath mainInfo)
+  CCC.SomeCFG g <-
+    MS.mkFunCFG (MS.archFunctions archVals) halloc funName pos dfi
+  let regMap = CS.RegMap (Ctx.singleton regs)
+  res <- simMacawCfg bak execFeatures halloc extImpl memVar mem regMap g
+  pure (memVar, res)
+
+-- | Simulate a Macaw CFG, given initial registers and memory
+simMacawCfg ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  ) =>
+  bak ->
+  [CS.GenericExecutionFeature sym] ->
+  CFH.HandleAllocator ->
+  CS.ExtensionImpl (MS.MacawLazySimulatorState sym w) sym (MS.MacawExt arch) ->
+  CS.GlobalVar CLM.Mem ->
+  CLM.MemImpl sym ->
+  CS.RegMap sym argTys ->
+  CCC.CFG ext blocks argTys retTy ->
+  IO (CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym retTy))
+simMacawCfg bak execFeatures halloc extImpl memVar mem args g = do
+  let lazySimSt = MS.emptyMacawLazySimulatorState
   let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
-  MS.withArchEval archVals sym $ \archEvalFn -> do
-    let extImpl = MS.macawExtensions archEvalFn memVar mmConf
-    let ctx = CS.initSimContext bak CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl lazySimSt
-    let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler regsRepr simAction
-    res <- CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
-    return (memVar, sp, res)
+  let ctx = CS.initSimContext bak CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl lazySimSt
+  let initGlobals = CSG.insertGlobal memVar mem CS.emptyGlobals
+  let simAction = CS.runOverrideSim (CCC.cfgReturnType g) (CS.regValue <$> CS.callCFG g args)
+  let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler (CCC.cfgReturnType g) simAction
+  CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
 
 -- | A wrapper around the symbolic backend that allows us to recover the online
 -- constraints when they are available
@@ -592,10 +732,8 @@ defaultExecFeatures backend =
 -- | This type wraps up a function that takes the post-state of a symbolic
 -- execution and extracts the return value from executing that function
 --
--- The details are architecture specific.  Some architectures return values via
--- dedicated registers, while others return values on the stack.
---
--- This function takes the final register state and the post-state of memory,
+-- Which register stores the return value is architecture-specific. This
+-- function takes the final register state and the post-state of memory,
 -- allowing arbitrary access.
 --
 -- Note that the function that clients provide could return any arbitrary
@@ -607,7 +745,6 @@ defaultExecFeatures backend =
 data ResultExtractor sym arch where
   ResultExtractor :: (forall a
                        . CS.RegEntry sym (MS.ArchRegStruct arch)
-                      -> CLM.LLVMPtr sym (MC.ArchAddrWidth arch)
                       -> CLM.MemImpl sym
                       -> (forall n . (1 <= n) => PN.NatRepr n -> CLM.LLVMPtr sym n -> IO a)
                       -> IO a)
@@ -821,6 +958,14 @@ data BinariesInfo arch = BinariesInfo
     -- address-space layout randomization), this assumption will need to be
     -- revisited.
   }
+
+binariesMems ::
+  BinariesInfo arch ->
+  V.Vector (MEL.Memory (MC.ArchAddrWidth arch))
+binariesMems binfo =
+  let mainInfo = mainBinaryInfo binfo in
+  let soInfos = sharedLibraryInfos binfo in
+  V.map (MD.memory . binaryDiscState) (V.cons mainInfo soInfos)
 
 -- | Information about an individual binary.
 data BinaryInfo arch = BinaryInfo

@@ -9,6 +9,7 @@ license-file:  LICENSE
 
 library
   build-depends: base >= 4.13,
+                 containers,
                  bv-sized >= 1.0.0,
                  crucible >= 0.4,
                  crucible-llvm,
@@ -29,6 +30,7 @@ library
   exposed-modules:
     Data.Macaw.X86.Symbolic
     Data.Macaw.X86.Crucible
+    Data.Macaw.X86.Symbolic.ABI.SysV
   other-modules:
     Data.Macaw.X86.Symbolic.Panic
 
@@ -44,6 +46,7 @@ test-suite macaw-x86-symbolic-tests
   hs-source-dirs: tests
   build-depends:
     base >= 4,
+    bv-sized,
     bytestring,
     containers,
     crucible,
