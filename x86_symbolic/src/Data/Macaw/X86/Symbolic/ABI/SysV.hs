@@ -8,8 +8,39 @@ modelled here), and functions expect the following data to be available above
 their stack frame (i.e., just above the address in @rsp@), from high addresses
 to low:
 
+* Padding (if necessary)
 * Their stack-spilled arguments
 * The return address
+
+(The end of the stack-spilled argument list must be 16-byte aligned, which may
+necessitate the use of padding, depending on the number of spilled arguments and
+the layout of the caller\'s stack frame.)
+
+The following diagram summarizes the stack frame layout:
+
+@
+High addresses
+
+|---------------------|
+| Caller's frame      |
+|---------------------|
+| Padding (if needed) |
+|---------------------|
+| Spilled argument n  |
+|---------------------|
+| ...                 |
+|---------------------|
+| Spilled argument 1  |
+|---------------------|
+| Spilled argument 1  |
+|---------------------| <- %rsp + 8 (16-byte aligned)
+| Return address      |
+|---------------------| <- %rsp
+| Callee's frame      |
+|---------------------|
+
+Low addresses
+@
 
 The functions in this module support manipulation of a stack under these
 constraints. ABI-compatible machine code translated by Macaw manages the stack
@@ -20,8 +51,7 @@ Helpful links:
 
 * <https://eli.thegreenplace.net/2011/09/06/stack-frame-layout-on-x86-64>
 * <https://wiki.osdev.org/System_V_ABI#x86-64>
-
-TODO: The stack is supposed to be 16-byte aligned before a @call@.
+* <https://refspecs.linuxfoundation.org/elf/x86_64-abi-0.99.pdf>
 
 This module is meant to be imported qualified.
 -}
@@ -36,6 +66,7 @@ module Data.Macaw.X86.Symbolic.ABI.SysV
   , stackPointerReg
   , RetAddr(..)
   , freshRetAddr
+  , alignStackPointer
   , SpilledArgs(..)
   , writeSpilledArgs
   , writeRetAddr
@@ -54,6 +85,7 @@ import Data.Macaw.X86.Symbolic qualified as X86S
 import Data.Parameterized.Classes (ixF')
 import Data.Parameterized.Context qualified as Ctx
 import Data.Sequence qualified as Seq
+import GHC.Natural (naturalToInteger)
 import Lang.Crucible.Backend qualified as C
 import Lang.Crucible.LLVM.Bytes qualified as Bytes
 import Lang.Crucible.LLVM.DataLayout qualified as CLD
@@ -91,6 +123,25 @@ freshRetAddr sym = do
   ptr <- MM.llvmPointer_bv sym bv
   pure (RetAddr ptr)
 
+-- | Align the stack pointer to a particular 'CLD.Alignment'.
+alignStackPointer ::
+  C.IsSymInterface sym =>
+  sym ->
+  CLD.Alignment ->
+  StackPointer sym ->
+  IO (StackPointer sym)
+alignStackPointer sym align orig@(StackPointer (MM.LLVMPointer blk off)) = do
+  let alignInt = 2 ^ naturalToInteger (CLD.alignmentToExponent align)
+  if alignInt == 1
+  then pure orig
+  else do
+    -- Because the stack grows down, we can align it by simply ANDing the stack
+    -- pointer with a mask with some amount of 1s followed by some amount of 0s.
+    let mask = BVS.complement ptrRepr (BVS.mkBV ptrRepr (alignInt - 1))
+    maskBv <- WI.bvLit sym ptrRepr mask
+    off' <- WI.bvAndBits sym off maskBv
+    pure (StackPointer (MM.LLVMPointer blk off'))
+
 -- | Stack-spilled arguments, in normal order
 newtype SpilledArgs sym
   = SpilledArgs { getSpilledArgs :: Seq.Seq (MM.LLVMPtr sym 64) }
@@ -98,7 +149,10 @@ newtype SpilledArgs sym
 -- | Write pointer-sized stack-spilled arguments to the stack.
 --
 -- SysV specifies that they will be written in reverse order, i.e., the last
--- element of the 'Seq.Seq' will be written to the highest address.
+-- element of the 'Seq.Seq' will be written to the highest address. It further
+-- specifies that tne end of the argument list will be 16-byte aligned. This
+-- function will allocate additional stack space before the spilled arguments if
+-- necessary to establish this constraint.
 --
 -- Asserts that the stack allocation is writable and large enough to contain the
 -- spilled arguments.
@@ -116,11 +170,50 @@ writeSpilledArgs bak mem sp spilledArgs = do
   eight <- WI.bvLit sym ptrRepr (BVS.mkBV WI.knownNat 8)
   let i64 = MM.bitvectorType (Bytes.toBytes (64 :: Int))
   let ?ptrWidth = ptrRepr
+
+  -- First, align to 8 bytes. In all probability, this is a no-op.
+  let align8 = CLD.exponentToAlignment 3  -- 2^3 = 8
+  StackPointer spAligned8 <- alignStackPointer sym align8 sp
+
+  -- At this point, exactly one of `spAligned8` or `spAligned8 + 8` is 16-byte
+  -- aligned. We need to ensure that, after writing the argument list, the stack
+  -- pointer will be 16-byte aligned.
+  --
+  -- Depending on the current alignment and partity of the number of spilled
+  -- arguments, we need to:
+  --
+  -- - further align `rsp` to 16 bytes (call this choice a16)
+  -- - add 8 so that `rsp + 8` is aligned to 16 bytes (call this +8)
+  -- - do nothing (call this noop)
+  --
+  -- There are four cases to consider:
+  --
+  -- +----------------------+------+------+
+  -- |                      | even | odd  |
+  -- |----------------------+------+------+
+  -- | 16-byte aligned      | noop | +8   |
+  -- +----------------------+-------------+
+  -- | not 16-byte aligned  | a16  | noop |
+  -- +----------------------+-------------+
+  --
+  let align16 = CLD.exponentToAlignment 4  -- 2^4 = 16
+  StackPointer spAligned16 <- alignStackPointer sym align16 sp
+  isAligned16 <- MM.ptrEq sym ptrRepr spAligned8 spAligned16
+  sp' <-
+    if even (Seq.length (getSpilledArgs spilledArgs))
+    then
+      -- In this case, either the stack pointer is *already* 16-byte aligned, or
+      -- it *needs to be* 16-byte aligned. In either case, this value suffices.
+      pure (StackPointer spAligned16)
+    else do
+      spAdd8 <- MM.ptrAdd sym ptrRepr spAligned16 eight
+      StackPointer <$> MM.muxLLVMPtr sym isAligned16 spAdd8 spAligned8
+
   let writeWord (StackPointer p, m) arg = do
         p' <- MM.ptrSub sym ?ptrWidth p eight
         m' <- MM.storeRaw bak m p' i64 CLD.noAlignment (MM.ptrToPtrVal arg)
         pure (StackPointer p', m')
-  Monad.foldM writeWord (sp, mem) (Seq.reverse (getSpilledArgs spilledArgs))
+  Monad.foldM writeWord (sp', mem) (Seq.reverse (getSpilledArgs spilledArgs))
 
 -- | Write the return address to the stack.
 --
