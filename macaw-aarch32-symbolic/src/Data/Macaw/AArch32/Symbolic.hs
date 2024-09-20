@@ -14,6 +14,25 @@ module Data.Macaw.AArch32.Symbolic (
   , lookupReg
   , updateReg
   , AF.AArch32Exception(..)
+  , r0
+  , r1
+  , r2
+  , r3
+  , r4
+  , r5
+  , r6
+  , r7
+  , r8
+  , r9
+  , r10
+  , r11
+  , fp
+  , r12
+  , ip
+  , r13
+  , sp
+  , r14
+  , lr
   ) where
 
 import qualified Data.Text as T
@@ -180,6 +199,83 @@ type family BaseToMacawType (t :: WT.BaseType) :: MT.Type where
 aarch32RegStructType :: CT.TypeRepr (MS.ArchRegStruct SA.AArch32)
 aarch32RegStructType =
   CT.StructRepr (MS.typeCtxToCrucible (FC.fmapFC MT.typeRepr aarch32RegAssignment))
+
+-- The following definitions for rN are tightly coupled to that of
+-- ArchRegContext for AArch32. Unit tests in the test suite ensure that they are
+-- consistent with regIndexMap (below).
+
+-- | Local helper, not exported. The \"globals\" come before the GPRs in the
+-- ArchRegContext.
+type GlobalsCtx = MS.CtxToCrucibleType (PC.MapCtx ToMacawTypeWrapper LAG.SimpleGlobalsCtx)
+
+type family CtxRepeat (n :: Nat) (c :: k) :: Ctx.Ctx k where
+  CtxRepeat 0 c = Ctx.EmptyCtx
+  CtxRepeat n c = CtxRepeat (n - 1) c Ctx.::> c
+
+r0 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r0 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 0 (LCLM.LLVMPointerType 32))))
+
+r1 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r1 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 1 (LCLM.LLVMPointerType 32))))
+
+r2 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r2 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 2 (LCLM.LLVMPointerType 32))))
+
+r3 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r3 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 3 (LCLM.LLVMPointerType 32))))
+
+r4 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r4 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 4 (LCLM.LLVMPointerType 32))))
+
+r5 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r5 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 5 (LCLM.LLVMPointerType 32))))
+
+r6 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r6 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 6 (LCLM.LLVMPointerType 32))))
+
+r7 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r7 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 7 (LCLM.LLVMPointerType 32))))
+
+r8 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r8 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 8 (LCLM.LLVMPointerType 32))))
+
+r9 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r9 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 9 (LCLM.LLVMPointerType 32))))
+
+r10 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r10 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 10 (LCLM.LLVMPointerType 32))))
+
+-- | Frame pointer, AKA 'fp'
+r11 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r11 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 11 (LCLM.LLVMPointerType 32))))
+
+-- | Frame pointer, AKA 'r11'
+fp :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+fp = r11
+
+-- | Intra-procedure call scratch register, AKA 'ip'
+r12 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r12 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 12 (LCLM.LLVMPointerType 32))))
+
+-- | Intra-procedure call scratch register, AKA 'r12'
+ip :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+ip = r12
+
+-- | Stack pointer, AKA 'sp'
+r13 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r13 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 13 (LCLM.LLVMPointerType 32))))
+
+-- | Stack pointer, AKA 'r13'
+sp :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+sp = r13
+
+-- | Link register, AKA 'lr'
+r14 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+r14 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 14 (LCLM.LLVMPointerType 32))))
+
+-- | Link register, AKA 'r14'
+lr :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+lr = r14
 
 aarch32GenFn :: MAA.ARMPrimFn (MC.Value SA.AArch32 ids) tp
              -> MSB.CrucGen SA.AArch32 ids s (CR.Atom s (MS.ToCrucibleType tp))
