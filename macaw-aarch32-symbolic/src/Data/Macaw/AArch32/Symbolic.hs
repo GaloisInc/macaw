@@ -26,7 +26,9 @@ module Data.Macaw.AArch32.Symbolic (
   , r9
   , r10
   , r11
+  , fp
   , r12
+  , ip
   , r13
   , sp
   , r14
@@ -202,6 +204,8 @@ aarch32RegStructType =
 -- ArchRegContext for AArch32. Unit tests in the test suite ensure that they are
 -- consistent with regIndexMap (below).
 
+-- | Local helper, not exported. The \"globals\" come before the GPRs in the
+-- ArchRegContext.
 type GlobalsCtx = MS.CtxToCrucibleType (PC.MapCtx ToMacawTypeWrapper LAG.SimpleGlobalsCtx)
 
 type family CtxRepeat (n :: Nat) (c :: k) :: Ctx.Ctx k where
@@ -241,11 +245,21 @@ r9 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRe
 r10 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
 r10 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 10 (LCLM.LLVMPointerType 32))))
 
+-- | Frame pointer, AKA 'fp'
 r11 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
 r11 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 11 (LCLM.LLVMPointerType 32))))
 
+-- | Frame pointer, AKA 'r11'
+fp :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+fp = r11
+
+-- | Intra-procedure call scratch register, AKA 'ip'
 r12 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
 r12 = Ctx.extendIndex (Ctx.nextIndex (Ctx.knownSize @_ @(GlobalsCtx Ctx.<+> CtxRepeat 12 (LCLM.LLVMPointerType 32))))
+
+-- | Intra-procedure call scratch register, AKA 'r12'
+ip :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
+ip = r12
 
 -- | Stack pointer, AKA 'sp'
 r13 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
