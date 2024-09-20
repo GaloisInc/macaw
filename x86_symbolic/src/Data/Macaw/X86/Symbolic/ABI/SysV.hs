@@ -30,7 +30,7 @@ High addresses
 |---------------------|
 | ...                 |
 |---------------------|
-| Spilled argument 1  |
+| Spilled argument 2  |
 |---------------------|
 | Spilled argument 1  |
 |---------------------| <- %rsp + 8 (16-byte aligned)
@@ -112,6 +112,16 @@ stackPointerReg =
   Lens.lens
     (\regs -> StackPointer (C.unRV (regs Lens.^. ixF' X86S.rsp)))
     (\regs v -> regs Lens.& ixF' X86S.rsp Lens..~ C.RV (getStackPointer v))
+
+-- | Allocate stack space by subtracting from the stack pointer
+allocStackSpace ::
+  C.IsSymInterface sym =>
+  sym ->
+  StackPointer sym ->
+  WI.SymBV sym 64 ->
+  IO (StackPointer sym)
+allocStackSpace sym (StackPointer sp) amount =
+  StackPointer <$> MM.ptrSub sym ptrRepr sp amount
 
 -- | A return address
 newtype RetAddr sym = RetAddr { getRetAddr :: MM.LLVMPtr sym 64 }
@@ -197,16 +207,16 @@ writeSpilledArgs bak mem sp spilledArgs = do
   -- +----------------------+-------------+
   --
   let align16 = CLD.exponentToAlignment 4  -- 2^4 = 16
-  StackPointer spAligned16 <- alignStackPointer sym align16 sp
+  sp16@(StackPointer spAligned16) <- alignStackPointer sym align16 sp
   isAligned16 <- MM.ptrEq sym ptrRepr spAligned8 spAligned16
   sp' <-
     if even (Seq.length (getSpilledArgs spilledArgs))
     then
       -- In this case, either the stack pointer is *already* 16-byte aligned, or
       -- it *needs to be* 16-byte aligned. In either case, this value suffices.
-      pure (StackPointer spAligned16)
+      pure sp16
     else do
-      spAdd8 <- MM.ptrAdd sym ptrRepr spAligned16 eight
+      StackPointer spAdd8 <- allocStackSpace sym sp16 eight
       StackPointer <$> MM.muxLLVMPtr sym isAligned16 spAdd8 spAligned8
 
   let writeWord (StackPointer p, m) arg = do
