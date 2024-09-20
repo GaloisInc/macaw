@@ -16,6 +16,7 @@ import qualified Data.Foldable as F
 import qualified Data.Map as Map
 import           Data.Maybe ( mapMaybe )
 import qualified Data.Parameterized.Classes as PC
+import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
@@ -31,7 +32,7 @@ import qualified Test.Tasty.Runners as TTR
 import qualified Language.ASL.Globals as ASL
 import qualified Data.Macaw.Architecture.Info as MAI
 
-import           Data.Macaw.AArch32.Symbolic ()
+import qualified Data.Macaw.AArch32.Symbolic as MAS
 import qualified Data.Macaw.ARM as MA
 import qualified Data.Macaw.ARM.ARMReg as MAR
 import qualified Data.Macaw.CFG as MC
@@ -73,6 +74,18 @@ ingredients = TT.includingOptions [ TTO.Option (Proxy @SaveSMT)
                                   , TTO.Option (Proxy @SaveMacaw)
                                   ] : TT.defaultIngredients
 
+getRegName ::
+  Ctx.Index (MS.MacawCrucibleRegTypes MA.ARM) t ->
+  String
+getRegName reg =
+  case Ctx.intIndex (Ctx.indexVal reg) (Ctx.size regs) of
+    Just (Some i) ->
+      let r = regs Ctx.! i
+          rName = MS.crucGenArchRegName MAS.aarch32MacawSymbolicFns r
+      in show rName
+    Nothing -> error "impossible"
+  where regs = MS.crucGenRegAssignment MAS.aarch32MacawSymbolicFns
+
 main :: IO ()
 main = do
   -- These are pass/fail in that the assertions in the "pass" set are true (and
@@ -85,11 +98,32 @@ main = do
   let passTests mmPreset = TT.testGroup "True assertions" (map (mkSymExTest passRes mmPreset) passTestFilePaths)
   let failTests mmPreset = TT.testGroup "False assertions" (map (mkSymExTest failRes mmPreset) failTestFilePaths)
   TT.defaultMainWithIngredients ingredients $
-    TT.testGroup "Binary Tests" $
-    map (\mmPreset ->
-          TT.testGroup (MST.describeMemModelPreset mmPreset)
-                       [passTests mmPreset, failTests mmPreset])
-        [MST.DefaultMemModel, MST.LazyMemModel]
+    TT.testGroup "macaw-aarch32-symbolic tests"
+    [ TT.testGroup "Unit tests" 
+        [ TTH.testCase "r0" $ getRegName MAS.r0 TTH.@?= "zenc!rznzuR0"
+        , TTH.testCase "r1" $ getRegName MAS.r1 TTH.@?= "zenc!rznzuR1"
+        , TTH.testCase "r2" $ getRegName MAS.r2 TTH.@?= "zenc!rznzuR2"
+        , TTH.testCase "r3" $ getRegName MAS.r3 TTH.@?= "zenc!rznzuR3"
+        , TTH.testCase "r4" $ getRegName MAS.r4 TTH.@?= "zenc!rznzuR4"
+        , TTH.testCase "r5" $ getRegName MAS.r5 TTH.@?= "zenc!rznzuR5"
+        , TTH.testCase "r6" $ getRegName MAS.r6 TTH.@?= "zenc!rznzuR6"
+        , TTH.testCase "r7" $ getRegName MAS.r7 TTH.@?= "zenc!rznzuR7"
+        , TTH.testCase "r8" $ getRegName MAS.r8 TTH.@?= "zenc!rznzuR8"
+        , TTH.testCase "r9" $ getRegName MAS.r9 TTH.@?= "zenc!rznzuR9"
+        , TTH.testCase "r10" $ getRegName MAS.r10 TTH.@?= "zenc!rznzuR10"
+        , TTH.testCase "r11" $ getRegName MAS.r11 TTH.@?= "zenc!rznzuR11"
+        , TTH.testCase "r12" $ getRegName MAS.r12 TTH.@?= "zenc!rznzuR12"
+        , TTH.testCase "r13" $ getRegName MAS.r13 TTH.@?= "zenc!rznzuR13"
+        , TTH.testCase "r14" $ getRegName MAS.r14 TTH.@?= "zenc!rznzuR14"
+        , TTH.testCase "sp" $ getRegName MAS.sp TTH.@?= "zenc!rznzuR13"
+        , TTH.testCase "lr" $ getRegName MAS.lr TTH.@?= "zenc!rznzuR14"
+        ]
+    , TT.testGroup "Binary Tests" $
+        map (\mmPreset ->
+              TT.testGroup (MST.describeMemModelPreset mmPreset)
+                           [passTests mmPreset, failTests mmPreset])
+            [MST.DefaultMemModel, MST.LazyMemModel]
+    ]
 
 hasTestPrefix :: Some (M.DiscoveryFunInfo arch) -> Maybe (BS8.ByteString, Some (M.DiscoveryFunInfo arch))
 hasTestPrefix (Some dfi) = do
