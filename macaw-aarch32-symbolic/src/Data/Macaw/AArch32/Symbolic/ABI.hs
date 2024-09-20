@@ -68,10 +68,10 @@ module Data.Macaw.AArch32.Symbolic.ABI
   ) where
 
 import Control.Lens qualified as Lens
-import Control.Monad qualified as Monad
 import Data.BitVector.Sized qualified as BVS
-import Data.Macaw.ARM qualified as AArch32
+import Data.Coerce (coerce)
 import Data.Macaw.AArch32.Symbolic qualified as AArch32S
+import Data.Macaw.ARM qualified as AArch32
 import Data.Macaw.Symbolic qualified as MS
 import Data.Macaw.Symbolic.Stack qualified as MSS
 import Data.Parameterized.Classes (ixF')
@@ -79,7 +79,6 @@ import Data.Parameterized.Context qualified as Ctx
 import Data.Sequence qualified as Seq
 import GHC.Natural (naturalToInteger)
 import Lang.Crucible.Backend qualified as C
-import Lang.Crucible.LLVM.Bytes qualified as Bytes
 import Lang.Crucible.LLVM.DataLayout qualified as CLD
 import Lang.Crucible.LLVM.MemModel qualified as MM
 import Lang.Crucible.Simulator qualified as C
@@ -101,16 +100,6 @@ stackPointerReg =
   Lens.lens
     (\regs -> StackPointer (C.unRV (regs Lens.^. ixF' AArch32S.sp)))
     (\regs v -> regs Lens.& ixF' AArch32S.sp Lens..~ C.RV (getStackPointer v))
-
--- | Allocate stack space by subtracting from the stack pointer
-allocStackSpace ::
-  C.IsSymInterface sym =>
-  sym ->
-  StackPointer sym ->
-  WI.SymBV sym 32 ->
-  IO (StackPointer sym)
-allocStackSpace sym (StackPointer sp) amount =
-  StackPointer <$> MM.ptrSub sym ptrRepr sp amount
 
 -- | Align the stack pointer to a particular 'CLD.Alignment'.
 alignStackPointer ::
@@ -137,9 +126,9 @@ newtype SpilledArgs sym
 
 -- | Write pointer-sized stack-spilled arguments to the stack.
 --
--- SysV specifies that they will be written in reverse order, i.e., the last
+-- The ABI specifies that they will be written in reverse order, i.e., the last
 -- element of the 'Seq.Seq' will be written to the highest address. It further
--- specifies that the end of the argument list will be 16-byte aligned. This
+-- specifies that the end of the argument list will be 8-byte aligned. This
 -- function will allocate additional stack space before the spilled arguments if
 -- necessary to establish this constraint.
 --
@@ -155,51 +144,9 @@ writeSpilledArgs ::
   SpilledArgs sym ->
   IO (StackPointer sym, MM.MemImpl sym)
 writeSpilledArgs bak mem sp spilledArgs = do
-  let sym = C.backendGetSym bak
-  four <- WI.bvLit sym ptrRepr (BVS.mkBV WI.knownNat 4)
   let ?ptrWidth = ptrRepr
-
-  -- First, align to 4 bytes. In all probability, this is a no-op.
   let align4 = CLD.exponentToAlignment 2  -- 2^2 = 4
-  StackPointer spAligned4 <- alignStackPointer sym align4 sp
-
-  -- At this point, exactly one of `spAligned4` or `spAligned4 +/- 4` is 8-byte
-  -- aligned. We need to ensure that, after writing the argument list, the stack
-  -- pointer will be 8-byte aligned.
-  --
-  -- If `sp` is already 8-byte aligned and there are an even number of spilled
-  -- arguments, we're good. If `sp + 4` is already 16-byte aligned and there
-  -- are an odd number of arguments, we're good. In the other cases, we need to
-  -- subtract 4 from `sp`. As a table:
-  --
-  -- +----------------------+------+------+
-  -- |                      | even | odd  |
-  -- |----------------------+------+------+
-  -- | 16-byte aligned      | noop | -4   |
-  -- +----------------------+-------------+
-  -- | not 16-byte aligned  | -4   | noop |
-  -- +----------------------+-------------+
-  --
-  let align8 = CLD.exponentToAlignment 3  -- 2^3 = 8
-  sp8@(StackPointer spAligned8) <- alignStackPointer sym align8 sp
-  isAligned8 <- MM.ptrEq sym ptrRepr spAligned4 spAligned8
-  sp' <-
-    if even (Seq.length (getSpilledArgs spilledArgs))
-    then
-      -- In this case, either the stack pointer is *already* 8-byte aligned, or
-      -- it *needs to be* 8-byte aligned (which is equivalent to subtracting 4,
-      -- as it is already 4-byte aligned). In either case, this value suffices.
-      pure sp8
-    else do
-      StackPointer spAdd4 <- allocStackSpace sym sp8 four
-      StackPointer <$> MM.muxLLVMPtr sym isAligned8 spAdd4 spAligned4
-
-  let i32 = MM.bitvectorType (Bytes.toBytes (32 :: Int))
-  let writeWord (StackPointer p, m) arg = do
-        p' <- MM.ptrSub sym ?ptrWidth p four
-        m' <- MM.storeRaw bak m p' i32 CLD.noAlignment (MM.ptrToPtrVal arg)
-        pure (StackPointer p', m')
-  Monad.foldM writeWord (sp', mem) (Seq.reverse (getSpilledArgs spilledArgs))
+  coerce (MSS.writeSpilledArgs bak) mem align4 sp spilledArgs
 
 -- | Like 'writeSpilledArgs', but manipulates @sp@ directly.
 --

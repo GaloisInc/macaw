@@ -91,7 +91,6 @@ import Lang.Crucible.LLVM.Bytes qualified as Bytes
 import Lang.Crucible.LLVM.DataLayout qualified as CLD
 import Lang.Crucible.LLVM.MemModel qualified as MM
 import Lang.Crucible.Simulator qualified as C
-import qualified Data.Macaw.Symbolic.Stack as Stack
 import What4.Interface qualified as WI
 
 -- | Helper, not exported
@@ -169,7 +168,7 @@ writeSpilledArgs ::
 writeSpilledArgs bak mem sp spilledArgs = do
   let ?ptrWidth = ptrRepr
   let align8 = CLD.exponentToAlignment 3  -- 2^3 = 8
-  coerce (Stack.writeSpilledArgs bak) mem align8 sp spilledArgs
+  coerce (MSS.writeSpilledArgs bak) mem align8 sp spilledArgs
 
 -- | Write the return address to the stack.
 --
