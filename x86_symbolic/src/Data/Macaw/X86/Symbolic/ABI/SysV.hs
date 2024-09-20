@@ -76,8 +76,8 @@ module Data.Macaw.X86.Symbolic.ABI.SysV
   ) where
 
 import Control.Lens qualified as Lens
-import Control.Monad qualified as Monad
 import Data.BitVector.Sized qualified as BVS
+import Data.Coerce (coerce)
 import Data.Macaw.Symbolic qualified as MS
 import Data.Macaw.Symbolic.Stack qualified as MSS
 import Data.Macaw.X86 qualified as X86
@@ -91,6 +91,7 @@ import Lang.Crucible.LLVM.Bytes qualified as Bytes
 import Lang.Crucible.LLVM.DataLayout qualified as CLD
 import Lang.Crucible.LLVM.MemModel qualified as MM
 import Lang.Crucible.Simulator qualified as C
+import qualified Data.Macaw.Symbolic.Stack as Stack
 import What4.Interface qualified as WI
 
 -- | Helper, not exported
@@ -112,16 +113,6 @@ stackPointerReg =
   Lens.lens
     (\regs -> StackPointer (C.unRV (regs Lens.^. ixF' X86S.rsp)))
     (\regs v -> regs Lens.& ixF' X86S.rsp Lens..~ C.RV (getStackPointer v))
-
--- | Allocate stack space by subtracting from the stack pointer
-allocStackSpace ::
-  C.IsSymInterface sym =>
-  sym ->
-  StackPointer sym ->
-  WI.SymBV sym 64 ->
-  IO (StackPointer sym)
-allocStackSpace sym (StackPointer sp) amount =
-  StackPointer <$> MM.ptrSub sym ptrRepr sp amount
 
 -- | A return address
 newtype RetAddr sym = RetAddr { getRetAddr :: MM.LLVMPtr sym 64 }
@@ -176,51 +167,9 @@ writeSpilledArgs ::
   SpilledArgs sym ->
   IO (StackPointer sym, MM.MemImpl sym)
 writeSpilledArgs bak mem sp spilledArgs = do
-  let sym = C.backendGetSym bak
-  eight <- WI.bvLit sym ptrRepr (BVS.mkBV WI.knownNat 8)
-  let i64 = MM.bitvectorType (Bytes.toBytes (64 :: Int))
   let ?ptrWidth = ptrRepr
-
-  -- First, align to 8 bytes. In all probability, this is a no-op.
   let align8 = CLD.exponentToAlignment 3  -- 2^3 = 8
-  StackPointer spAligned8 <- alignStackPointer sym align8 sp
-
-  -- At this point, exactly one of `spAligned8` or `spAligned8 +/- 8` is 16-byte
-  -- aligned. We need to ensure that, after writing the argument list, the stack
-  -- pointer will be 16-byte aligned.
-  --
-  -- If `rsp` is already 16-byte aligned and there are an even number of spilled
-  -- arguments, we're good. If `rsp + 8` is already 16-byte aligned and there
-  -- are an odd number of arguments, we're good. In the other cases, we need to
-  -- subtract 8 from `rsp`. As a table:
-  --
-  -- +----------------------+------+------+
-  -- |                      | even | odd  |
-  -- |----------------------+------+------+
-  -- | 16-byte aligned      | noop | -8   |
-  -- +----------------------+-------------+
-  -- | not 16-byte aligned  | -8   | noop |
-  -- +----------------------+-------------+
-  --
-  let align16 = CLD.exponentToAlignment 4  -- 2^4 = 16
-  sp16@(StackPointer spAligned16) <- alignStackPointer sym align16 sp
-  isAligned16 <- MM.ptrEq sym ptrRepr spAligned8 spAligned16
-  sp' <-
-    if even (Seq.length (getSpilledArgs spilledArgs))
-    then
-      -- In this case, either the stack pointer is *already* 16-byte aligned, or
-      -- it *needs to be* 16-byte aligned (which is equivalent to subtracting 8,
-      -- as it is already 8-byte aligned). In either case, this value suffices.
-      pure sp16
-    else do
-      StackPointer spAdd8 <- allocStackSpace sym sp16 eight
-      StackPointer <$> MM.muxLLVMPtr sym isAligned16 spAdd8 spAligned8
-
-  let writeWord (StackPointer p, m) arg = do
-        p' <- MM.ptrSub sym ?ptrWidth p eight
-        m' <- MM.storeRaw bak m p' i64 CLD.noAlignment (MM.ptrToPtrVal arg)
-        pure (StackPointer p', m')
-  Monad.foldM writeWord (sp', mem) (Seq.reverse (getSpilledArgs spilledArgs))
+  coerce (Stack.writeSpilledArgs bak) mem align8 sp spilledArgs
 
 -- | Write the return address to the stack.
 --
