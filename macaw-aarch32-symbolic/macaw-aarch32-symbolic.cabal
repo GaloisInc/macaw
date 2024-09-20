@@ -19,11 +19,13 @@ extra-source-files:  CHANGELOG.md
 
 library
   exposed-modules:     Data.Macaw.AArch32.Symbolic
+                       Data.Macaw.AArch32.Symbolic.ABI
   other-modules:       Data.Macaw.AArch32.Symbolic.AtomWrapper
                        Data.Macaw.AArch32.Symbolic.Functions
                        Data.Macaw.AArch32.Symbolic.Panic
   -- other-extensions:
   build-depends:       base >=4.10 && <5,
+                       bv-sized,
                        containers,
                        lens,
                        panic,
