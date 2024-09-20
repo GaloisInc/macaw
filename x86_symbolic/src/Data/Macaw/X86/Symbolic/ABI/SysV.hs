@@ -185,25 +185,21 @@ writeSpilledArgs bak mem sp spilledArgs = do
   let align8 = CLD.exponentToAlignment 3  -- 2^3 = 8
   StackPointer spAligned8 <- alignStackPointer sym align8 sp
 
-  -- At this point, exactly one of `spAligned8` or `spAligned8 + 8` is 16-byte
+  -- At this point, exactly one of `spAligned8` or `spAligned8 +/- 8` is 16-byte
   -- aligned. We need to ensure that, after writing the argument list, the stack
   -- pointer will be 16-byte aligned.
   --
-  -- Depending on the current alignment and parity of the number of spilled
-  -- arguments, we need to:
-  --
-  -- - further align `rsp` to 16 bytes (call this choice a16)
-  -- - add 8 so that `rsp + 8` is aligned to 16 bytes (call this +8)
-  -- - do nothing (call this noop)
-  --
-  -- There are four cases to consider:
+  -- If `rsp` is already 16-byte aligned and there are an even number of spilled
+  -- arguments, we're good. If `rsp + 8` is already 16-byte aligned and there
+  -- are an odd number of arguments, we're good. In the other cases, we need to
+  -- subtract 8 from `rsp`. As a table:
   --
   -- +----------------------+------+------+
   -- |                      | even | odd  |
   -- |----------------------+------+------+
-  -- | 16-byte aligned      | noop | +8   |
+  -- | 16-byte aligned      | noop | -8   |
   -- +----------------------+-------------+
-  -- | not 16-byte aligned  | a16  | noop |
+  -- | not 16-byte aligned  | -8   | noop |
   -- +----------------------+-------------+
   --
   let align16 = CLD.exponentToAlignment 4  -- 2^4 = 16
@@ -213,7 +209,8 @@ writeSpilledArgs bak mem sp spilledArgs = do
     if even (Seq.length (getSpilledArgs spilledArgs))
     then
       -- In this case, either the stack pointer is *already* 16-byte aligned, or
-      -- it *needs to be* 16-byte aligned. In either case, this value suffices.
+      -- it *needs to be* 16-byte aligned (which is equivalent to subtracting 8,
+      -- as it is already 8-byte aligned). In either case, this value suffices.
       pure sp16
     else do
       StackPointer spAdd8 <- allocStackSpace sym sp16 eight
