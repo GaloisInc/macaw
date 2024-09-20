@@ -160,7 +160,7 @@ newtype SpilledArgs sym
 --
 -- SysV specifies that they will be written in reverse order, i.e., the last
 -- element of the 'Seq.Seq' will be written to the highest address. It further
--- specifies that tne end of the argument list will be 16-byte aligned. This
+-- specifies that the end of the argument list will be 16-byte aligned. This
 -- function will allocate additional stack space before the spilled arguments if
 -- necessary to establish this constraint.
 --
@@ -189,7 +189,7 @@ writeSpilledArgs bak mem sp spilledArgs = do
   -- aligned. We need to ensure that, after writing the argument list, the stack
   -- pointer will be 16-byte aligned.
   --
-  -- Depending on the current alignment and partity of the number of spilled
+  -- Depending on the current alignment and parity of the number of spilled
   -- arguments, we need to:
   --
   -- - further align `rsp` to 16 bytes (call this choice a16)
