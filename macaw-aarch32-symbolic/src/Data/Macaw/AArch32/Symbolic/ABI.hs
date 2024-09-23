@@ -163,8 +163,6 @@ pushStackFrame bak mem regs spilledArgs = do
   pure (regs', mem')
 
 -- | Like 'MSS.createArrayStack', but puts the stack pointer in @sp@ directly.
---
--- Does not allow allocating stack slots, use 'pushStackFrame' for that.
 allocStack ::
   C.IsSymBackend sym bak =>
   (?memOpts :: MM.MemOptions) =>
@@ -181,7 +179,6 @@ allocStack ::
     )
 allocStack bak mem regs sz = do
   let ?ptrWidth = ptrRepr
-  let slots = MSS.ExtraStackSlots 0
-  (MSS.ArrayStack _base top _arr, mem') <- MSS.createArrayStack bak mem slots sz
+  (MSS.ArrayStack _base top _arr, mem') <- MSS.createArrayStack bak mem sz
   let regs' = regs Lens.& stackPointerReg Lens..~ StackPointer top
   pure (regs', mem')
