@@ -17,15 +17,15 @@ module Data.Macaw.Symbolic.Stack
   , writeSpilledArgs
   ) where
 
+import Control.Monad qualified as Monad
 import Data.BitVector.Sized qualified as BVS
 import Data.Parameterized.Context as Ctx
+import Data.Sequence qualified as Seq
 import GHC.Natural (naturalToInteger)
 import Lang.Crucible.Backend qualified as C
+import Lang.Crucible.LLVM.Bytes qualified as Bytes
 import Lang.Crucible.LLVM.DataLayout qualified as CLD
 import Lang.Crucible.LLVM.MemModel qualified as CLM
-import qualified Control.Monad as Monad
-import qualified Data.Sequence as Seq
-import qualified Lang.Crucible.LLVM.Bytes as Bytes
 import What4.Interface qualified as WI
 import What4.Symbol qualified as WSym
 
