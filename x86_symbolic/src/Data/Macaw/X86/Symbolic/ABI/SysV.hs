@@ -85,7 +85,6 @@ import Data.Macaw.X86.Symbolic qualified as X86S
 import Data.Parameterized.Classes (ixF')
 import Data.Parameterized.Context qualified as Ctx
 import Data.Sequence qualified as Seq
-import GHC.Natural (naturalToInteger)
 import Lang.Crucible.Backend qualified as C
 import Lang.Crucible.LLVM.Bytes qualified as Bytes
 import Lang.Crucible.LLVM.DataLayout qualified as CLD
@@ -130,17 +129,7 @@ alignStackPointer ::
   CLD.Alignment ->
   StackPointer sym ->
   IO (StackPointer sym)
-alignStackPointer sym align orig@(StackPointer (MM.LLVMPointer blk off)) = do
-  let alignInt = 2 ^ naturalToInteger (CLD.alignmentToExponent align)
-  if alignInt == 1
-  then pure orig
-  else do
-    -- Because the stack grows down, we can align it by simply ANDing the stack
-    -- pointer with a mask with some amount of 1s followed by some amount of 0s.
-    let mask = BVS.complement ptrRepr (BVS.mkBV ptrRepr (alignInt - 1))
-    maskBv <- WI.bvLit sym ptrRepr mask
-    off' <- WI.bvAndBits sym off maskBv
-    pure (StackPointer (MM.LLVMPointer blk off'))
+alignStackPointer = let ?ptrWidth = ptrRepr in coerce MSS.alignStackPointer
 
 -- | Stack-spilled arguments, in normal order
 newtype SpilledArgs sym
