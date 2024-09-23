@@ -351,7 +351,7 @@ defaultRegs bak archVals mem = do
   let mib = 1024 * kib
   stackSize <- WI.bvLit sym ?ptrWidth (BVS.mkBV ?ptrWidth (2 * mib))
   (MSS.ArrayStack stackBasePtr _stackTopPtr _stackArrayStorage, mem') <-
-    MSS.createArrayStack bak mem (MSS.ExtraStackSlots 0) stackSize
+    MSS.createArrayStack bak mem stackSize
   stackInitialOffset <- WI.bvLit sym ?ptrWidth (BVS.mkBV ?ptrWidth mib)
   sp <- CLM.ptrAdd sym ?ptrWidth stackBasePtr stackInitialOffset
 
