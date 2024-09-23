@@ -49,6 +49,9 @@ Helpful links:
 * <https://github.com/ARM-software/abi-aa/blob/a82eef0433556b30539c0d4463768d9feb8cfd0b/aapcs32/aapcs32.rst#621the-stack>
 * <https://learn.microsoft.com/en-us/cpp/build/overview-of-arm-abi-conventions?view=msvc-170>
 
+(The latter describes the Microsoft ARM ABI which is slightly different from the
+standard ARM ABI, but most of the content still applies.)
+
 This module is meant to be imported qualified.
 -}
 

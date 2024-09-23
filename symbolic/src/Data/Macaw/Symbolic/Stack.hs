@@ -110,8 +110,11 @@ createArrayStack bak mem slots sz = do
   (base, mem1) <- mallocStack bak mem sz
   mem2 <- CLM.doArrayStore bak mem1 base stackAlign arr sz
 
+  -- Put the stack pointer at the end of the stack allocation, i.e., an offset
+  -- that is one less than the allocation's size.
   off <- WI.bvSub sym sz =<< WI.bvOne sym ?ptrWidth
   end <- CLM.doPtrAddOffset bak mem2 base off
+
   let ptrBytes = WI.intValue ?ptrWidth `div` 8
   let slots' = fromIntegral (getExtraStackSlots slots)
   let slotsBytes = slots' * ptrBytes
