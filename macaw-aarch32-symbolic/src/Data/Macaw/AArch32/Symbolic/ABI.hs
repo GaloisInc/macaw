@@ -151,7 +151,7 @@ writeSpilledArgs bak mem sp spilledArgs = do
 -- | Like 'writeSpilledArgs', but manipulates @sp@ directly.
 --
 -- Asserts that the stack allocation is writable and large enough to contain the
--- spilled arguments and return address.
+-- spilled arguments.
 pushStackFrame ::
   C.IsSymBackend sym bak =>
   (?memOpts :: MM.MemOptions) =>

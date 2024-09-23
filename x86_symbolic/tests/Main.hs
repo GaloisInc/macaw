@@ -185,7 +185,6 @@ setupRegsAndMem bak archVals mmPreset binariesInfo = do
   let iMem = MST.InitialMem mem' mmConf
   pure (regsEntry, iMem)
 
-
 mkSymExTest :: MST.SimulationResult -> MST.MemModelPreset -> FilePath -> TT.TestTree
 mkSymExTest expected mmPreset exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
   bytes <- BS.readFile exePath

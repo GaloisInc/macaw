@@ -9,6 +9,7 @@
 module Main (main) where
 
 import           Control.Lens ( (^.) )
+import qualified Data.BitVector.Sized as BVS
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ElfEdit as Elf
@@ -20,6 +21,7 @@ import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
+import qualified Data.Sequence as Seq
 import qualified Prettyprinter as PP
 import           System.FilePath ( (</>), (<.>) )
 import qualified System.FilePath.Glob as SFG
@@ -33,6 +35,7 @@ import qualified Language.ASL.Globals as ASL
 import qualified Data.Macaw.Architecture.Info as MAI
 
 import qualified Data.Macaw.AArch32.Symbolic as MAS
+import qualified Data.Macaw.AArch32.Symbolic.ABI as ABI
 import qualified Data.Macaw.ARM as MA
 import qualified Data.Macaw.ARM.ARMReg as MAR
 import qualified Data.Macaw.CFG as MC
@@ -43,12 +46,16 @@ import qualified What4.Config as WC
 import qualified What4.Expr.Builder as WEB
 import qualified What4.Interface as WI
 import qualified What4.ProblemFeatures as WPF
+import qualified What4.Protocol.Online as WPO
 import qualified What4.Solver as WS
 
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.Backend.Online as CBO
+import qualified Lang.Crucible.FunctionHandle as CFH
 import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.LLVM.MemModel as LLVM
+import qualified Lang.Crucible.CFG.Extension as CCE
+import qualified Lang.Crucible.Types as CT
 
 -- | A Tasty option to tell us to save SMT queries and responses to /tmp for debugging purposes
 data SaveSMT = SaveSMT Bool
@@ -146,6 +153,44 @@ armResultExtractor archVals = MST.ResultExtractor $ \regs _mem k -> do
   let re = MS.lookupReg archVals regs (MAR.ARMGlobalBV (ASL.knownGlobalRef @"_R0"))
   k PC.knownRepr (CS.regValue re)
 
+setupRegsAndMem ::
+  ( ext ~ MS.MacawExt MA.ARM
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , LLVM.HasLLVMAnn sym
+  , sym ~ WEB.ExprBuilder scope st fs
+  , bak ~ CBO.OnlineBackend solver scope st fs
+  , WPO.OnlineSolver solver
+  , ?memOpts :: LLVM.MemOptions
+  , MS.HasMacawLazySimulatorState p sym 32
+  ) =>
+  bak ->
+  MS.GenArchVals MS.LLVMMemory MA.ARM ->
+  MST.MemModelPreset ->
+  MST.BinariesInfo MA.ARM ->
+  IO ( CS.RegEntry sym (MS.ArchRegStruct MA.ARM)
+     , MST.InitialMem p sym MA.ARM
+     )
+setupRegsAndMem bak archVals mmPreset binariesInfo = do
+  let sym = CB.backendGetSym bak
+  MST.InitialMem initMem mmConf <-
+    case mmPreset of
+      MST.DefaultMemModel -> MST.initialMem binariesInfo bak MA.arm_linux_info archVals
+      MST.LazyMemModel -> MST.lazyInitialMem binariesInfo bak MA.arm_linux_info archVals
+
+  let symArchFns = MS.archFunctions archVals
+  initRegs <- MST.freshRegs symArchFns sym
+  let kib = 1024
+  let mib = 1024 * kib
+  stackSize <- WI.bvLit sym CT.knownNat (BVS.mkBV CT.knownNat mib)
+  (regs, mem) <- ABI.allocStack bak initMem initRegs stackSize
+  let spilled = ABI.SpilledArgs Seq.Empty
+  (regs', mem') <- ABI.pushStackFrame bak mem regs spilled
+  let crucRegTypes = MS.crucArchRegTypes symArchFns
+  let regsEntry = CS.RegEntry (CT.StructRepr crucRegTypes) regs'
+  let iMem = MST.InitialMem mem' mmConf
+  pure (regsEntry, iMem)
+
 mkSymExTest :: MST.SimulationResult -> MST.MemModelPreset -> FilePath -> TT.TestTree
 mkSymExTest expected mmPreset exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
   bytes <- BS.readFile exePath
@@ -191,8 +236,17 @@ symExTestSized expected mmPreset exePath saveSMT saveMacaw step ehi archInfo = d
        let extract = armResultExtractor archVals
        logger <- makeGoalLogger saveSMT solver name exePath
        let ?memOpts = LLVM.defaultMemOptions
-       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals binfo mmPreset extract dfi
-       TTH.assertEqual "AssertionResult" expected simRes
+
+       MS.withArchConstraints archVals $ do
+         halloc <- CFH.newHandleAllocator
+         let ?recordLLVMAnnotation = \_ _ _ -> return ()
+
+         (regs, iMem) <- setupRegsAndMem bak archVals mmPreset binfo
+         (memVar, execResult) <-
+           MST.simDiscoveredFunction bak execFeatures archVals halloc iMem regs binfo dfi
+
+         simRes <- MST.summarizeExecution solver logger bak memVar extract execResult
+         TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()
 writeMacawIR (SaveMacaw sm) name dfi
