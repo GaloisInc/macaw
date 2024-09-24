@@ -28,6 +28,7 @@ module Data.Macaw.X86.Symbolic.Regs
   , IE, DE, ZE, OE, UE, PE, EF, ES, C0, C1, C2, C3
   , Tag0, Tag1, Tag2, Tag3, Tag4, Tag5, Tag6, Tag7
   , St0, St1, St2, St3, St4, St5, St6, St7
+  , Mm0, Mm1, Mm2, Mm3, Mm4, Mm5, Mm6, Mm7
   , Zmm0, Zmm1, Zmm2, Zmm3, Zmm4, Zmm5, Zmm6, Zmm7
   , Zmm8, Zmm9, Zmm10, Zmm11, Zmm12, Zmm13, Zmm14, Zmm15
   , rip, rax, rbx, rcx, rdx, rsp, rbp, rsi, rdi
@@ -36,6 +37,7 @@ module Data.Macaw.X86.Symbolic.Regs
   , ie, de, ze, oe, ue, pe, ef, es, c0, c1, c2, c3, top
   , tag0, tag1, tag2, tag3, tag4, tag5, tag6, tag7
   , st0, st1, st2, st3, st4, st5, st6, st7
+  , mm0, mm1, mm2, mm3, mm4, mm5, mm6, mm7
   , zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7
   , zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15
   , x86RegAssignment
@@ -160,14 +162,38 @@ type Tag5        = X87Tag 5
 type Tag6        = X87Tag 6
 type Tag7        = X87Tag 7
 type FPReg n     = 47 + n   -- 8
+-- | AKA 'Mm0'
 type St0         = FPReg 0
+-- | AKA 'Mm1'
 type St1         = FPReg 1
+-- | AKA 'Mm2'
 type St2         = FPReg 2
+-- | AKA 'Mm3'
 type St3         = FPReg 3
+-- | AKA 'Mm4'
 type St4         = FPReg 4
+-- | AKA 'Mm5'
 type St5         = FPReg 5
+-- | AKA 'Mm6'
 type St6         = FPReg 6
+-- | AKA 'Mm7'
 type St7         = FPReg 7
+-- | AKA 'St0'
+type Mm0         = FPReg 0
+-- | AKA 'St1'
+type Mm1         = FPReg 1
+-- | AKA 'St2'
+type Mm2         = FPReg 2
+-- | AKA 'St3'
+type Mm3         = FPReg 3
+-- | AKA 'St4'
+type Mm4         = FPReg 4
+-- | AKA 'St5'
+type Mm5         = FPReg 5
+-- | AKA 'St6'
+type Mm6         = FPReg 6
+-- | AKA 'St7'
+type Mm7         = FPReg 7
 type YMM n       = 55 + n   -- 16
 type Zmm0         = YMM 0
 type Zmm1         = YMM 1
@@ -342,29 +368,69 @@ tag6 = Ctx.natIndex @Tag6
 tag7 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 2)
 tag7 = Ctx.natIndex @Tag7
 
+-- | AKA 'mm0'
 st0 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
 st0 = Ctx.natIndex @St0
 
+-- | AKA 'mm1'
 st1 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
 st1 = Ctx.natIndex @St1
 
+-- | AKA 'mm2'
 st2 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
 st2 = Ctx.natIndex @St2
 
+-- | AKA 'mm3'
 st3 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
 st3 = Ctx.natIndex @St3
 
+-- | AKA 'mm4'
 st4 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
 st4 = Ctx.natIndex @St4
 
+-- | AKA 'mm5'
 st5 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
 st5 = Ctx.natIndex @St5
 
+-- | AKA 'mm6'
 st6 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
 st6 = Ctx.natIndex @St6
 
+-- | AKA 'mm7'
 st7 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
 st7 = Ctx.natIndex @St7
+
+-- | AKA 'st0'
+mm0 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+mm0 = Ctx.natIndex @Mm0
+
+-- | AKA 'st1'
+mm1 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+mm1 = Ctx.natIndex @Mm1
+
+-- | AKA 'st2'
+mm2 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+mm2 = Ctx.natIndex @Mm2
+
+-- | AKA 'st3'
+mm3 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+mm3 = Ctx.natIndex @Mm3
+
+-- | AKA 'st4'
+mm4 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+mm4 = Ctx.natIndex @Mm4
+
+-- | AKA 'st5'
+mm5 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+mm5 = Ctx.natIndex @Mm5
+
+-- | AKA 'st6'
+mm6 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+mm6 = Ctx.natIndex @Mm6
+
+-- | AKA 'st7'
+mm7 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+mm7 = Ctx.natIndex @Mm7
 
 zmm0 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
 zmm0  = Ctx.natIndex @Zmm0

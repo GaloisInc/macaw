@@ -160,7 +160,7 @@ instance Show (X86Reg tp) where
                  Nothing  -> error $ "Unknown x87 status register: " ++ show r
   show X87_TopReg      = "x87top"
   show (X87_TagReg n)  = "tag" ++ show n
-  show (X87_FPUReg r)  = "st" ++ show r
+  show (X87_FPUReg r)  = show r
   show (X86_ZMMReg r)  = "zmm" ++ show r
 
 instance ShowF X86Reg where
