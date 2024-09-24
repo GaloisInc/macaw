@@ -31,6 +31,7 @@ library
     Data.Macaw.X86.Symbolic
     Data.Macaw.X86.Crucible
     Data.Macaw.X86.Symbolic.ABI.SysV
+    Data.Macaw.X86.Symbolic.Regs
   other-modules:
     Data.Macaw.X86.Symbolic.Panic
 
