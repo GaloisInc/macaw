@@ -120,6 +120,15 @@ main = do
           , TTH.testCase "r13" $ getRegName MXS.r13 TTH.@?= "r!r13"
           , TTH.testCase "r14" $ getRegName MXS.r14 TTH.@?= "r!r14"
           , TTH.testCase "r15" $ getRegName MXS.r15 TTH.@?= "r!r15"
+          , TTH.testCase "cf" $ getRegName MXS.cf TTH.@?= "r!cf"
+          , TTH.testCase "pf" $ getRegName MXS.pf TTH.@?= "r!pf"
+          , TTH.testCase "af" $ getRegName MXS.af TTH.@?= "r!af"
+          , TTH.testCase "zf" $ getRegName MXS.zf TTH.@?= "r!zf"
+          , TTH.testCase "sf" $ getRegName MXS.sf TTH.@?= "r!sf"
+          , TTH.testCase "tf" $ getRegName MXS.tf TTH.@?= "r!tf"
+          , TTH.testCase "if" $ getRegName MXS.if_ TTH.@?= "r!if"
+          , TTH.testCase "df" $ getRegName MXS.df TTH.@?= "r!df"
+          , TTH.testCase "of" $ getRegName MXS.of_ TTH.@?= "r!of"
           ]
       , TT.testGroup "Binary tests" $
           map (\mmPreset ->

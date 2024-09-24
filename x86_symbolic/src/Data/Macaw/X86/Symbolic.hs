@@ -25,25 +25,14 @@ module Data.Macaw.X86.Symbolic
   , freshX86Reg
 
   , RegAssign
-  , rip
-  , rax
-  , rbx
-  , rcx
-  , rdx
-  , rsp
-  , rbp
-  , rsi
-  , rdi
-  , r8
-  , r9
-  , r10
-  , r11
-  , r12
-  , r13
-  , r14
-  , r15
   , getReg
   , IP, GP, Flag, X87Status, X87Top, X87Tag, FPReg, YMM
+  , Rip, Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi
+  , R8, R9, R10, R11, R12, R13, R14, R15
+  , CF, PF, AF, ZF, SF, TF, IF, DF, OF
+  , rip, rax, rbx, rcx, rdx, rsp, rbp, rsi, rdi
+  , r8, r9, r10, r11, r12, r13, r14, r15
+  , cf, pf, af, zf, sf, tf, if_, df, of_
   ) where
 
 import           Control.Lens ((^.),(%~),(&))
@@ -112,69 +101,131 @@ type instance ArchRegContext M.X86_64
 
 type RegAssign f = Assignment f (ArchRegContext M.X86_64)
 
+-- The following definitions are tightly coupled to that of ArchRegContext for
+-- X86_64. Unit tests in the test suite ensure that they are consistent with
+-- x86RegAssignment (below).
+
 type IP          = 0        -- 1
+type Rip         = 0        -- 1
 type GP n        = 1 + n    -- 16
+type Rax         = GP 0
+type Rcx         = GP 1
+type Rdx         = GP 2
+type Rbx         = GP 3
+type Rsp         = GP 4
+type Rbp         = GP 5
+type Rsi         = GP 6
+type Rdi         = GP 7
+type R8          = GP 8
+type R9          = GP 9
+type R10         = GP 10
+type R11         = GP 11
+type R12         = GP 12
+type R13         = GP 13
+type R14         = GP 14
+type R15         = GP 15
 type Flag n      = 17 + n   -- 9
+type CF          = Flag 0
+type PF          = Flag 1
+type AF          = Flag 2
+type ZF          = Flag 3
+type SF          = Flag 4
+type TF          = Flag 5
+type IF          = Flag 6
+type DF          = Flag 7
+type OF          = Flag 8
 type X87Status n = 26 + n   -- 12
 type X87Top      = 38       -- 1
 type X87Tag n    = 39 + n   -- 8
 type FPReg n     = 47 + n   -- 8
 type YMM n       = 55 + n   -- 16
 
--- The following definitions are tightly coupled to that of ArchRegContext for
--- X86_64. Unit tests in the test suite ensure that they are consistent with
--- x86RegAssignment (below).
-
 rip :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rip = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 0 (MM.LLVMPointerType 64))))
+rip = Ctx.natIndex @Rip
 
 rax :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rax = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 1 (MM.LLVMPointerType 64))))
+rax = Ctx.natIndex @Rax
 
 rcx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rcx = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 2 (MM.LLVMPointerType 64))))
+rcx = Ctx.natIndex @Rcx
 
 rdx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rdx = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 3 (MM.LLVMPointerType 64))))
+rdx = Ctx.natIndex @Rdx
 
 rbx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rbx = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 4 (MM.LLVMPointerType 64))))
+rbx = Ctx.natIndex @Rbx
 
 rsp :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rsp = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 5 (MM.LLVMPointerType 64))))
+rsp = Ctx.natIndex @Rsp
 
 rbp :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rbp = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 6 (MM.LLVMPointerType 64))))
+rbp = Ctx.natIndex @Rbp
 
 rsi :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rsi = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 7 (MM.LLVMPointerType 64))))
+rsi = Ctx.natIndex @Rsi
 
 rdi :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rdi = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 8 (MM.LLVMPointerType 64))))
+rdi = Ctx.natIndex @Rdi
 
 r8 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r8 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 9 (MM.LLVMPointerType 64))))
+r8 = Ctx.natIndex @R8
 
 r9 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r9 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 10 (MM.LLVMPointerType 64))))
+r9 = Ctx.natIndex @R9
 
 r10 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r10 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 11 (MM.LLVMPointerType 64))))
+r10 = Ctx.natIndex @R10
 
 r11 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r11 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 12 (MM.LLVMPointerType 64))))
+r11 = Ctx.natIndex @R11
 
 r12 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r12 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 13 (MM.LLVMPointerType 64))))
+r12 = Ctx.natIndex @R12
 
 r13 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r13 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 14 (MM.LLVMPointerType 64))))
+r13 = Ctx.natIndex @R13
 
 r14 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r14 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 15 (MM.LLVMPointerType 64))))
+r14 = Ctx.natIndex @R14
 
 r15 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r15 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 16 (MM.LLVMPointerType 64))))
+r15 = Ctx.natIndex @R15
+
+-- | Carry flag
+cf :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+cf = Ctx.natIndex @CF
+
+-- | Parity flag
+pf :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+pf = Ctx.natIndex @PF
+
+-- | Auxiliary carry flag
+af :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+af = Ctx.natIndex @AF
+
+-- | Zero flag
+zf :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+zf = Ctx.natIndex @ZF
+
+-- | Sign flag
+sf :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+sf = Ctx.natIndex @SF
+
+-- | Trap flag
+tf :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+tf = Ctx.natIndex @TF
+
+-- | Interrupt enable flag
+if_ :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+if_ = Ctx.natIndex @IF
+
+-- | Direction flag
+df :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+df = Ctx.natIndex @DF
+
+-- | Overflow flag
+of_ :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+of_ = Ctx.natIndex @OF
 
 getReg ::
   forall n t f. (Idx n (ArchRegContext M.X86_64) t) => RegAssign f -> f t
