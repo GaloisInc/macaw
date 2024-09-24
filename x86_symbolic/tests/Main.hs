@@ -129,6 +129,18 @@ main = do
           , TTH.testCase "if" $ getRegName MXS.if_ TTH.@?= "r!if"
           , TTH.testCase "df" $ getRegName MXS.df TTH.@?= "r!df"
           , TTH.testCase "of" $ getRegName MXS.of_ TTH.@?= "r!of"
+          , TTH.testCase "ie" $ getRegName MXS.ie TTH.@?= "r!ie"
+          , TTH.testCase "de" $ getRegName MXS.de TTH.@?= "r!de"
+          , TTH.testCase "ze" $ getRegName MXS.ze TTH.@?= "r!ze"
+          , TTH.testCase "oe" $ getRegName MXS.oe TTH.@?= "r!oe"
+          , TTH.testCase "ue" $ getRegName MXS.ue TTH.@?= "r!ue"
+          , TTH.testCase "pe" $ getRegName MXS.pe TTH.@?= "r!pe"
+          , TTH.testCase "ef" $ getRegName MXS.ef TTH.@?= "r!ef"
+          , TTH.testCase "es" $ getRegName MXS.es TTH.@?= "r!es"
+          , TTH.testCase "c0" $ getRegName MXS.c0 TTH.@?= "r!c0"
+          , TTH.testCase "c1" $ getRegName MXS.c1 TTH.@?= "r!c1"
+          , TTH.testCase "c2" $ getRegName MXS.c2 TTH.@?= "r!c2"
+          , TTH.testCase "c3" $ getRegName MXS.c3 TTH.@?= "r!c3"
           ]
       , TT.testGroup "Binary tests" $
           map (\mmPreset ->

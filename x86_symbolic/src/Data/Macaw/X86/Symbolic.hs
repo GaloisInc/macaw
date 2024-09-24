@@ -30,9 +30,11 @@ module Data.Macaw.X86.Symbolic
   , Rip, Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi
   , R8, R9, R10, R11, R12, R13, R14, R15
   , CF, PF, AF, ZF, SF, TF, IF, DF, OF
+  , IE, DE, ZE, OE, UE, PE, EF, ES, C0, C1, C2, C3
   , rip, rax, rbx, rcx, rdx, rsp, rbp, rsi, rdi
   , r8, r9, r10, r11, r12, r13, r14, r15
   , cf, pf, af, zf, sf, tf, if_, df, of_
+  , ie, de, ze, oe, ue, pe, ef, es, c0, c1, c2, c3
   ) where
 
 import           Control.Lens ((^.),(%~),(&))
@@ -135,6 +137,18 @@ type IF          = Flag 6
 type DF          = Flag 7
 type OF          = Flag 8
 type X87Status n = 26 + n   -- 12
+type IE          = X87Status 0
+type DE          = X87Status 1
+type ZE          = X87Status 2
+type OE          = X87Status 3
+type UE          = X87Status 4
+type PE          = X87Status 5
+type EF          = X87Status 6
+type ES          = X87Status 7
+type C0          = X87Status 8
+type C1          = X87Status 9
+type C2          = X87Status 10
+type C3          = X87Status 11
 type X87Top      = 38       -- 1
 type X87Tag n    = 39 + n   -- 8
 type FPReg n     = 47 + n   -- 8
@@ -227,6 +241,48 @@ df = Ctx.natIndex @DF
 of_ :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
 of_ = Ctx.natIndex @OF
 
+-- | Invalid operation
+ie :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+ie = Ctx.natIndex @IE
+
+-- | Denormalized operand
+de :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+de = Ctx.natIndex @DE
+
+-- | Zero divide
+ze :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+ze = Ctx.natIndex @ZE
+
+-- | Overflow
+oe :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+oe = Ctx.natIndex @OE
+
+-- | Underflow
+ue :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+ue = Ctx.natIndex @UE
+
+-- | Precision
+pe :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+pe = Ctx.natIndex @PE
+
+ef :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+ef = Ctx.natIndex @EF
+
+es :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+es = Ctx.natIndex @ES
+
+c0 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+c0 = Ctx.natIndex @C0
+
+c1 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+c1 = Ctx.natIndex @C1
+
+c2 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+c2 = Ctx.natIndex @C2
+
+c3 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
+c3 = Ctx.natIndex @C3
+
 getReg ::
   forall n t f. (Idx n (ArchRegContext M.X86_64) t) => RegAssign f -> f t
 getReg x = x ^. (field @n)
@@ -235,7 +291,7 @@ x86RegName' :: M.X86Reg tp -> String
 x86RegName' M.X86_IP     = "ip"
 x86RegName' (M.X86_GP r) = show r
 x86RegName' (M.X86_FlagReg r) = show r
-x86RegName' (M.X87_StatusReg r) = show r
+x86RegName' r@(M.X87_StatusReg _) = show r
 x86RegName' M.X87_TopReg = "x87Top"
 x86RegName' (M.X87_TagReg r) = "x87Tag" ++ show r
 x86RegName' (M.X87_FPUReg r) = show $ F.mmxRegNo r
