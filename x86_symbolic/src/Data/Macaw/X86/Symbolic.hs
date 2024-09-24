@@ -25,28 +25,10 @@ module Data.Macaw.X86.Symbolic
   , freshX86Reg
 
   , RegAssign
-  , rip
-  , rax
-  , rbx
-  , rcx
-  , rdx
-  , rsp
-  , rbp
-  , rsi
-  , rdi
-  , r8
-  , r9
-  , r10
-  , r11
-  , r12
-  , r13
-  , r14
-  , r15
   , getReg
   , IP, GP, Flag, X87Status, X87Top, X87Tag, FPReg, YMM
   ) where
 
-import           Control.Lens ((^.),(%~),(&))
 import           Control.Monad ( void )
 import           Control.Monad.IO.Class ( liftIO )
 import           Data.Functor.Identity (Identity(..))
@@ -55,21 +37,14 @@ import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
-import           GHC.TypeLits
 
 import qualified Data.Macaw.CFG as M
 import           Data.Macaw.Symbolic
 import           Data.Macaw.Symbolic.Backend
 import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
-import qualified Data.Macaw.X86.X86Reg as M
 import           Data.Macaw.X86.Crucible
 import qualified Data.Macaw.X86.Symbolic.Panic as P
-import qualified Flexdis86.Register as F
-
-import qualified What4.Interface as WI
-import qualified What4.InterpretedFloatingPoint as WIF
-import qualified What4.Symbol as C
 
 import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.CFG.Extension as C
@@ -79,232 +54,7 @@ import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.LLVM.MemModel as MM
 
-------------------------------------------------------------------------
--- Utilities for generating a type-level context with repeated elements.
-
-type family CtxRepeat (n :: Nat) (c :: k) :: Ctx k where
-  CtxRepeat  0 c = EmptyCtx
-  CtxRepeat  n c = CtxRepeat  (n-1) c ::> c
-
-class RepeatAssign (tp :: k) (ctx :: Ctx k) where
-  repeatAssign :: (Int -> f tp) -> Assignment f ctx
-
-instance RepeatAssign tp EmptyCtx where
-  repeatAssign _ = Empty
-
-instance RepeatAssign tp ctx => RepeatAssign tp (ctx ::> tp) where
-  repeatAssign f =
-    let r = repeatAssign f
-     in r :> f (sizeInt (Ctx.size r))
-
-------------------------------------------------------------------------
--- X86 Registers
-
-type instance ArchRegContext M.X86_64
-   =   (EmptyCtx ::> M.BVType 64)   -- IP
-   <+> CtxRepeat 16 (M.BVType 64)   -- GP regs
-   <+> CtxRepeat 9  M.BoolType      -- Flags
-   <+> CtxRepeat 12  M.BoolType     -- X87 Status regs (x87 status word)
-   <+> (EmptyCtx ::> M.BVType 3)    -- X87 top of the stack (x87 status word)
-   <+> CtxRepeat 8 (M.BVType 2)     -- X87 tags
-   <+> CtxRepeat 8 (M.BVType 80)    -- FP regs
-   <+> CtxRepeat 16 (M.BVType 512)  -- ZMM regs
-
-type RegAssign f = Assignment f (ArchRegContext M.X86_64)
-
-type IP          = 0        -- 1
-type GP n        = 1 + n    -- 16
-type Flag n      = 17 + n   -- 9
-type X87Status n = 26 + n   -- 12
-type X87Top      = 38       -- 1
-type X87Tag n    = 39 + n   -- 8
-type FPReg n     = 47 + n   -- 8
-type YMM n       = 55 + n   -- 16
-
--- The following definitions are tightly coupled to that of ArchRegContext for
--- X86_64. Unit tests in the test suite ensure that they are consistent with
--- x86RegAssignment (below).
-
-rip :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rip = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 0 (MM.LLVMPointerType 64))))
-
-rax :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rax = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 1 (MM.LLVMPointerType 64))))
-
-rcx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rcx = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 2 (MM.LLVMPointerType 64))))
-
-rdx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rdx = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 3 (MM.LLVMPointerType 64))))
-
-rbx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rbx = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 4 (MM.LLVMPointerType 64))))
-
-rsp :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rsp = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 5 (MM.LLVMPointerType 64))))
-
-rbp :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rbp = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 6 (MM.LLVMPointerType 64))))
-
-rsi :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rsi = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 7 (MM.LLVMPointerType 64))))
-
-rdi :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rdi = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 8 (MM.LLVMPointerType 64))))
-
-r8 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r8 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 9 (MM.LLVMPointerType 64))))
-
-r9 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r9 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 10 (MM.LLVMPointerType 64))))
-
-r10 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r10 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 11 (MM.LLVMPointerType 64))))
-
-r11 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r11 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 12 (MM.LLVMPointerType 64))))
-
-r12 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r12 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 13 (MM.LLVMPointerType 64))))
-
-r13 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r13 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 14 (MM.LLVMPointerType 64))))
-
-r14 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r14 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 15 (MM.LLVMPointerType 64))))
-
-r15 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r15 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 16 (MM.LLVMPointerType 64))))
-
-getReg ::
-  forall n t f. (Idx n (ArchRegContext M.X86_64) t) => RegAssign f -> f t
-getReg x = x ^. (field @n)
-
-x86RegName' :: M.X86Reg tp -> String
-x86RegName' M.X86_IP     = "ip"
-x86RegName' (M.X86_GP r) = show r
-x86RegName' (M.X86_FlagReg r) = show r
-x86RegName' (M.X87_StatusReg r) = show r
-x86RegName' M.X87_TopReg = "x87Top"
-x86RegName' (M.X87_TagReg r) = "x87Tag" ++ show r
-x86RegName' (M.X87_FPUReg r) = show $ F.mmxRegNo r
-x86RegName' (M.X86_ZMMReg r) = "zmm" ++ show r
-
-x86RegName :: M.X86Reg tp -> C.SolverSymbol
-x86RegName r = C.systemSymbol $ "r!" ++ x86RegName' r
-
-gpReg :: Int -> M.X86Reg (M.BVType 64)
-gpReg = M.X86_GP . F.Reg64 . fromIntegral
-
--- | The x86 flag registers that are directly supported by Macaw.
-flagRegs :: Assignment M.X86Reg (CtxRepeat 9 M.BoolType)
-flagRegs =
-  Empty :> M.CF :> M.PF :> M.AF :> M.ZF :> M.SF :> M.TF :> M.IF :> M.DF :> M.OF
-
-x87_statusRegs :: Assignment M.X86Reg (CtxRepeat 12 M.BoolType)
-x87_statusRegs =
-     (repeatAssign (M.X87_StatusReg . fromIntegral)
-        :: Assignment M.X86Reg (CtxRepeat 11 M.BoolType))
-  :> M.X87_StatusReg 14
-
--- | This contains an assignment that stores the register associated with each index in the
--- X86 register structure.
-x86RegAssignment :: Assignment M.X86Reg (ArchRegContext M.X86_64)
-x86RegAssignment =
-  Empty :> M.X86_IP
-  <++> (repeatAssign gpReg :: Assignment M.X86Reg (CtxRepeat 16 (M.BVType 64)))
-  <++> flagRegs
-  <++> x87_statusRegs
-  <++> (Empty :> M.X87_TopReg)
-  <++> (repeatAssign (M.X87_TagReg . fromIntegral)    :: Assignment M.X86Reg (CtxRepeat  8 (M.BVType 2)))
-  <++> (repeatAssign (M.X87_FPUReg . F.mmxReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat  8 (M.BVType 80)))
-  <++> (repeatAssign (M.X86_ZMMReg . fromIntegral)
-        :: Assignment M.X86Reg (CtxRepeat 16 (M.BVType 512)))
-
-
-x86RegStructType :: C.TypeRepr (ArchRegStruct M.X86_64)
-x86RegStructType =
-  C.StructRepr (typeCtxToCrucible $ fmapFC M.typeRepr x86RegAssignment)
-
-regIndexMap :: RegIndexMap M.X86_64
-regIndexMap = mkRegIndexMap x86RegAssignment
-            $ Ctx.size $ crucArchRegTypes x86_64MacawSymbolicFns
-
-
-{- | Lookup a Macaw register in a Crucible assignemnt.
-This function returns "Nothing" if the input register is not represented
-in the assignment.  This means that either the input register is malformed,
-or we haven't modelled this register for some reason. -}
-lookupX86Reg ::
-  M.X86Reg t                                    {- ^ Lookup this register -} ->
-  Assignment f (MacawCrucibleRegTypes M.X86_64) {- ^ Assignment -} ->
-  Maybe (f (ToCrucibleType t))  {- ^ The value of the register -}
-lookupX86Reg r asgn =
-  do pair <- MapF.lookup r regIndexMap
-     return (asgn Ctx.! crucibleIndex pair)
-
-updateX86Reg ::
-  M.X86Reg t ->
-  (f (ToCrucibleType t) -> f (ToCrucibleType t)) ->
-  Assignment f (MacawCrucibleRegTypes M.X86_64) {- ^Update this assignment -} ->
-  Maybe (Assignment f (MacawCrucibleRegTypes M.X86_64))
-updateX86Reg r upd asgn =
-  do pair <- MapF.lookup r regIndexMap
-     return (asgn & ixF (crucibleIndex pair) %~ upd)
-     -- return (adjust upd (crucibleIndex pair) asgn)
-
-freshX86Reg :: C.IsSymInterface sym =>
-  sym -> M.X86Reg t -> IO (C.RegValue' sym (ToCrucibleType t))
-freshX86Reg sym r =
-  C.RV <$> freshValue sym (show r) (Just (C.knownNat @64))  (M.typeRepr r)
-
-freshValue ::
-  (C.IsSymInterface sym, 1 <= ptrW) =>
-  sym ->
-  String {- ^ Name for fresh value -} ->
-  Maybe (C.NatRepr ptrW) {- ^ Width of pointers; if nothing, allocate as bits -} ->
-  M.TypeRepr tp {- ^ Type of value -} ->
-  IO (C.RegValue sym (ToCrucibleType tp))
-freshValue sym str w ty =
-  case ty of
-    M.BVTypeRepr y ->
-      case testEquality y =<< w of
-
-        Just Refl ->
-          do nm_base <- symName (str ++ "_base")
-             nm_off  <- symName (str ++ "_off")
-             base    <- WI.freshNat sym nm_base
-             offs    <- WI.freshConstant sym nm_off (C.BaseBVRepr y)
-             return (MM.LLVMPointer base offs)
-
-        Nothing ->
-          do nm   <- symName str
-             base <- WI.natLit sym 0
-             offs <- WI.freshConstant sym nm (C.BaseBVRepr y)
-             return (MM.LLVMPointer base offs)
-
-    M.FloatTypeRepr fi -> do
-      nm <- symName str
-      WIF.freshFloatConstant sym nm $ floatInfoToCrucible fi
-
-    M.BoolTypeRepr ->
-      do nm <- symName str
-         WI.freshConstant sym nm C.BaseBoolRepr
-
-    M.TupleTypeRepr {} -> crash [ "Unexpected symbolic tuple:", show str ]
-    M.VecTypeRepr {} -> crash [ "Unexpected symbolic vector:", show str ]
-
-  where
-  symName x =
-    case C.userSymbol ("macaw_" ++ x) of
-      Left err -> crash [ "Invalid symbol name:", show x, show err ]
-      Right a -> return a
-
-  crash xs =
-    case xs of
-      [] -> crash ["(unknown)"]
-      y : ys -> fail $ unlines $ ("[freshX86Reg] " ++ y)
-                               : [ "*** " ++ z | z <- ys ]
+import           Data.Macaw.X86.Symbolic.Regs
 
 ------------------------------------------------------------------------
 -- Other X86 specific
