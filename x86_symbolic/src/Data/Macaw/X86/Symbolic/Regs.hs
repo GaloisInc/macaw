@@ -26,10 +26,18 @@ module Data.Macaw.X86.Symbolic.Regs
   , R8, R9, R10, R11, R12, R13, R14, R15
   , CF, PF, AF, ZF, SF, TF, IF, DF, OF
   , IE, DE, ZE, OE, UE, PE, EF, ES, C0, C1, C2, C3
+  , Tag0, Tag1, Tag2, Tag3, Tag4, Tag5, Tag6, Tag7
+  , St0, St1, St2, St3, St4, St5, St6, St7
+  , Zmm0, Zmm1, Zmm2, Zmm3, Zmm4, Zmm5, Zmm6, Zmm7
+  , Zmm8, Zmm9, Zmm10, Zmm11, Zmm12, Zmm13, Zmm14, Zmm15
   , rip, rax, rbx, rcx, rdx, rsp, rbp, rsi, rdi
   , r8, r9, r10, r11, r12, r13, r14, r15
   , cf, pf, af, zf, sf, tf, if_, df, of_
-  , ie, de, ze, oe, ue, pe, ef, es, c0, c1, c2, c3
+  , ie, de, ze, oe, ue, pe, ef, es, c0, c1, c2, c3, top
+  , tag0, tag1, tag2, tag3, tag4, tag5, tag6, tag7
+  , st0, st1, st2, st3, st4, st5, st6, st7
+  , zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7
+  , zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15
   , x86RegAssignment
   , x86RegTypes
   , x86RegName
@@ -143,8 +151,40 @@ type C2          = X87Status 10
 type C3          = X87Status 11
 type X87Top      = 38       -- 1
 type X87Tag n    = 39 + n   -- 8
+type Tag0        = X87Tag 0
+type Tag1        = X87Tag 1
+type Tag2        = X87Tag 2
+type Tag3        = X87Tag 3
+type Tag4        = X87Tag 4
+type Tag5        = X87Tag 5
+type Tag6        = X87Tag 6
+type Tag7        = X87Tag 7
 type FPReg n     = 47 + n   -- 8
+type St0         = FPReg 0
+type St1         = FPReg 1
+type St2         = FPReg 2
+type St3         = FPReg 3
+type St4         = FPReg 4
+type St5         = FPReg 5
+type St6         = FPReg 6
+type St7         = FPReg 7
 type YMM n       = 55 + n   -- 16
+type Zmm0         = YMM 0
+type Zmm1         = YMM 1
+type Zmm2         = YMM 2
+type Zmm3         = YMM 3
+type Zmm4         = YMM 4
+type Zmm5         = YMM 5
+type Zmm6         = YMM 6
+type Zmm7         = YMM 7
+type Zmm8         = YMM 8
+type Zmm9         = YMM 9
+type Zmm10        = YMM 10
+type Zmm11        = YMM 11
+type Zmm12        = YMM 12
+type Zmm13        = YMM 13
+type Zmm14        = YMM 14
+type Zmm15        = YMM 15
 
 rip :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
 rip = Ctx.natIndex @Rip
@@ -275,6 +315,105 @@ c2 = Ctx.natIndex @C2
 c3 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) C.BoolType
 c3 = Ctx.natIndex @C3
 
+top :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 3)
+top = Ctx.natIndex @X87Top
+
+tag0 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 2)
+tag0 = Ctx.natIndex @Tag0
+
+tag1 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 2)
+tag1 = Ctx.natIndex @Tag1
+
+tag2 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 2)
+tag2 = Ctx.natIndex @Tag2
+
+tag3 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 2)
+tag3 = Ctx.natIndex @Tag3
+
+tag4 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 2)
+tag4 = Ctx.natIndex @Tag4
+
+tag5 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 2)
+tag5 = Ctx.natIndex @Tag5
+
+tag6 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 2)
+tag6 = Ctx.natIndex @Tag6
+
+tag7 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 2)
+tag7 = Ctx.natIndex @Tag7
+
+st0 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+st0 = Ctx.natIndex @St0
+
+st1 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+st1 = Ctx.natIndex @St1
+
+st2 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+st2 = Ctx.natIndex @St2
+
+st3 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+st3 = Ctx.natIndex @St3
+
+st4 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+st4 = Ctx.natIndex @St4
+
+st5 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+st5 = Ctx.natIndex @St5
+
+st6 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+st6 = Ctx.natIndex @St6
+
+st7 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 80)
+st7 = Ctx.natIndex @St7
+
+zmm0 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm0  = Ctx.natIndex @Zmm0
+
+zmm1 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm1  = Ctx.natIndex @Zmm1
+
+zmm2 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm2  = Ctx.natIndex @Zmm2
+
+zmm3 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm3  = Ctx.natIndex @Zmm3
+
+zmm4 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm4  = Ctx.natIndex @Zmm4
+
+zmm5 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm5  = Ctx.natIndex @Zmm5
+
+zmm6 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm6  = Ctx.natIndex @Zmm6
+
+zmm7 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm7  = Ctx.natIndex @Zmm7
+
+zmm8 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm8  = Ctx.natIndex @Zmm8
+
+zmm9 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm9  = Ctx.natIndex @Zmm9
+
+zmm10 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm10 = Ctx.natIndex @Zmm10
+
+zmm11 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm11 = Ctx.natIndex @Zmm11
+
+zmm12 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm12 = Ctx.natIndex @Zmm12
+
+zmm13 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm13 = Ctx.natIndex @Zmm13
+
+zmm14 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm14 = Ctx.natIndex @Zmm14
+
+zmm15 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 512)
+zmm15 = Ctx.natIndex @Zmm15
+
 ------------------------------------------------------------------------
 -- Functions
 
@@ -289,8 +428,8 @@ x86RegName' (M.X86_FlagReg r) = show r
 x86RegName' r@(M.X87_StatusReg _) = show r
 x86RegName' M.X87_TopReg = "x87Top"
 x86RegName' (M.X87_TagReg r) = "x87Tag" ++ show r
-x86RegName' (M.X87_FPUReg r) = show $ F.mmxRegNo r
-x86RegName' (M.X86_ZMMReg r) = "zmm" ++ show r
+x86RegName' r@(M.X87_FPUReg _) = show r
+x86RegName' r@(M.X86_ZMMReg _) = show r
 
 x86RegName :: M.X86Reg tp -> C.SolverSymbol
 x86RegName r = C.systemSymbol $ "r!" ++ x86RegName' r
