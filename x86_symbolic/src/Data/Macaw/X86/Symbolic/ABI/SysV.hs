@@ -81,7 +81,7 @@ import Data.Coerce (coerce)
 import Data.Macaw.Symbolic qualified as MS
 import Data.Macaw.Symbolic.Stack qualified as MSS
 import Data.Macaw.X86 qualified as X86
-import Data.Macaw.X86.Symbolic qualified as X86S
+import Data.Macaw.X86.Symbolic.Regs qualified as X86SR
 import Data.Parameterized.Classes (ixF')
 import Data.Parameterized.Context qualified as Ctx
 import Data.Sequence qualified as Seq
@@ -109,8 +109,8 @@ stackPointerReg ::
     (StackPointer sym)
 stackPointerReg =
   Lens.lens
-    (\regs -> StackPointer (C.unRV (regs Lens.^. ixF' X86S.rsp)))
-    (\regs v -> regs Lens.& ixF' X86S.rsp Lens..~ C.RV (getStackPointer v))
+    (\regs -> StackPointer (C.unRV (regs Lens.^. ixF' X86SR.rsp)))
+    (\regs v -> regs Lens.& ixF' X86SR.rsp Lens..~ C.RV (getStackPointer v))
 
 -- | A return address
 newtype RetAddr sym = RetAddr { getRetAddr :: MM.LLVMPtr sym 64 }

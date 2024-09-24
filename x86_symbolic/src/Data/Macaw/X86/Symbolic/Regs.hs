@@ -1,3 +1,12 @@
+{-|
+Copyright        : (c) Galois, Inc 2024
+Maintainer       : Langston Barrett <langston@galois.com>
+
+x86_64 registers.
+
+This module is meant to be imported qualified, as it exports many terse names.
+-}
+
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}

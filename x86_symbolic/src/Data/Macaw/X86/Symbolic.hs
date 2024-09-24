@@ -27,14 +27,6 @@ module Data.Macaw.X86.Symbolic
   , RegAssign
   , getReg
   , IP, GP, Flag, X87Status, X87Top, X87Tag, FPReg, YMM
-  , Rip, Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi
-  , R8, R9, R10, R11, R12, R13, R14, R15
-  , CF, PF, AF, ZF, SF, TF, IF, DF, OF
-  , IE, DE, ZE, OE, UE, PE, EF, ES, C0, C1, C2, C3
-  , rip, rax, rbx, rcx, rdx, rsp, rbp, rsi, rdi
-  , r8, r9, r10, r11, r12, r13, r14, r15
-  , cf, pf, af, zf, sf, tf, if_, df, of_
-  , ie, de, ze, oe, ue, pe, ef, es, c0, c1, c2, c3
   ) where
 
 import           Control.Monad ( void )

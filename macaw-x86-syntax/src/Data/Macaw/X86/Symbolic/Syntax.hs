@@ -27,6 +27,7 @@ import Data.Text qualified as Text
 import Data.Macaw.Symbolic qualified as DMS
 import Data.Macaw.X86 qualified as X86
 import Data.Macaw.X86.Symbolic qualified as X86
+import Data.Macaw.X86.Symbolic.Regs qualified as X86R
 import Data.Parameterized.Context qualified as Ctx
 import Data.Parameterized.Some (Some(..))
 import Lang.Crucible.CFG.Expr as Expr
@@ -93,23 +94,23 @@ parseReg =
   LCSM.describe "an x86_64 register" $ do
     name <- LCSC.atomName
     case name of
-      LCSA.AtomName "rip" -> pure (Some X86.rip)
-      LCSA.AtomName "rax" -> pure (Some X86.rax)
-      LCSA.AtomName "rbx" -> pure (Some X86.rbx)
-      LCSA.AtomName "rcx" -> pure (Some X86.rcx)
-      LCSA.AtomName "rdx" -> pure (Some X86.rdx)
-      LCSA.AtomName "rsp" -> pure (Some X86.rsp)
-      LCSA.AtomName "rbp" -> pure (Some X86.rbp)
-      LCSA.AtomName "rsi" -> pure (Some X86.rsi)
-      LCSA.AtomName "rdi" -> pure (Some X86.rdi)
-      LCSA.AtomName "r8" -> pure (Some X86.r8)
-      LCSA.AtomName "r9" -> pure (Some X86.r9)
-      LCSA.AtomName "r10" -> pure (Some X86.r10)
-      LCSA.AtomName "r11" -> pure (Some X86.r11)
-      LCSA.AtomName "r12" -> pure (Some X86.r12)
-      LCSA.AtomName "r13" -> pure (Some X86.r13)
-      LCSA.AtomName "r14" -> pure (Some X86.r14)
-      LCSA.AtomName "r15" -> pure (Some X86.r15)
+      LCSA.AtomName "rip" -> pure (Some X86R.rip)
+      LCSA.AtomName "rax" -> pure (Some X86R.rax)
+      LCSA.AtomName "rbx" -> pure (Some X86R.rbx)
+      LCSA.AtomName "rcx" -> pure (Some X86R.rcx)
+      LCSA.AtomName "rdx" -> pure (Some X86R.rdx)
+      LCSA.AtomName "rsp" -> pure (Some X86R.rsp)
+      LCSA.AtomName "rbp" -> pure (Some X86R.rbp)
+      LCSA.AtomName "rsi" -> pure (Some X86R.rsi)
+      LCSA.AtomName "rdi" -> pure (Some X86R.rdi)
+      LCSA.AtomName "r8" -> pure (Some X86R.r8)
+      LCSA.AtomName "r9" -> pure (Some X86R.r9)
+      LCSA.AtomName "r10" -> pure (Some X86R.r10)
+      LCSA.AtomName "r11" -> pure (Some X86R.r11)
+      LCSA.AtomName "r12" -> pure (Some X86R.r12)
+      LCSA.AtomName "r13" -> pure (Some X86R.r13)
+      LCSA.AtomName "r14" -> pure (Some X86R.r14)
+      LCSA.AtomName "r15" -> pure (Some X86R.r15)
       LCSA.AtomName _ -> empty
 
 x86AtomParser ::
