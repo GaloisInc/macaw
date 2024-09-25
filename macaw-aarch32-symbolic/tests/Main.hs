@@ -36,6 +36,7 @@ import qualified Data.Macaw.Architecture.Info as MAI
 
 import qualified Data.Macaw.AArch32.Symbolic as MAS
 import qualified Data.Macaw.AArch32.Symbolic.ABI as ABI
+import qualified Data.Macaw.AArch32.Symbolic.Regs as MASR
 import qualified Data.Macaw.ARM as MA
 import qualified Data.Macaw.ARM.ARMReg as MAR
 import qualified Data.Macaw.CFG as MC
@@ -107,25 +108,25 @@ main = do
   TT.defaultMainWithIngredients ingredients $
     TT.testGroup "macaw-aarch32-symbolic tests"
     [ TT.testGroup "Unit tests" 
-        [ TTH.testCase "r0" $ getRegName MAS.r0 TTH.@?= "zenc!rznzuR0"
-        , TTH.testCase "r1" $ getRegName MAS.r1 TTH.@?= "zenc!rznzuR1"
-        , TTH.testCase "r2" $ getRegName MAS.r2 TTH.@?= "zenc!rznzuR2"
-        , TTH.testCase "r3" $ getRegName MAS.r3 TTH.@?= "zenc!rznzuR3"
-        , TTH.testCase "r4" $ getRegName MAS.r4 TTH.@?= "zenc!rznzuR4"
-        , TTH.testCase "r5" $ getRegName MAS.r5 TTH.@?= "zenc!rznzuR5"
-        , TTH.testCase "r6" $ getRegName MAS.r6 TTH.@?= "zenc!rznzuR6"
-        , TTH.testCase "r7" $ getRegName MAS.r7 TTH.@?= "zenc!rznzuR7"
-        , TTH.testCase "r8" $ getRegName MAS.r8 TTH.@?= "zenc!rznzuR8"
-        , TTH.testCase "r9" $ getRegName MAS.r9 TTH.@?= "zenc!rznzuR9"
-        , TTH.testCase "r10" $ getRegName MAS.r10 TTH.@?= "zenc!rznzuR10"
-        , TTH.testCase "r11" $ getRegName MAS.r11 TTH.@?= "zenc!rznzuR11"
-        , TTH.testCase "fp" $ getRegName MAS.fp TTH.@?= "zenc!rznzuR11"
-        , TTH.testCase "r12" $ getRegName MAS.r12 TTH.@?= "zenc!rznzuR12"
-        , TTH.testCase "ip" $ getRegName MAS.ip TTH.@?= "zenc!rznzuR12"
-        , TTH.testCase "r13" $ getRegName MAS.r13 TTH.@?= "zenc!rznzuR13"
-        , TTH.testCase "sp" $ getRegName MAS.sp TTH.@?= "zenc!rznzuR13"
-        , TTH.testCase "r14" $ getRegName MAS.r14 TTH.@?= "zenc!rznzuR14"
-        , TTH.testCase "lr" $ getRegName MAS.lr TTH.@?= "zenc!rznzuR14"
+        [ TTH.testCase "r0" $ getRegName MASR.r0 TTH.@?= "zenc!rznzuR0"
+        , TTH.testCase "r1" $ getRegName MASR.r1 TTH.@?= "zenc!rznzuR1"
+        , TTH.testCase "r2" $ getRegName MASR.r2 TTH.@?= "zenc!rznzuR2"
+        , TTH.testCase "r3" $ getRegName MASR.r3 TTH.@?= "zenc!rznzuR3"
+        , TTH.testCase "r4" $ getRegName MASR.r4 TTH.@?= "zenc!rznzuR4"
+        , TTH.testCase "r5" $ getRegName MASR.r5 TTH.@?= "zenc!rznzuR5"
+        , TTH.testCase "r6" $ getRegName MASR.r6 TTH.@?= "zenc!rznzuR6"
+        , TTH.testCase "r7" $ getRegName MASR.r7 TTH.@?= "zenc!rznzuR7"
+        , TTH.testCase "r8" $ getRegName MASR.r8 TTH.@?= "zenc!rznzuR8"
+        , TTH.testCase "r9" $ getRegName MASR.r9 TTH.@?= "zenc!rznzuR9"
+        , TTH.testCase "r10" $ getRegName MASR.r10 TTH.@?= "zenc!rznzuR10"
+        , TTH.testCase "r11" $ getRegName MASR.r11 TTH.@?= "zenc!rznzuR11"
+        , TTH.testCase "fp" $ getRegName MASR.fp TTH.@?= "zenc!rznzuR11"
+        , TTH.testCase "r12" $ getRegName MASR.r12 TTH.@?= "zenc!rznzuR12"
+        , TTH.testCase "ip" $ getRegName MASR.ip TTH.@?= "zenc!rznzuR12"
+        , TTH.testCase "r13" $ getRegName MASR.r13 TTH.@?= "zenc!rznzuR13"
+        , TTH.testCase "sp" $ getRegName MASR.sp TTH.@?= "zenc!rznzuR13"
+        , TTH.testCase "r14" $ getRegName MASR.r14 TTH.@?= "zenc!rznzuR14"
+        , TTH.testCase "lr" $ getRegName MASR.lr TTH.@?= "zenc!rznzuR14"
         ]
     , TT.testGroup "Binary Tests" $
         map (\mmPreset ->

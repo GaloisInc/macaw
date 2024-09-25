@@ -20,6 +20,7 @@ extra-source-files:  CHANGELOG.md
 library
   exposed-modules:     Data.Macaw.AArch32.Symbolic
                        Data.Macaw.AArch32.Symbolic.ABI
+                       Data.Macaw.AArch32.Symbolic.Regs
   other-modules:       Data.Macaw.AArch32.Symbolic.AtomWrapper
                        Data.Macaw.AArch32.Symbolic.Functions
                        Data.Macaw.AArch32.Symbolic.Panic
