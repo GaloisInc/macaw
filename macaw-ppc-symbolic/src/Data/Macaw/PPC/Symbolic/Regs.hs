@@ -20,6 +20,7 @@ This module is meant to be imported qualified, as it exports many terse names.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Data.Macaw.PPC.Symbolic.Regs
   ( RegContext
