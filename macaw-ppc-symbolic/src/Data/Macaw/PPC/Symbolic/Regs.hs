@@ -31,15 +31,8 @@ module Data.Macaw.PPC.Symbolic.Regs
   , regIndexMap
   , lookupReg
   , updateReg
-  , IP
-  , LNK
-  , CTR
-  , XER
-  , CR
-  , FPSCR
-  , VSCR
-  , GP
-  , FR
+  , IP, LNK, CTR, XER, CR, FPSCR, VSCR, GP, FR
+  , ip
   ) where
 
 import           Control.Lens ( (^.), (%~), (&) )
@@ -51,6 +44,7 @@ import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Typeable ( Typeable )
 import qualified Dismantle.PPC as D
 import           GHC.TypeLits
+import qualified Lang.Crucible.LLVM.MemModel as MM
 import qualified Lang.Crucible.Types as C
 import qualified What4.Interface as C
 import qualified What4.Symbol as C
@@ -77,24 +71,6 @@ type RegContext v
 
 type instance MS.ArchRegContext (MP.AnyPPC v) = RegContext v
 
-type RegAssign ppc f = Ctx.Assignment f (MS.ArchRegContext ppc)
-
-type IP = 0
-type LNK = 1
-type CTR = 2
-type XER = 3
-type CR = 4
-type FPSCR = 5
-type VSCR = 6
-type GP n = 7 + n
-type FR n = 39 + n
-
-getReg :: forall n t f ppc . (Ctx.Idx n (MS.ArchRegContext ppc) t) => RegAssign ppc f -> f t
-getReg = (^. (Ctx.field @n))
-
-ppcRegName :: MP.PPCReg v tp -> C.SolverSymbol
-ppcRegName r = C.systemSymbol ("r!" ++ show (MC.prettyF r))
-
 ppcRegAssignment :: forall v
                   . ( MP.KnownVariant v )
                  => Ctx.Assignment (MP.PPCReg v) (RegContext v)
@@ -108,6 +84,27 @@ ppcRegAssignment =
             Ctx.:> MP.PPC_VSCR)
   Ctx.<++> (R.repeatAssign (MP.PPC_GP . D.GPR . fromIntegral) :: Ctx.Assignment (MP.PPCReg v) (R.CtxRepeat 32 (MT.BVType (RegSize v))))
   Ctx.<++> (R.repeatAssign (MP.PPC_FR . D.VSReg . fromIntegral) :: Ctx.Assignment (MP.PPCReg v) (R.CtxRepeat 64 (MT.BVType 128)))
+
+type RegAssign ppc f = Ctx.Assignment f (MS.ArchRegContext ppc)
+
+type IP = 0
+type LNK = 1
+type CTR = 2
+type XER = 3
+type CR = 4
+type FPSCR = 5
+type VSCR = 6
+type GP n = 7 + n
+type FR n = 39 + n
+
+ip :: Ctx.Index (MS.MacawCrucibleRegTypes (MP.AnyPPC v)) (MM.LLVMPointerType (RegSize v))
+ip = Ctx.natIndex @IP
+
+getReg :: forall n t f ppc . (Ctx.Idx n (MS.ArchRegContext ppc) t) => RegAssign ppc f -> f t
+getReg = (^. (Ctx.field @n))
+
+ppcRegName :: MP.PPCReg v tp -> C.SolverSymbol
+ppcRegName r = C.systemSymbol ("r!" ++ show (MC.prettyF r))
 
 ppcRegStructType :: forall v
                   . ( MP.KnownVariant v )

@@ -16,6 +16,7 @@ import qualified Data.Foldable as F
 import qualified Data.Map as Map
 import           Data.Maybe ( mapMaybe )
 import qualified Data.Parameterized.Classes as PC
+import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
@@ -42,7 +43,8 @@ import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MMELP
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Testing as MST
 import qualified Data.Macaw.PPC as MP
-import           Data.Macaw.PPC.Symbolic ()
+import qualified Data.Macaw.PPC.Symbolic as MPS
+import qualified Data.Macaw.PPC.Symbolic.Regs as MPSR
 import qualified SemMC.Architecture.PPC as SAP
 import qualified What4.Config as WC
 import qualified What4.Expr.Builder as WEB
@@ -79,6 +81,18 @@ ingredients = TT.includingOptions [ TTO.Option (Proxy @SaveSMT)
                                   , TTO.Option (Proxy @SaveMacaw)
                                   ] : TT.defaultIngredients
 
+getRegName ::
+  Ctx.Index (MS.MacawCrucibleRegTypes MP.PPC32) t ->
+  String
+getRegName reg =
+  case Ctx.intIndex (Ctx.indexVal reg) (Ctx.size regs) of
+    Just (Some i) ->
+      let r = regs Ctx.! i
+          rName = MS.crucGenArchRegName MPS.ppcMacawSymbolicFns r
+      in show rName
+    Nothing -> error "impossible"
+  where regs = MS.crucGenRegAssignment (MPS.ppcMacawSymbolicFns @MP.V32)
+
 main :: IO ()
 main = do
   -- These are pass/fail in that the assertions in the "pass" set are true (and
@@ -91,11 +105,16 @@ main = do
   let passTests mmPreset = TT.testGroup "True assertions" (map (mkSymExTest passRes mmPreset) passTestFilePaths)
   let failTests mmPreset = TT.testGroup "False assertions" (map (mkSymExTest failRes mmPreset) failTestFilePaths)
   TT.defaultMainWithIngredients ingredients $
-    TT.testGroup "Binary Tests" $
-    map (\mmPreset ->
-          TT.testGroup (MST.describeMemModelPreset mmPreset)
-                       [passTests mmPreset, failTests mmPreset])
-        [MST.DefaultMemModel, MST.LazyMemModel]
+    TT.testGroup "macaw-ppc-symbolic tests"
+    [ TT.testGroup "Unit tests" 
+        [ TTH.testCase "ip" $ getRegName MPSR.ip TTH.@?= "r!ip"
+        ]
+    , TT.testGroup "Binary Tests" $
+        map (\mmPreset ->
+              TT.testGroup (MST.describeMemModelPreset mmPreset)
+                           [passTests mmPreset, failTests mmPreset])
+            [MST.DefaultMemModel, MST.LazyMemModel]
+    ]
 
 hasTestPrefix :: Some (M.DiscoveryFunInfo arch) -> Maybe (BS8.ByteString, Some (M.DiscoveryFunInfo arch))
 hasTestPrefix (Some dfi) = do
