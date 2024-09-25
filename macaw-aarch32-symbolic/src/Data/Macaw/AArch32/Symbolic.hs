@@ -339,27 +339,3 @@ aarch32LookupReg :: MCR.RegEntry sym (MS.ArchRegStruct SA.AArch32)
 aarch32LookupReg regs reg =
   case lookupReg reg (MCR.regValue regs) of
     MCRV.RV val -> MCR.RegEntry (MS.typeToCrucible (MT.typeRepr reg)) val
-
-{- Note [ARM Registers]
-
-The symbolic execution (and the code discovery in macaw-aarch32) track a
-superset of the user-visible architectural state, which only includes the GPRs
-and SIMD registers.  The extended state includes low-level architectural details
-referenced by the ASL semantics.
-
-In asl-translator, the set of architectural state is referred to as the
-"tracked" registers (or allGlobalRefs).  This is state that must be maintained
-during code discovery and symbolic execution, which includes things like:
-
-- The IT state
-- Branch taken/not taken flags
-- Various flags
-
-Note that there are "untracked" state, which is architectural state referred to
-in the semantics, but that is entirely local to an instruction.  These are
-equivalent to local variables and do not appear in the post states of any
-instructions.  We do not track those in the symbolic execution because they are
-effectively inlined when we symbolically execute the ASL semantics into formulas
-for semmc.
-
--}
