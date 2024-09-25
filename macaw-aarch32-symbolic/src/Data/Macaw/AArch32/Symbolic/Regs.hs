@@ -38,7 +38,6 @@ This module is meant to be imported qualified, as it exports many terse names.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# OPTIONS_GHC -ddump-simpl #-}
 
 module Data.Macaw.AArch32.Symbolic.Regs
   ( RegContext
