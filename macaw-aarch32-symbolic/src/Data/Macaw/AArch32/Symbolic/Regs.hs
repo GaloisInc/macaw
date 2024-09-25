@@ -17,7 +17,7 @@ during code discovery and symbolic execution, which includes things like:
 - Branch taken/not taken flags
 - Various flags
 
-Note that there are "untracked" state, which is architectural state referred to
+Note that there is "untracked" state, which is architectural state referred to
 in the semantics, but that is entirely local to an instruction.  These are
 equivalent to local variables and do not appear in the post states of any
 instructions.  We do not track those in the symbolic execution because they are
@@ -38,6 +38,7 @@ This module is meant to be imported qualified, as it exports many terse names.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -ddump-simpl #-}
 
 module Data.Macaw.AArch32.Symbolic.Regs
   ( RegContext
