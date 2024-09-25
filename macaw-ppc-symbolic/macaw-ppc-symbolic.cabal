@@ -17,6 +17,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules: Data.Macaw.PPC.Symbolic
+                   Data.Macaw.PPC.Symbolic.Regs
   other-modules:   Data.Macaw.PPC.Symbolic.AtomWrapper
                    Data.Macaw.PPC.Symbolic.Functions
                    Data.Macaw.PPC.Symbolic.Panic
