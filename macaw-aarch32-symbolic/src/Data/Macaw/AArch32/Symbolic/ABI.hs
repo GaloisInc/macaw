@@ -72,7 +72,7 @@ module Data.Macaw.AArch32.Symbolic.ABI
 
 import Control.Lens qualified as Lens
 import Data.Coerce (coerce)
-import Data.Macaw.AArch32.Symbolic qualified as AArch32S
+import Data.Macaw.AArch32.Symbolic.Regs qualified as MASR
 import Data.Macaw.ARM qualified as AArch32
 import Data.Macaw.Symbolic qualified as MS
 import Data.Macaw.Symbolic.Stack qualified as MSS
@@ -99,8 +99,8 @@ stackPointerReg ::
     (StackPointer sym)
 stackPointerReg =
   Lens.lens
-    (\regs -> StackPointer (C.unRV (regs Lens.^. ixF' AArch32S.sp)))
-    (\regs v -> regs Lens.& ixF' AArch32S.sp Lens..~ C.RV (getStackPointer v))
+    (\regs -> StackPointer (C.unRV (regs Lens.^. ixF' MASR.sp)))
+    (\regs v -> regs Lens.& ixF' MASR.sp Lens..~ C.RV (getStackPointer v))
 
 -- | Align the stack pointer to a particular 'CLD.Alignment'.
 alignStackPointer ::
