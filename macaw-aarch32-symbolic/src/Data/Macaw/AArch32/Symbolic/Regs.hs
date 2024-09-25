@@ -44,7 +44,11 @@ module Data.Macaw.AArch32.Symbolic.Regs
   , aarch32RegAssignment
   , aarch32RegStructType
   , R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, Fp, R12, Ip, R13, Sp, R14, Lr
+  , V0, V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16
+  , V17, V18, V19, V20, V21, V22, V23, V24, V25, V26, V27, V28, V29, V30, V31
   , r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, fp, r12, ip, r13, sp, r14, lr
+  , v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16
+  , v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31
   ) where
 
 import           GHC.TypeLits
@@ -134,6 +138,38 @@ type Sp = 49
 type R14 = 50
 -- | AKA 'R14'
 type Lr = 50
+type V0 = 51
+type V1 = 52
+type V2 = 53
+type V3 = 54
+type V4 = 55
+type V5 = 56
+type V6 = 57
+type V7 = 58
+type V8 = 59
+type V9 = 60
+type V10 = 61
+type V11 = 62
+type V12 = 63
+type V13 = 64
+type V14 = 65
+type V15 = 66
+type V16 = 67
+type V17 = 68
+type V18 = 69
+type V19 = 70
+type V20 = 71
+type V21 = 72
+type V22 = 73
+type V23 = 74
+type V24 = 75
+type V25 = 76
+type V26 = 77
+type V27 = 78
+type V28 = 79
+type V29 = 80
+type V30 = 81
+type V31 = 82
 
 r0 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
 r0 = Ctx.natIndex @R0
@@ -199,4 +235,100 @@ r14 = Ctx.natIndex @R14
 -- | Link register, AKA 'r14'
 lr :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 32)
 lr = Ctx.natIndex @Lr
+
+v0 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v0 = Ctx.natIndex @V0
+
+v1 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v1 = Ctx.natIndex @V1
+
+v2 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v2 = Ctx.natIndex @V2
+
+v3 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v3 = Ctx.natIndex @V3
+
+v4 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v4 = Ctx.natIndex @V4
+
+v5 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v5 = Ctx.natIndex @V5
+
+v6 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v6 = Ctx.natIndex @V6
+
+v7 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v7 = Ctx.natIndex @V7
+
+v8 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v8 = Ctx.natIndex @V8
+
+v9 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v9 = Ctx.natIndex @V9
+
+v10 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v10 = Ctx.natIndex @V10
+
+v11 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v11 = Ctx.natIndex @V11
+
+v12 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v12 = Ctx.natIndex @V12
+
+v13 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v13 = Ctx.natIndex @V13
+
+v14 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v14 = Ctx.natIndex @V14
+
+v15 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v15 = Ctx.natIndex @V15
+
+v16 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v16 = Ctx.natIndex @V16
+
+v17 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v17 = Ctx.natIndex @V17
+
+v18 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v18 = Ctx.natIndex @V18
+
+v19 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v19 = Ctx.natIndex @V19
+
+v20 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v20 = Ctx.natIndex @V20
+
+v21 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v21 = Ctx.natIndex @V21
+
+v22 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v22 = Ctx.natIndex @V22
+
+v23 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v23 = Ctx.natIndex @V23
+
+v24 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v24 = Ctx.natIndex @V24
+
+v25 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v25 = Ctx.natIndex @V25
+
+v26 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v26 = Ctx.natIndex @V26
+
+v27 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v27 = Ctx.natIndex @V27
+
+v28 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v28 = Ctx.natIndex @V28
+
+v29 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v29 = Ctx.natIndex @V29
+
+v30 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v30 = Ctx.natIndex @V30
+
+v31 :: Ctx.Index (MS.MacawCrucibleRegTypes SA.AArch32) (LCLM.LLVMPointerType 128)
+v31 = Ctx.natIndex @V31
 
