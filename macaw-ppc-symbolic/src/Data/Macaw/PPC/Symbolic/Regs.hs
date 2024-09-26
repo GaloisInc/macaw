@@ -427,6 +427,10 @@ lookupReg r asgn =
     Nothing -> X.throwM (MissingRegisterInState (Some r))
     Just pair -> return (asgn Ctx.! MSB.crucibleIndex pair)
 
+-- See:
+-- - https://github.com/GaloisInc/macaw/pull/445#issuecomment-2377127496
+-- - https://gitlab.haskell.org/ghc/ghc/-/issues/25301
+{-# INLINE updateReg #-}
 updateReg :: forall v ppc m f tp
            . (MP.KnownVariant v,
                ppc ~ MP.AnyPPC v,
