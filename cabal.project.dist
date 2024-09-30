@@ -48,3 +48,13 @@ packages: base/
           deps/bv-sized/
           deps/bv-sized-float/
           deps/softfloat-hs/
+
+-- TODO RGS: Remove these
+allow-newer:
+  boomerang:template-haskell,
+  bv-sized-float:containers,
+  grift:containers,
+  grift:filepath,
+  haggle:primitive,
+  itanium-abi:text,
+  kvitable:base
