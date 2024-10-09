@@ -7,7 +7,7 @@ Build-type:    Simple
 License:       BSD-3-Clause
 License-file:  LICENSE
 Category:      Language
-Synopsis:      A tool to display internal  Macaw data structures
+Synopsis:      A tool to display internal Macaw data structures
 
 extra-doc-files: README.md
 
@@ -96,6 +96,7 @@ library
     lens,
     macaw-base,
     macaw-symbolic,
+    optparse-applicative,
     parameterized-utils,
     prettyprinter,
     text,
@@ -105,3 +106,4 @@ library
 
   exposed-modules:
     Data.Macaw.Dump
+    Data.Macaw.Dump.CLI
