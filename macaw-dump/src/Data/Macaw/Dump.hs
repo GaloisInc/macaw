@@ -73,7 +73,7 @@ loadELF loadOpts ehi = do
     Left err -> X.throwIO (ELFResolutionError err)
     Right (warnings, mem, _mentry, nameAddrList) -> do
       F.forM_ warnings $ \w -> do
-        IO.hPutStrLn IO.stderr w
+        IO.hPutStrLn IO.stderr ("WARN: " ++ w)
       return (mem, nameAddrList)
 
 -- | Run discovery on the provided symbols, or all if none are provided

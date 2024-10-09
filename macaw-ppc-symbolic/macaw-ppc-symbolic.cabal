@@ -43,6 +43,23 @@ library
   default-language:    Haskell2010
   ghc-options:         -Wall -Wcompat
 
+executable macaw-ppc-dump
+  hs-source-dirs: tools
+  main-is: Dump.hs
+  default-language: Haskell2010
+  ghc-options: -Wall -Wcompat
+  build-depends:
+    base,
+    bytestring,
+    containers,
+    elf-edit,
+    macaw-base,
+    macaw-dump,
+    macaw-loader,
+    macaw-ppc,
+    macaw-ppc-symbolic,
+    macaw-symbolic
+
 test-suite macaw-ppc-symbolic-tests
   type: exitcode-stdio-1.0
   default-language: Haskell2010
