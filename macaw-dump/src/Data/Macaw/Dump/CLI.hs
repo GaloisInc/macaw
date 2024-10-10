@@ -4,32 +4,52 @@
 
 module Data.Macaw.Dump.CLI
   ( Cli(..)
+  , Command(..)
   , parseCli
   ) where
 
 import Control.Applicative ((<**>))
-import Data.ByteString (ByteString)
+import Data.Macaw.Dump.Discover qualified as MDD
+import Data.Macaw.Dump.Plt qualified as MDP
 import Options.Applicative qualified as Opt
 
-data Cli = Cli
-  { -- Arguments
-    cliBinPath :: FilePath
-  , cliSymbols :: [ByteString]
-    -- Options
-  , cliPrintCrucible :: Bool
-  } deriving Show
+data Command
+  = CommandDiscover MDD.DiscoverConfig
+  | CommandPlt MDP.PltConfig
 
-opts :: Opt.Parser Cli
-opts = do
-  cliBinPath <- Opt.strArgument (Opt.help "filename of binary" <> Opt.metavar "FILENAME" )
-  cliSymbols <- Opt.many $ Opt.strArgument (Opt.help "function name" <> Opt.metavar "SYMBOL")
-  cliPrintCrucible <- Opt.switch (Opt.long "crucible" <> Opt.help "output Crucible CFGs")
+command :: Opt.Parser Command
+command =
+  Opt.subparser $
+    mconcat
+    [ cmdDiscover
+    , cmdPlt
+    ]
+  where
+  cmdDiscover :: Opt.Mod Opt.CommandFields Command
+  cmdDiscover = do
+    Opt.command
+      "discover"
+      (Opt.info (CommandDiscover <$> MDD.discoverConfig) (Opt.progDesc "Perform code discovery and print CFGs"))
+
+  cmdPlt :: Opt.Mod Opt.CommandFields Command
+  cmdPlt = do
+    Opt.command
+      "plt"
+      (Opt.info (CommandPlt <$> MDP.pltConfig) (Opt.progDesc "Display PLT stubs"))
+
+data Cli = Cli
+  { cliCommand :: Command
+  }
+
+cli :: Opt.Parser Cli
+cli = do
+  cliCommand <- command
   pure Cli{..}
 
 cliInfo :: Opt.ParserInfo Cli
 cliInfo =
   Opt.info
-    (opts <**> Opt.helper)
+    (cli <**> Opt.helper)
     (  Opt.fullDesc
     <> Opt.header
          "A tool to display internal Macaw data structures"

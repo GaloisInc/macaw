@@ -50,12 +50,9 @@ executable macaw-ppc-dump
   ghc-options: -Wall -Wcompat
   build-depends:
     base,
-    bytestring,
-    containers,
     elf-edit,
     macaw-base,
     macaw-dump,
-    macaw-loader,
     macaw-ppc,
     macaw-ppc-symbolic,
     macaw-symbolic

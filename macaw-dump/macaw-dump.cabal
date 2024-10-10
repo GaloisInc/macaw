@@ -107,3 +107,6 @@ library
   exposed-modules:
     Data.Macaw.Dump
     Data.Macaw.Dump.CLI
+    Data.Macaw.Dump.CLIUtils
+    Data.Macaw.Dump.Discover
+    Data.Macaw.Dump.Plt

@@ -53,9 +53,7 @@ executable macaw-aarch32-dump
   ghc-options: -Wall -Wcompat
   build-depends:
     base,
-    bytestring,
     containers,
-    elf-edit,
     macaw-aarch32,
     macaw-aarch32-symbolic,
     macaw-dump,
