@@ -42,7 +42,7 @@ extra-source-files:  Changelog.md
 
 source-repository head
   type: git
-  location: git://github.com/GaloisInc/macaw.git
+  location: https://github.com/GaloisInc/macaw.git
 
 
 library
