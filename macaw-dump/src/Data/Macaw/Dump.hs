@@ -1,7 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE TypeOperators #-}
-{-# OPTIONS_GHC -Wno-simplifiable-class-constraints #-}
 
 module Data.Macaw.Dump
   ( main
