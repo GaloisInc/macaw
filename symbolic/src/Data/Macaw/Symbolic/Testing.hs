@@ -113,10 +113,10 @@ instance X.Exception TestingException
 
 -- | Convert machine addresses into Crucible positions.
 --
--- When possible, we map to the structured 'WPL.BinaryPos' type. However,
--- some 'MM.MemSegmentOff' values cannot be mapped to an absolute position
--- (e.g., some addresses from shared libraries are in non-trivial segments).
--- In those cases, we map to the unstructured 'WPL.Others' with a sufficiently
+-- When possible, we map to the structured 'WPL.BinaryPos' type. However, some
+-- 'MM.MemSegmentOff' values cannot be mapped to an absolute position (e.g.,
+-- some addresses from shared libraries are in non-trivial segments). In
+-- those cases, we map to the unstructured 'WPL.OtherPos' with a sufficiently
 -- descriptive string.
 posFn :: (MM.MemWidth w) => FilePath -> MM.MemSegmentOff w -> WPL.Position
 posFn binaryName segOff =
