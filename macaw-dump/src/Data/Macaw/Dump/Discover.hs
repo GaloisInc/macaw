@@ -52,12 +52,11 @@ instance X.Exception DiscoverException
 
 -- | Convert machine addresses into What4 positions.
 --
--- When possible, we map to the structured 'WPL.BinaryPos' type. However, some
--- 'MM.MemSegmentOff' cannot be mapped to an absolute position (e.g., some
--- addresses from shared libraries are in non-trivial segments). In those cases,
--- we map to the unstructured 'WPL.Others' with a sufficiently descriptive string.
---
--- TODO: import from `Testing`
+-- When possible, we map to the structured 'WPL.BinaryPos' type. However,
+-- some 'MM.MemSegmentOff' values cannot be mapped to an absolute position
+-- (e.g., some addresses from shared libraries are in non-trivial segments).
+-- In those cases, we map to the unstructured 'WPL.Others' with a sufficiently
+-- descriptive string.
 posFn :: (MM.MemWidth w) => Text.Text -> MM.MemSegmentOff w -> WPL.Position
 posFn binaryName segOff =
   case MM.segoffAsAbsoluteAddr segOff of
