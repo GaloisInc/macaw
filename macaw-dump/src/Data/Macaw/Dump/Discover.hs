@@ -132,6 +132,7 @@ displayCfgs path discState archVals printCrucible = do
 data DiscoverConfig = DiscoverConfig
   { -- Arguments
     discBinPath :: FilePath
+    -- | Symbol names (expected but not required to be UTF-8)
   , discSymbols :: [BS.ByteString]
     -- Options
   , discPrintCrucible :: Bool
