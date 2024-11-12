@@ -115,8 +115,11 @@ displayCfgs path discState archVals printCrucible = do
   let funInfos = discState Lens.^. MD.funInfo
   halloc <- CFH.newHandleAllocator
   F.for_ (Map.toList funInfos) $ \(_addr, Some info) -> do
+    Monad.when printCrucible $ do
+      IO.putStrLn "== Macaw =="
     IO.print (PP.pretty info)
     Monad.when printCrucible $ do
+      IO.putStrLn "\n== Crucible =="
       let pos = posFn (Text.pack path)
       let funName =
             WF.functionNameFromText $
