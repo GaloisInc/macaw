@@ -1,14 +1,14 @@
 Cabal-version: 2.2
-Name:          macaw-riscv-symbolic
+Name:          macaw-dump
 Version:       0.1
 Author:        Galois Inc.
-Maintainer:    rscott@galois.com
+Maintainer:    langston@galois.com
 Build-type:    Simple
 License:       BSD-3-Clause
 License-file:  LICENSE
 Category:      Language
-Synopsis:      A symbolic reasoning backend for RISC-V
--- Description:
+Synopsis:      A tool to display internal Macaw data structures
+
 extra-doc-files: README.md
 
 common shared
@@ -26,9 +26,10 @@ common shared
   -- available here:
   -- https://ghc.gitlab.haskell.org/ghc/doc/users_guide/using-warnings.html
 
-  -- Since GHC 8.10 or earlier:
+  -- Since GHC 9.4 or earlier:
   ghc-options:
     -Wall
+    -Werror=ambiguous-fields
     -Werror=compat-unqualified-imports
     -Werror=deferred-type-errors
     -Werror=deprecated-flags
@@ -37,26 +38,34 @@ common shared
     -Werror=dodgy-foreign-imports
     -Werror=duplicate-exports
     -Werror=empty-enumerations
+    -Werror=forall-identifier
     -Werror=identities
     -Werror=inaccessible-code
     -Werror=incomplete-patterns
     -Werror=incomplete-record-updates
     -Werror=incomplete-uni-patterns
     -Werror=inline-rule-shadowing
+    -Werror=misplaced-pragmas
     -Werror=missed-extra-shared-lib
     -Werror=missing-exported-signatures
     -Werror=missing-fields
     -Werror=missing-home-modules
     -Werror=missing-methods
+    -Werror=operator-whitespace
+    -Werror=operator-whitespace-ext-conflict
     -Werror=overflowed-literals
     -Werror=overlapping-patterns
     -Werror=partial-fields
     -Werror=partial-type-signatures
+    -Werror=redundant-bang-patterns
+    -Werror=redundant-strictness-flags
     -Werror=simplifiable-class-constraints
     -Werror=star-binder
     -Werror=star-is-type
     -Werror=tabs
     -Werror=typed-holes
+    -Werror=type-equality-out-of-scope
+    -Werror=type-equality-requires-operators
     -Werror=unrecognised-pragmas
     -Werror=unrecognised-warning-flags
     -Werror=unsupported-calling-conventions
@@ -66,21 +75,6 @@ common shared
     -Werror=warnings-deprecations
     -Werror=wrong-do-bind
 
-  if impl(ghc >= 9.2)
-    ghc-options:
-      -Werror=ambiguous-fields
-      -Werror=operator-whitespace
-      -Werror=operator-whitespace-ext-conflict
-      -Werror=redundant-bang-patterns
-
-  if impl(ghc >= 9.4)
-    ghc-options:
-      -Werror=forall-identifier
-      -Werror=misplaced-pragmas
-      -Werror=redundant-strictness-flags
-      -Werror=type-equality-out-of-scope
-      -Werror=type-equality-requires-operators
-
   ghc-prof-options: -O2 -fprof-auto-top
   default-language: Haskell2010
 
@@ -89,84 +83,24 @@ library
 
   build-depends:
     base >= 4.13,
+    bytestring,
     containers,
     crucible,
-    crucible-llvm,
-    exceptions,
-    grift,
+    elf-edit,
     lens,
     macaw-base,
-    macaw-riscv,
     macaw-symbolic,
-    panic,
+    optparse-applicative,
     parameterized-utils,
+    prettyprinter,
+    text,
     what4
 
   hs-source-dirs: src
 
   exposed-modules:
-    Data.Macaw.RISCV.Symbolic
-  other-modules:
-    Data.Macaw.RISCV.Symbolic.AtomWrapper
-    Data.Macaw.RISCV.Symbolic.Functions
-    Data.Macaw.RISCV.Symbolic.Panic
-    Data.Macaw.RISCV.Symbolic.Repeat
-
-executable macaw-riscv32-dump
-  hs-source-dirs: tools
-  main-is: Dump32.hs
-  default-language: Haskell2010
-  ghc-options: -Wall -Wcompat
-  build-depends:
-    base,
-    containers,
-    grift,
-    macaw-dump,
-    macaw-riscv,
-    macaw-riscv-symbolic,
-    macaw-symbolic
-
-executable macaw-riscv64-dump
-  hs-source-dirs: tools
-  main-is: Dump64.hs
-  default-language: Haskell2010
-  ghc-options: -Wall -Wcompat
-  build-depends:
-    base,
-    containers,
-    grift,
-    macaw-dump,
-    macaw-riscv,
-    macaw-riscv-symbolic,
-    macaw-symbolic
-
-test-suite macaw-riscv-symbolic-tests
-  import: shared
-
-  type: exitcode-stdio-1.0
-  main-is: Main.hs
-
-  build-depends:
-    base >= 4,
-    bytestring,
-    containers,
-    crucible,
-    crucible-llvm,
-    elf-edit,
-    filepath,
-    Glob >= 0.9 && < 0.11,
-    grift,
-    lens,
-    macaw-base,
-    macaw-riscv,
-    macaw-riscv-symbolic,
-    macaw-symbolic,
-    parameterized-utils,
-    prettyprinter,
-    tasty,
-    tasty-hunit,
-    text,
-    what4,
-    vector
-
-  hs-source-dirs: tests
+    Data.Macaw.Dump
+    Data.Macaw.Dump.CLI
+    Data.Macaw.Dump.CLIUtils
+    Data.Macaw.Dump.Discover
+    Data.Macaw.Dump.Plt
