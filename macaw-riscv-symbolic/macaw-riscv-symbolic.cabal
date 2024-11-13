@@ -112,14 +112,29 @@ library
     Data.Macaw.RISCV.Symbolic.Panic
     Data.Macaw.RISCV.Symbolic.Repeat
 
-executable macaw-riscv-dump
+executable macaw-riscv32-dump
   hs-source-dirs: tools
-  main-is: Dump.hs
+  main-is: Dump32.hs
   default-language: Haskell2010
   ghc-options: -Wall -Wcompat
   build-depends:
     base,
     containers,
+    grift,
+    macaw-dump,
+    macaw-riscv,
+    macaw-riscv-symbolic,
+    macaw-symbolic
+
+executable macaw-riscv64-dump
+  hs-source-dirs: tools
+  main-is: Dump64.hs
+  default-language: Haskell2010
+  ghc-options: -Wall -Wcompat
+  build-depends:
+    base,
+    containers,
+    grift,
     macaw-dump,
     macaw-riscv,
     macaw-riscv-symbolic,
