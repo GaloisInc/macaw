@@ -1,6 +1,7 @@
 packages: base/
           macaw-aarch32/
           macaw-aarch32-symbolic/
+          macaw-aarch32-syntax/
           macaw-dump/
           macaw-semmc/
           macaw-ppc/
