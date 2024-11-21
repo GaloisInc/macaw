@@ -12,8 +12,8 @@ This `ParserHooks` supports the following types and operations:
 
 **Operations**:
 
-- `get-reg :: AArch32Reg -> AArch32Regs -> t`: extract an x86 register
-- `set-reg :: AArch32Reg -> t -> AArch32Regs -> AArch32Regs`: set an x86 register
+- `get-reg :: AArch32Reg -> AArch32Regs -> t`: extract an AArch32 register
+- `set-reg :: AArch32Reg -> t -> AArch32Regs -> AArch32Regs`: set an AArch32 register
 - Registers:
   - `r0 :: AArch32Reg`
   - `r1 :: AArch32Reg`
