@@ -137,6 +137,11 @@ module Data.Macaw.Symbolic
   , MO.populatedMemChunks
   , MkGlobalPointerValidityAssertion
   , MemModelConfig(..)
+    -- $readingWritingMemModel
+  , doReadMemModel
+  , doCondReadMemModel
+  , doWriteMemModel
+  , doCondWriteMemModel
   , PointerUse(..)
   , PointerUseTag(..)
   , pointerUseLocation
@@ -1184,62 +1189,16 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar mmConf s0 st =
   C.withBackend (st^.C.stateContext) $ \bak ->
   let sym = backendGetSym bak in
   case s0 of
-    MacawReadMem addrWidth memRep ptr0 -> do
-      mem <- getMem st mvar
-      ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
-      ptr2 <- resolvePointer mmConf ptr1
-      mbReadVal <- concreteImmutableGlobalRead mmConf memRep ptr2
-      case mbReadVal of
-        Just readVal -> pure (readVal, st)
-        Nothing -> do
-          st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st
-          let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
-          mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
-          case mGlobalPtrValid of
-            Just globalPtrValid -> addAssertion bak globalPtrValid
-            Nothing -> return ()
-          (,st1) <$> doReadMem bak mem addrWidth memRep ptr2
-    MacawCondReadMem addrWidth memRep cond ptr0 condFalseValue -> do
-      mem <- getMem st mvar
-      ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
-      ptr2 <- resolvePointer mmConf ptr1
-      mbReadVal <- concreteImmutableGlobalRead mmConf memRep ptr2
-      case mbReadVal of
-        Just readVal -> do
-          readVal' <- muxMemReprValue sym memRep (C.regValue cond) readVal (C.regValue condFalseValue)
-          pure (readVal', st)
-        Nothing -> do
-          st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st
-          let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
-          mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
-          case mGlobalPtrValid of
-            Just globalPtrValid -> addAssertion bak globalPtrValid
-            Nothing -> return ()
-          (,st1) <$> doCondReadMem bak mem addrWidth memRep (C.regValue cond) ptr2 (C.regValue condFalseValue)
+    MacawReadMem addrWidth memRep ptr0 ->
+      doReadMemModel mvar mmConf addrWidth memRep ptr0 st
+    MacawCondReadMem addrWidth memRep cond ptr0 condFalseValue ->
+      doCondReadMemModel mvar mmConf addrWidth memRep cond ptr0 condFalseValue st
     MacawWriteMem addrWidth memRep ptr0 v -> do
-      mem <- getMem st mvar
-      ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
-      ptr2 <- resolvePointer mmConf ptr1
-      st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st
-      let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
-      mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
-      case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion bak globalPtrValid
-        Nothing -> return ()
-      mem1 <- doWriteMem bak mem addrWidth memRep ptr2 (C.regValue v)
-      pure ((), setMem st1 mvar mem1)
+      st' <- doWriteMemModel mvar mmConf addrWidth memRep ptr0 v st
+      pure ((), st')
     MacawCondWriteMem addrWidth memRep cond ptr0 v -> do
-      mem <- getMem st mvar
-      ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
-      ptr2 <- resolvePointer mmConf ptr1
-      st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st
-      let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
-      mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
-      case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion bak globalPtrValid
-        Nothing -> return ()
-      mem1 <- doCondWriteMem bak mem addrWidth memRep (C.regValue cond) ptr2 (C.regValue v)
-      pure ((), setMem st1 mvar mem1)
+      st' <- doCondWriteMemModel mvar mmConf addrWidth memRep cond ptr0 v st
+      pure ((), st')
     MacawGlobalPtr w addr ->
       M.addrWidthClass w $ doGetGlobal st mvar globs addr
 
@@ -1275,7 +1234,165 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar mmConf s0 st =
     globs = globalMemMap mmConf
     MO.LookupFunctionHandle lookupH = lookupFunctionHandle mmConf
     MO.LookupSyscallHandle lookupSyscall = lookupSyscallHandle mmConf
-    toMemPred = mkGlobalPointerValidityAssertion mmConf
+
+{- $readingWritingMemModel
+
+The 'doReadMemModel', 'doCondReadMemModel', 'doWriteMemModel', and
+'doCondWriteMemModel' are very similar to the "Data.Macaw.Symbolic.MemOps"
+functions 'MO.doReadMem', 'MO.doCondReadMem', 'MO.doWriteMem',
+'MO.doCondWriteMem', respectively. The former functions can be thought of as
+higher-level abstractions built on top of the latter functions. In particular,
+note the following differences:
+
+* 'MO.doReadMem' unconditionally reads from memory, whereas 'doReadMemModel'
+  may skip reading from memory and instead return a result directly if the
+  'MemModelConfig' is configured to do so. (See 'concreteImmutableGlobalRead'.)
+  Similarly for 'MO.doCondReadMem' versus 'doCondReadMemModel'.
+
+* 'MO.doReadMem' never modifies the 'C.SimState', whereas 'doReadMemModel'
+  may do so if the 'MemModelConfig' is configured to lazily populate global
+  memory. (See 'lazilyPopulateGlobalMem'.) Similarly for 'MO.doCondReadMem'
+  versus 'doCondReadMemModel'.
+
+* The @*MemModel@ functions perform additional validity checks (see
+  'mkGlobalPointerValidityAssertion) that the "Data.Macaw.Symbolic.MemOps"
+  functions do not.
+
+* The @*MemModel@ functions attempt to map machine words representing global
+  addresses to LLVM memory model pointers (see 'globalMemMap'), but the
+  "Data.Macaw.Symbolic.MemOps" functions do not.
+
+* The @*MemModel@ functions will attempt to resolve the pointer argument (see
+  'resolvePointer') for efficiency reasons, but the "Data.Macaw.Symbolic.MemOps"
+  functions do not.
+-}
+
+-- | Perform a read from the underlying memory model.
+doReadMemModel ::
+  (MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions) =>
+  C.GlobalVar MM.Mem ->
+  MemModelConfig p sym arch MM.Mem ->
+  ArchAddrWidthRepr arch ->
+  M.MemRepr ty ->
+  C.RegEntry sym (MM.LLVMPointerType (M.ArchAddrWidth arch)) ->
+  C.SimState p sym (MacawExt arch) rtp f args ->
+  IO ( C.RegValue sym (ToCrucibleType ty)
+     , C.SimState p sym (MacawExt arch) rtp f args
+     )
+doReadMemModel mvar mmConf addrWidth memRep ptr0 st0 =
+  C.withBackend (st0^.C.stateContext) $ \bak -> do
+    let sym = backendGetSym bak
+    let globs = globalMemMap mmConf
+    let toMemPred = mkGlobalPointerValidityAssertion mmConf
+    mem <- getMem st0 mvar
+    ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
+    ptr2 <- resolvePointer mmConf ptr1
+    mbReadVal <- concreteImmutableGlobalRead mmConf memRep ptr2
+    case mbReadVal of
+      Just readVal -> pure (readVal, st0)
+      Nothing -> do
+        st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+        let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
+        mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
+        case mGlobalPtrValid of
+          Just globalPtrValid -> addAssertion bak globalPtrValid
+          Nothing -> return ()
+        (,st1) <$> doReadMem bak mem addrWidth memRep ptr2
+
+-- | Perform a read from the underlying memory model if the supplied condition
+-- holds.
+doCondReadMemModel ::
+  (MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions) =>
+  C.GlobalVar MM.Mem ->
+  MemModelConfig p sym arch MM.Mem ->
+  ArchAddrWidthRepr arch ->
+  M.MemRepr ty ->
+  C.RegEntry sym C.BoolType ->
+  C.RegEntry sym (MM.LLVMPointerType (M.ArchAddrWidth arch)) ->
+  C.RegEntry sym (ToCrucibleType ty) ->
+  C.SimState p sym (MacawExt arch) rtp f args ->
+  IO ( C.RegValue sym (ToCrucibleType ty)
+     , C.SimState p sym (MacawExt arch) rtp f args
+     )
+doCondReadMemModel mvar mmConf addrWidth memRep cond ptr0 condFalseValue st0 =
+  C.withBackend (st0^.C.stateContext) $ \bak -> do
+    let sym = backendGetSym bak
+    let globs = globalMemMap mmConf
+    let toMemPred = mkGlobalPointerValidityAssertion mmConf
+    mem <- getMem st0 mvar
+    ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
+    ptr2 <- resolvePointer mmConf ptr1
+    mbReadVal <- concreteImmutableGlobalRead mmConf memRep ptr2
+    case mbReadVal of
+      Just readVal -> do
+        readVal' <- muxMemReprValue sym memRep (C.regValue cond) readVal (C.regValue condFalseValue)
+        pure (readVal', st0)
+      Nothing -> do
+        st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+        let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
+        mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
+        case mGlobalPtrValid of
+          Just globalPtrValid -> addAssertion bak globalPtrValid
+          Nothing -> return ()
+        (,st1) <$> doCondReadMem bak mem addrWidth memRep (C.regValue cond) ptr2 (C.regValue condFalseValue)
+
+-- | Perform a write from the underlying memory model.
+doWriteMemModel ::
+  (MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions) =>
+  C.GlobalVar MM.Mem ->
+  MemModelConfig p sym arch MM.Mem ->
+  ArchAddrWidthRepr arch ->
+  M.MemRepr ty ->
+  C.RegEntry sym (MM.LLVMPointerType (M.ArchAddrWidth arch)) ->
+  C.RegEntry sym (ToCrucibleType ty) ->
+  C.SimState p sym (MacawExt arch) rtp f args ->
+  IO (C.SimState p sym (MacawExt arch) rtp f args)
+doWriteMemModel mvar mmConf addrWidth memRep ptr0 v st0 =
+  C.withBackend (st0^.C.stateContext) $ \bak -> do
+    let sym = backendGetSym bak
+    let globs = globalMemMap mmConf
+    let toMemPred = mkGlobalPointerValidityAssertion mmConf
+    mem <- getMem st0 mvar
+    ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
+    ptr2 <- resolvePointer mmConf ptr1
+    st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+    let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
+    mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
+    case mGlobalPtrValid of
+      Just globalPtrValid -> addAssertion bak globalPtrValid
+      Nothing -> return ()
+    mem1 <- doWriteMem bak mem addrWidth memRep ptr2 (C.regValue v)
+    pure (setMem st1 mvar mem1)
+
+-- | Perform a write from the underlying memory model if the supplied condition
+-- holds.
+doCondWriteMemModel ::
+  (MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions) =>
+  C.GlobalVar MM.Mem ->
+  MemModelConfig p sym arch MM.Mem ->
+  ArchAddrWidthRepr arch ->
+  M.MemRepr ty ->
+  C.RegEntry sym C.BoolType ->
+  C.RegEntry sym (MM.LLVMPointerType (M.ArchAddrWidth arch)) ->
+  C.RegEntry sym (ToCrucibleType ty) ->
+  C.SimState p sym (MacawExt arch) rtp f args ->
+  IO (C.SimState p sym (MacawExt arch) rtp f args)
+doCondWriteMemModel mvar mmConf addrWidth memRep cond ptr0 v st0 =
+  C.withBackend (st0^.C.stateContext) $ \bak -> do
+    let sym = backendGetSym bak
+    let globs = globalMemMap mmConf
+    let toMemPred = mkGlobalPointerValidityAssertion mmConf
+    mem <- getMem st0 mvar
+    ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
+    ptr2 <- resolvePointer mmConf ptr1
+    st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+    let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
+    mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
+    case mGlobalPtrValid of
+      Just globalPtrValid -> addAssertion bak globalPtrValid
+      Nothing -> return ()
+    mem1 <- doCondWriteMem bak mem addrWidth memRep (C.regValue cond) ptr2 (C.regValue v)
+    pure (setMem st1 mvar mem1)
 
 -- | Create a fresh Crucible constant based on the supplied Macaw 'M.TypeRepr'.
 freshCrucibleConstant ::
