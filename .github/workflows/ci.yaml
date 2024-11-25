@@ -129,6 +129,12 @@ jobs:
     - name: Test macaw-aarch32-symbolic
       if: runner.os == 'Linux'
       run: cabal test pkg:macaw-aarch32-symbolic
+    - name: Build macaw-aarch32-syntax
+      if: runner.os == 'Linux'
+      run: cabal build pkg:macaw-aarch32-syntax
+    - name: Test macaw-aarch32-syntax
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-aarch32-syntax
 
     - name: Build macaw-ppc
       run: cabal build pkg:macaw-ppc pkg:macaw-ppc-symbolic
@@ -139,6 +145,14 @@ jobs:
     - name: Test macaw-ppc-symbolic
       if: runner.os == 'Linux'
       run: cabal test pkg:macaw-ppc-symbolic
+
+    - name: Build macaw-ppc-syntax
+      if: runner.os == 'Linux'
+      run: cabal build pkg:macaw-ppc-syntax
+
+    - name: Test macaw-ppc-syntax
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-ppc-syntax
 
     - name: Build macaw-riscv
       run: cabal build pkg:macaw-riscv pkg:macaw-riscv-symbolic
