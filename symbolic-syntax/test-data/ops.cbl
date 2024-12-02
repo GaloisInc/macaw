@@ -2,6 +2,8 @@
 (defun @ops ((p Pointer) (q Pointer)) Unit
   (start start:
     (let b (bv-typed-literal SizeT 42))
+    (let bp (bits-to-pointer b))
+    (let pb (pointer-to-bits bp))
     (let n (pointer-make-null))
     (let d (pointer-diff p q))
     (let r (pointer-add p d))
