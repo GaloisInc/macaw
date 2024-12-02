@@ -359,6 +359,50 @@ wrapMakeNull = ExtensionWrapper
       let nullptr = DMS.MacawNullPtr (DMC.addrWidthRepr WI.knownNat) in
       return (LCCR.EvalApp (LCE.ExtensionApp nullptr)) }
 
+-- | Wrapper for the 'DMS.BitsToPtr' syntax extension that enables users to
+-- convert a bitvector to a pointer.
+--
+-- > bits-to-pointer bv
+wrapBitsToPointer
+  :: ( w ~ DMC.ArchAddrWidth arch
+     , 1 <= w
+     , KnownNat w
+     , DMC.MemWidth w )
+  => ExtensionWrapper arch
+                      (Ctx.EmptyCtx Ctx.::> LCT.BVType w)
+                      (LCLM.LLVMPointerType w)
+wrapBitsToPointer = ExtensionWrapper
+  { extName = LCSA.AtomName "bits-to-pointer"
+  , extArgTypes = Ctx.empty Ctx.:> LCT.BVRepr LCT.knownNat
+  , extWrapper = \args ->
+      let bitsToPointer =
+            LCCR.EvalApp .
+            LCE.ExtensionApp .
+            DMS.BitsToPtr WI.knownNat in
+      Ctx.uncurryAssignment (pure . bitsToPointer) args }
+
+-- | Wrapper for the 'DMS.PtrToBits' syntax extension that enables users to
+-- convert a pointer to a bitvector by extracting the pointer offset.
+--
+-- > pointer-to-bits bv
+wrapPointerToBits
+  :: ( w ~ DMC.ArchAddrWidth arch
+     , 1 <= w
+     , KnownNat w
+     , DMC.MemWidth w )
+  => ExtensionWrapper arch
+                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w)
+                      (LCT.BVType w)
+wrapPointerToBits = ExtensionWrapper
+  { extName = LCSA.AtomName "pointer-to-bits"
+  , extArgTypes = Ctx.empty Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
+  , extWrapper = \args ->
+      let pointerToBits =
+            LCCR.EvalApp .
+            LCE.ExtensionApp .
+            DMS.PtrToBits WI.knownNat in
+      Ctx.uncurryAssignment (pure . pointerToBits) args }
+
 -- | Wrapper for the 'DMS.PtrEq' syntax extension that enables users to test
 -- the equality of two pointers.
 --
@@ -509,6 +553,8 @@ extensionWrappers = Map.fromList
   , (LCSA.AtomName "pointer-sub", SomeExtensionWrapper wrapPointerSub)
   , (LCSA.AtomName "pointer-eq", SomeExtensionWrapper wrapPointerEq)
   , (LCSA.AtomName "pointer-make-null", SomeExtensionWrapper wrapMakeNull)
+  , (LCSA.AtomName "pointer-to-bits", SomeExtensionWrapper wrapPointerToBits)
+  , (LCSA.AtomName "bits-to-pointer", SomeExtensionWrapper wrapBitsToPointer)
   ]
 
 ptrTypeParser :: LCSM.MonadSyntax LCSA.Atomic m => m (Some LCT.TypeRepr)
