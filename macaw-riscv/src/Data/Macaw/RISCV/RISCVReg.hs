@@ -17,6 +17,7 @@ module Data.Macaw.RISCV.RISCVReg
   ( -- * RISC-V macaw register state
     RISCVReg(..)
   , GPR(..)
+  , FPR(..)
     -- ** Patterns for GPRs
   , pattern GPR
   , pattern GPR_RA
@@ -50,6 +51,40 @@ module Data.Macaw.RISCV.RISCVReg
   , pattern GPR_T4
   , pattern GPR_T5
   , pattern GPR_T6
+    -- ** Patterns for FPRs
+  , pattern FPR
+  , pattern FPR_FT0
+  , pattern FPR_FT1
+  , pattern FPR_FT2
+  , pattern FPR_FT3
+  , pattern FPR_FT4
+  , pattern FPR_FT5
+  , pattern FPR_FT6
+  , pattern FPR_FT7
+  , pattern FPR_FS0
+  , pattern FPR_FS1
+  , pattern FPR_FA0
+  , pattern FPR_FA1
+  , pattern FPR_FA2
+  , pattern FPR_FA3
+  , pattern FPR_FA4
+  , pattern FPR_FA5
+  , pattern FPR_FA6
+  , pattern FPR_FA7
+  , pattern FPR_FS2
+  , pattern FPR_FS3
+  , pattern FPR_FS4
+  , pattern FPR_FS5
+  , pattern FPR_FS6
+  , pattern FPR_FS7
+  , pattern FPR_FS8
+  , pattern FPR_FS9
+  , pattern FPR_FS10
+  , pattern FPR_FS11
+  , pattern FPR_FT8
+  , pattern FPR_FT9
+  , pattern FPR_FT10
+  , pattern FPR_FT11
   ) where
 
 import qualified Data.Macaw.Types as MT
@@ -236,6 +271,178 @@ instance Show GPR where
   show T5 = "t5"
   show T6 = "t6"
 
+newtype FPR = BuildFPR (G.SizedBV 5)
+  deriving (Enum, Eq, Ord)
+
+-- | Temporary register
+pattern FT0 :: FPR
+pattern FT0 = BuildFPR 0
+
+-- | Temporary register
+pattern FT1 :: FPR
+pattern FT1 = BuildFPR 1
+
+-- | Temporary register
+pattern FT2 :: FPR
+pattern FT2 = BuildFPR 2
+
+-- | Temporary register
+pattern FT3 :: FPR
+pattern FT3 = BuildFPR 3
+
+-- | Temporary register
+pattern FT4 :: FPR
+pattern FT4 = BuildFPR 4
+
+-- | Temporary register
+pattern FT5 :: FPR
+pattern FT5 = BuildFPR 5
+
+-- | Temporary register
+pattern FT6 :: FPR
+pattern FT6 = BuildFPR 6
+
+-- | Temporary register
+pattern FT7 :: FPR
+pattern FT7 = BuildFPR 7
+
+-- | Callee-saved register
+pattern FS0 :: FPR
+pattern FS0 = BuildFPR 8
+
+-- | Callee-saved register
+pattern FS1 :: FPR
+pattern FS1 = BuildFPR 9
+
+-- | Argument register
+pattern FA0 :: FPR
+pattern FA0 = BuildFPR 10
+
+-- | Argument register
+pattern FA1 :: FPR
+pattern FA1 = BuildFPR 11
+
+-- | Argument register
+pattern FA2 :: FPR
+pattern FA2 = BuildFPR 12
+
+-- | Argument register
+pattern FA3 :: FPR
+pattern FA3 = BuildFPR 13
+
+-- | Argument register
+pattern FA4 :: FPR
+pattern FA4 = BuildFPR 14
+
+-- | Argument register
+pattern FA5 :: FPR
+pattern FA5 = BuildFPR 15
+
+-- | Argument register
+pattern FA6 :: FPR
+pattern FA6 = BuildFPR 16
+
+-- | Argument register
+pattern FA7 :: FPR
+pattern FA7 = BuildFPR 17
+
+-- | Callee-saved register
+pattern FS2 :: FPR
+pattern FS2 = BuildFPR 18
+
+-- | Callee-saved register
+pattern FS3 :: FPR
+pattern FS3 = BuildFPR 19
+
+-- | Callee-saved register
+pattern FS4 :: FPR
+pattern FS4 = BuildFPR 20
+
+-- | Callee-saved register
+pattern FS5 :: FPR
+pattern FS5 = BuildFPR 21
+
+-- | Callee-saved register
+pattern FS6 :: FPR
+pattern FS6 = BuildFPR 22
+
+-- | Callee-saved register
+pattern FS7 :: FPR
+pattern FS7 = BuildFPR 23
+
+-- | Callee-saved register
+pattern FS8 :: FPR
+pattern FS8 = BuildFPR 24
+
+-- | Callee-saved register
+pattern FS9 :: FPR
+pattern FS9 = BuildFPR 25
+
+-- | Callee-saved register
+pattern FS10 :: FPR
+pattern FS10 = BuildFPR 26
+
+-- | Callee-saved register
+pattern FS11 :: FPR
+pattern FS11 = BuildFPR 27
+
+-- | Temporary register
+pattern FT8 :: FPR
+pattern FT8 = BuildFPR 28
+
+-- | Temporary register
+pattern FT9 :: FPR
+pattern FT9 = BuildFPR 29
+
+-- | Temporary register
+pattern FT10 :: FPR
+pattern FT10 = BuildFPR 30
+
+-- | Temporary register
+pattern FT11 :: FPR
+pattern FT11 = BuildFPR 31
+
+{-# COMPLETE
+  FT0, FT1, FT2, FT3, FT4, FT5, FT6, FT7,
+  FS0, FS1,
+  FA0, FA1, FA2, FA3, FA4, FA5, FA6, FA7,
+  FS2, FS3, FS4, FS5, FS6, FS7, FS8, FS9, FS10, FS11,
+  FT8, FT9, FT10, FT11 #-}
+
+instance Show FPR where
+  show FT0  = "ft0"
+  show FT1  = "ft1"
+  show FT2  = "ft2"
+  show FT3  = "ft3"
+  show FT4  = "ft4"
+  show FT5  = "ft5"
+  show FT6  = "ft6"
+  show FT7  = "ft7"
+  show FS0  = "fs0"
+  show FS1  = "fs1"
+  show FA0  = "fa0"
+  show FA1  = "fa1"
+  show FA2  = "fa2"
+  show FA3  = "fa3"
+  show FA4  = "fa4"
+  show FA5  = "fa5"
+  show FA6  = "fa6"
+  show FA7  = "fa7"
+  show FS2  = "fs2"
+  show FS3  = "fs3"
+  show FS4  = "fs4"
+  show FS5  = "fs5"
+  show FS6  = "fs6"
+  show FS7  = "fs7"
+  show FS8  = "fs8"
+  show FS9  = "fs9"
+  show FS10 = "fs10"
+  show FS11 = "fs11"
+  show FT8  = "ft8"
+  show FT9  = "ft9"
+  show FT10 = "ft10"
+  show FT11 = "ft11"
+
 -- | RISC-V register.
 data RISCVReg rv tp where
   -- | Program counter.
@@ -244,7 +451,7 @@ data RISCVReg rv tp where
   -- it should never be directly read from or written to.
   RISCV_GPR :: GPR -> RISCVReg rv (MT.BVType (G.RVWidth rv))
   -- | Floating-point registers.
-  FPR :: G.SizedBV 5 -> RISCVReg rv (MT.BVType (G.RVFloatWidth rv))
+  RISCV_FPR :: FPR -> RISCVReg rv (MT.BVType (G.RVFloatWidth rv))
   -- | Control/status registers.
   CSR :: G.CSR -> RISCVReg rv (MT.BVType (G.RVWidth rv))
   -- | Current privilege level.
@@ -412,10 +619,175 @@ pattern GPR_T6 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
                   RISCVReg rv tp
 pattern GPR_T6 = GPR 31
 
+pattern FPR ::
+  forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+    G.SizedBV 5 -> RISCVReg rv tp
+pattern FPR bv = RISCV_FPR (BuildFPR bv)
+
+-- | Temporary register
+pattern FPR_FT0 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FT0 = FPR 0
+
+-- | Temporary register
+pattern FPR_FT1 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FT1 = FPR 1
+
+-- | Temporary register
+pattern FPR_FT2 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FT2 = FPR 2
+
+-- | Temporary register
+pattern FPR_FT3 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FT3 = FPR 3
+
+-- | Temporary register
+pattern FPR_FT4 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FT4 = FPR 4
+
+-- | Temporary register
+pattern FPR_FT5 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FT5 = FPR 5
+
+-- | Temporary register
+pattern FPR_FT6 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FT6 = FPR 6
+
+-- | Temporary register
+pattern FPR_FT7 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FT7 = FPR 7
+
+-- | Callee-saved register
+pattern FPR_FS0 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FS0 = FPR 8
+
+-- | Callee-saved register
+pattern FPR_FS1 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FS1 = FPR 9
+
+-- | Argument register
+pattern FPR_FA0 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FA0 = FPR 10
+
+-- | Argument register
+pattern FPR_FA1 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FA1 = FPR 11
+
+-- | Argument register
+pattern FPR_FA2 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FA2 = FPR 12
+
+-- | Argument register
+pattern FPR_FA3 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FA3 = FPR 13
+
+-- | Argument register
+pattern FPR_FA4 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FA4 = FPR 14
+
+-- | Argument register
+pattern FPR_FA5 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FA5 = FPR 15
+
+-- | Argument register
+pattern FPR_FA6 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FA6 = FPR 16
+
+-- | Argument register
+pattern FPR_FA7 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FA7 = FPR 17
+
+-- | Callee-saved register
+pattern FPR_FS2 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FS2 = FPR 18
+
+-- | Callee-saved register
+pattern FPR_FS3 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FS3 = FPR 19
+
+-- | Callee-saved register
+pattern FPR_FS4 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FS4 = FPR 20
+
+-- | Callee-saved register
+pattern FPR_FS5 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FS5 = FPR 21
+
+-- | Callee-saved register
+pattern FPR_FS6 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FS6 = FPR 22
+
+-- | Callee-saved register
+pattern FPR_FS7 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FS7 = FPR 23
+
+-- | Callee-saved register
+pattern FPR_FS8 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FS8 = FPR 24
+
+-- | Callee-saved register
+pattern FPR_FS9 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FS9 = FPR 25
+
+-- | Callee-saved register
+pattern FPR_FS10 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                    RISCVReg rv tp
+pattern FPR_FS10 = FPR 26
+
+-- | Callee-saved register
+pattern FPR_FS11 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                    RISCVReg rv tp
+pattern FPR_FS11 = FPR 27
+
+-- | Temporary register
+pattern FPR_FT8 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FT8 = FPR 28
+
+-- | Temporary register
+pattern FPR_FT9 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                   RISCVReg rv tp
+pattern FPR_FT9 = FPR 29
+
+-- | Temporary register
+pattern FPR_FT10 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                    RISCVReg rv tp
+pattern FPR_FT10 = FPR 30
+
+-- | Temporary register
+pattern FPR_FT11 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVFloatWidth rv)) =>
+                    RISCVReg rv tp
+pattern FPR_FT11 = FPR 31
+
 instance Show (RISCVReg rv tp) where
   show PC = "pc"
   show (RISCV_GPR gpr) = show gpr
-  show (FPR rid) = "f" <> show (G.asUnsignedSized rid)
+  show (RISCV_FPR fpr) = show fpr
   show (CSR csr) = show csr
   show PrivLevel = "priv"
   show EXC = "exc"
@@ -436,7 +808,7 @@ instance MC.PrettyF (RISCVReg rv) where
 instance G.KnownRV rv => MT.HasRepr (RISCVReg rv) MT.TypeRepr where
   typeRepr PC = MT.BVTypeRepr knownNat
   typeRepr (RISCV_GPR _) = MT.BVTypeRepr knownNat
-  typeRepr (FPR _) = MT.BVTypeRepr knownNat
+  typeRepr (RISCV_FPR _) = MT.BVTypeRepr knownNat
   typeRepr (CSR _) = MT.BVTypeRepr knownNat
   typeRepr PrivLevel = MT.BVTypeRepr knownNat
   typeRepr EXC = MT.BoolTypeRepr
