@@ -6,6 +6,7 @@ packages: base/
           macaw-semmc/
           macaw-ppc/
           macaw-ppc-symbolic/
+          macaw-ppc-syntax/
           macaw-riscv/
           macaw-riscv-symbolic/
           macaw-x86-cli/
