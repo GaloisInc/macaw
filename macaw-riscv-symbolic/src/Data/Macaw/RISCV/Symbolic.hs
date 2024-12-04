@@ -13,20 +13,16 @@
 module Data.Macaw.RISCV.Symbolic
   ( riscvMacawSymbolicFns
   , riscvMacawEvalFn
-  , lookupReg
-  , updateReg
+  , Regs.lookupReg
+  , Regs.updateReg
   ) where
 
-import Control.Lens ((%~), (&))
-import qualified Control.Monad.Catch as X
 import Control.Monad.IO.Class (liftIO)
 import Data.Functor (void)
 import qualified Data.Kind as DK
 import qualified Data.Functor.Identity as I
-import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.Context as Ctx
-import Data.Parameterized.Some (Some(..))
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FC
 import Data.Typeable (Typeable)
@@ -43,9 +39,6 @@ import qualified Lang.Crucible.LLVM.MemModel as LCLM
 -- grift
 import qualified GRIFT.Types as G
 
--- what4
-import qualified What4.Symbol as WS
-
 -- macaw-base
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Types as MT
@@ -61,7 +54,7 @@ import qualified Data.Macaw.Symbolic.Backend as MSB
 import qualified Data.Macaw.RISCV.Symbolic.AtomWrapper as RA
 import qualified Data.Macaw.RISCV.Symbolic.Functions as RF
 import qualified Data.Macaw.RISCV.Symbolic.Panic as RP
-import qualified Data.Macaw.RISCV.Symbolic.Repeat as RR
+import qualified Data.Macaw.RISCV.Symbolic.Regs as Regs
 
 riscvMacawSymbolicFns ::
      forall rv
@@ -70,26 +63,13 @@ riscvMacawSymbolicFns ::
 riscvMacawSymbolicFns =
   MSB.MacawSymbolicArchFunctions
   { MSB.crucGenArchConstraints = \x -> x
-  , MSB.crucGenArchRegName = riscvRegName
-  , MSB.crucGenRegAssignment = riscvRegAssignment
-  , MSB.crucGenRegStructType = riscvRegStructType (PC.knownRepr :: G.RVRepr rv)
+  , MSB.crucGenArchRegName = Regs.riscvRegName
+  , MSB.crucGenRegAssignment = Regs.riscvRegAssignment
+  , MSB.crucGenRegStructType = Regs.riscvRegStructType (PC.knownRepr :: G.RVRepr rv)
   , MSB.crucGenArchFn = riscvGenFn
   , MSB.crucGenArchStmt = riscvGenStmt
   , MSB.crucGenArchTermStmt = riscvGenTermStmt
   }
-
-type instance MS.ArchRegContext (MR.RISCV rv) =
-          (Ctx.EmptyCtx Ctx.::> MT.BVType (G.RVWidth rv)  -- PC
-  Ctx.<+> RR.CtxRepeat 31 (MT.BVType (G.RVWidth rv))      -- GPR regs. We use 31 instead of 32
-                                                          -- because we exclude x0, which is
-                                                          -- hardwired to the constant 0.
-  Ctx.<+> RR.CtxRepeat 32 (MT.BVType (G.RVFloatWidth rv)) -- FPR regs
-  Ctx.<+> RR.CtxRepeat 23 (MT.BVType (G.RVWidth rv))      -- CSR regs. Although there is a
-                                                          -- theoretical maximum of 4096 of
-                                                          -- these registers, `grift` only
-                                                          -- supports 23 of them in practice.
-  Ctx.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType 2               -- PrivLevel
-                        Ctx.::> MT.BoolType))             -- EXC
 
 riscvMacawEvalFn :: RF.SymFuns sym
                  -> MS.MacawArchStmtExtensionOverride (MR.RISCV rv)
@@ -120,80 +100,17 @@ instance (MS.IsMemoryModel mem, G.KnownRV rv, MR.RISCVConstraints rv, Typeable r
     , MS.updateReg = archUpdateReg
     }
 
-riscvRegName :: MR.RISCVReg rv tp -> WS.SolverSymbol
-riscvRegName r = WS.systemSymbol ("r!" ++ show (MC.prettyF r))
-
--- Note that `repeatAssign` starts indexing from 0, but we want to exclude
--- `GPR 0` (i.e., x0), as this is always hardwired to the constant 0. As such,
--- we offset all of the indexes by one using (+ 1).
-gprRegs :: Ctx.Assignment (MR.RISCVReg rv) (RR.CtxRepeat 31 (MT.BVType (G.RVWidth rv)))
-gprRegs = RR.repeatAssign (MR.GPR . fromIntegral . (+ 1))
-
-fprRegs :: Ctx.Assignment (MR.RISCVReg rv) (RR.CtxRepeat 32 (MT.BVType (G.RVFloatWidth rv)))
-fprRegs = RR.repeatAssign (MR.FPR . fromIntegral)
-
--- | The RISC-V control/status registers that are directly supported by Macaw.
-csrRegs :: Ctx.Assignment (MR.RISCVReg rv) (RR.CtxRepeat 23 (MT.BVType (G.RVWidth rv)))
-csrRegs = RR.repeatAssign (MR.CSR . toEnum)
-
--- | This contains an assignment that stores the register associated with each index in the
--- RISC-V register structure.
-riscvRegAssignment :: Ctx.Assignment (MR.RISCVReg rv) (MS.ArchRegContext (MR.RISCV rv))
-riscvRegAssignment =
-  Ctx.Empty Ctx.:> MR.PC
-  Ctx.<++> gprRegs
-  Ctx.<++> fprRegs
-  Ctx.<++> csrRegs
-  Ctx.<++> (Ctx.Empty Ctx.:> MR.PrivLevel Ctx.:> MR.EXC)
-
-riscvRegStructType ::
-     forall rv
-   . G.KnownRV rv
-  => G.RVRepr rv
-  -> C.TypeRepr (MSB.ArchRegStruct (MR.RISCV rv))
-riscvRegStructType _rv =
-  C.StructRepr $ MS.typeCtxToCrucible $ FC.fmapFC MT.typeRepr $ riscvRegAssignment @rv
-
-regIndexMap :: forall rv
-             . G.KnownRV rv
-            => MSB.RegIndexMap (MR.RISCV rv)
-regIndexMap = MSB.mkRegIndexMap assgn sz
-  where
-    assgn = riscvRegAssignment @rv
-    sz = Ctx.size $ MS.typeCtxToCrucible $ FC.fmapFC MT.typeRepr assgn
-
-lookupReg :: forall rv m f tp
-           . (G.KnownRV rv, Typeable rv, X.MonadThrow m)
-          => MR.RISCVReg rv tp
-          -> Ctx.Assignment f (MS.MacawCrucibleRegTypes (MR.RISCV rv))
-          -> m (f (MS.ToCrucibleType tp))
-lookupReg r asgn =
-  case MapF.lookup r regIndexMap of
-    Nothing -> X.throwM (MissingRegisterInState (Some r))
-    Just pair -> return (asgn Ctx.! MSB.crucibleIndex pair)
-
 archLookupReg :: (G.KnownRV rv, Typeable rv)
               => C.RegEntry sym (MS.ArchRegStruct (MR.RISCV rv))
               -> MR.RISCVReg rv tp
               -> C.RegEntry sym (MS.ToCrucibleType tp)
 archLookupReg regEntry reg =
-  case lookupReg reg (C.regValue regEntry) of
+  case Regs.lookupReg reg (C.regValue regEntry) of
     Just (C.RV val) -> C.RegEntry (MS.typeToCrucible $ MT.typeRepr reg) val
     Nothing -> RP.panic
                  RP.RISCV
                  "archLookupReg"
                  ["unexpected register: " ++ show (MC.prettyF reg)]
-
-updateReg :: forall rv m f tp
-           . (G.KnownRV rv, Typeable rv, X.MonadThrow m)
-          => MR.RISCVReg rv tp
-          -> (f (MS.ToCrucibleType tp) -> f (MS.ToCrucibleType tp))
-          -> Ctx.Assignment f (MS.MacawCrucibleRegTypes (MR.RISCV rv))
-          -> m (Ctx.Assignment f (MS.MacawCrucibleRegTypes (MR.RISCV rv)))
-updateReg r upd asgn = do
-  case MapF.lookup r regIndexMap of
-    Nothing -> X.throwM (MissingRegisterInState (Some r))
-    Just pair -> return (asgn & MapF.ixF (MSB.crucibleIndex pair) %~ upd)
 
 archUpdateReg :: (G.KnownRV rv, Typeable rv)
               => C.RegEntry sym (MS.ArchRegStruct (MR.RISCV rv))
@@ -201,16 +118,12 @@ archUpdateReg :: (G.KnownRV rv, Typeable rv)
               -> C.RegValue sym (MS.ToCrucibleType tp)
               -> C.RegEntry sym (MS.ArchRegStruct (MR.RISCV rv))
 archUpdateReg regEntry reg val =
-  case updateReg reg (const $ C.RV val) (C.regValue regEntry) of
+  case Regs.updateReg reg (const $ C.RV val) (C.regValue regEntry) of
     Just r -> regEntry { C.regValue = r }
     Nothing -> RP.panic
                  RP.RISCV
                  "archUpdateReg"
                  ["unexpected register: " ++ show (MC.prettyF reg)]
-
-newtype RISCVSymbolicException rv = MissingRegisterInState (Some (MR.RISCVReg rv))
-  deriving Show
-instance Typeable rv => X.Exception (RISCVSymbolicException rv)
 
 data RISCVStmtExtension rv (f :: C.CrucibleType -> DK.Type) (ctp :: C.CrucibleType) where
   -- | Wrappers around the arch-specific functions in RISC-V; these are

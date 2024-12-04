@@ -106,6 +106,7 @@ library
 
   exposed-modules:
     Data.Macaw.RISCV.Symbolic
+    Data.Macaw.RISCV.Symbolic.Regs
   other-modules:
     Data.Macaw.RISCV.Symbolic.AtomWrapper
     Data.Macaw.RISCV.Symbolic.Functions
