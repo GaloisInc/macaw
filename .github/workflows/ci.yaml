@@ -164,6 +164,10 @@ jobs:
       if: runner.os == 'Linux'
       run: cabal test pkg:macaw-riscv-symbolic
 
+    - name: Test macaw-riscv-syntax
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-riscv-syntax
+
     - name: Build macaw-refinement
       run: cabal build pkg:macaw-refinement
 
