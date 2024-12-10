@@ -1,0 +1,8 @@
+(defun @id ((regs RISCV32Regs)) RISCV32Regs
+   (start start: (return regs)))
+
+id
+%0
+  % 3:5
+  return $0
+  % no postdom

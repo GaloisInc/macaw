@@ -9,6 +9,7 @@ packages: base/
           macaw-ppc-syntax/
           macaw-riscv/
           macaw-riscv-symbolic/
+          macaw-riscv-syntax/
           macaw-x86-cli/
           macaw-x86-syntax/
           x86/
