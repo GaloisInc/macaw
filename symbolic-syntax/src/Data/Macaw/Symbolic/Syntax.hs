@@ -175,26 +175,18 @@ extensionParser wrappers hooks =
         -- Pointer reads are a special case because we must parse the type of
         -- the value to read as well as the endianness of the read before
         -- parsing the additional arguments as Atoms.
-        LCSM.depCons LCSC.isType $ \(Some tp) ->
-          LCSM.depCons LCSC.atomName $ \endiannessName ->
-            case endiannessFromAtomName endiannessName of
-              Just endianness ->
-                let readWrapper =
-                      buildPointerReadWrapper tp endianness in
-                go (SomeExtensionWrapper readWrapper)
-              Nothing -> empty
+        LCSM.depCons LCSC.isType $ \(Some tp) -> do
+          LCSM.depCons endianness $ \end ->
+            let readWrapper = buildPointerReadWrapper tp end in
+            go (SomeExtensionWrapper readWrapper)
       LCSA.AtomName "pointer-write" -> do
         -- Pointer writes are a special case because we must parse the type of
         -- the value to write out as well as the endianness of the write before
         -- parsing the additional arguments as Atoms.
         LCSM.depCons LCSC.isType $ \(Some tp) ->
-          LCSM.depCons LCSC.atomName $ \endiannessName ->
-            case endiannessFromAtomName endiannessName of
-              Just endianness ->
-                let writeWrapper =
-                      buildPointerWriteWrapper tp endianness in
-                go (SomeExtensionWrapper writeWrapper)
-              Nothing -> empty
+          LCSM.depCons endianness $ \end ->
+            let writeWrapper = buildPointerWriteWrapper tp end in
+            go (SomeExtensionWrapper writeWrapper)
       LCSA.AtomName "bv-typed-literal" -> do
         -- Bitvector literals with a type argument are a special case.  We must
         -- parse the type argument separately before parsing the remaining
@@ -223,12 +215,13 @@ extensionParser wrappers hooks =
       return (Some endAtom)
 
     -- Parse an 'LCSA.AtomName' representing an endianness into a
-    -- 'Maybe DMM.Endianness'
-    endiannessFromAtomName endianness =
-      case endianness of
-        LCSA.AtomName "le" -> Just DMM.LittleEndian
-        LCSA.AtomName "be" -> Just DMM.BigEndian
-        _ -> Nothing
+    -- 'DMM.Endianness'
+    endianness = do
+      LCSA.AtomName nm <- LCSC.atomName
+      case nm of
+        "le" -> pure DMM.LittleEndian
+        "be" -> pure DMM.BigEndian
+        _ -> empty
 
 -- | Wrap a statement extension binary operator
 binop :: (KnownNat w, Monad m)
