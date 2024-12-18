@@ -28,6 +28,10 @@ all: $(patsubst %.c,%-a32.exe,$(wildcard *.c)) $(patsubst %.c,%-t32.exe,$(wildca
 %-mixed.s: %-mixed.c
 	$(A32CC) -fno-stack-protector -S -c $< -o $@
 
+# doesn't work with arm-none-eabi
+test-empty-section-a32.exe: test-empty-section.c
+	arm-linux-gnueabi-gcc -nostartfiles -O2 -static $< -o $@
+
 syscall.o: syscall.s
 	$(A32AS) $< -o $@
 
