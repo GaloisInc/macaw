@@ -48,6 +48,7 @@ executable macaw-x86-dump
     base,
     containers,
     macaw-x86,
+    macaw-loader-x86,
     macaw-x86-symbolic,
     macaw-dump,
     macaw-symbolic

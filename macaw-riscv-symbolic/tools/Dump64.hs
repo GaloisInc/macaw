@@ -3,6 +3,7 @@
 
 module Main (main) where
 
+import Data.Macaw.BinaryLoader.RISCV ()
 import Data.Macaw.Dump qualified as MD
 import Data.Macaw.RISCV qualified as MR
 import Data.Macaw.RISCV.Symbolic ()

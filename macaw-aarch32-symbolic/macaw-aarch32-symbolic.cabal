@@ -57,6 +57,7 @@ executable macaw-aarch32-dump
     macaw-aarch32,
     macaw-aarch32-symbolic,
     macaw-dump,
+    macaw-loader-aarch32,
     macaw-symbolic
 
 test-suite macaw-aarch32-symbolic-tests
