@@ -16,25 +16,33 @@ import Data.Macaw.CFG.Core qualified as MC
 import Data.Macaw.Dump.CLIUtils qualified as MDCU
 import Data.Macaw.Memory.LoadCommon qualified as LC
 import Data.Macaw.Memory qualified as MM
+import Data.Word (Word64)
 import Options.Applicative qualified as Opt
 
 data MemoryConfig
   = MemoryConfig
-    { memBinPath :: FilePath
+    { memLoadOffset :: Maybe Word64
+    , memBinPath :: FilePath
     }
+
+loadOffsetOpt :: Opt.Parser Word64
+loadOffsetOpt = Opt.option Opt.auto opts
+  where
+  opts =
+    mconcat
+    [ Opt.long "offset"
+    , Opt.help "base offset at which to load the file"
+    , Opt.showDefault
+    ]
 
 memoryConfig :: Opt.Parser MemoryConfig
 memoryConfig =
   MemoryConfig
-  <$> MDCU.binOpt
+  <$> Opt.optional loadOffsetOpt
+  <*> MDCU.binOpt
 
--- Currently, we do not apply any offsets to addresses in the loaded binary. We
--- will need to reconsider this if we want to support shared libraries.
-loadOptions :: LC.LoadOptions
-loadOptions =
-  LC.LoadOptions
-    { LC.loadOffset = Nothing
-    }
+loadOptions :: MemoryConfig -> LC.LoadOptions
+loadOptions cfg = LC.LoadOptions { LC.loadOffset = memLoadOffset cfg }
 
 memory ::
   forall arch.
@@ -46,6 +54,7 @@ memory ::
   IO ()
 memory archInfo cfg = do
   ehi <- MDCU.loadElf archInfo (memBinPath cfg)
-  loaded <- Loader.loadBinary @arch loadOptions ehi
+  let loadOpts = loadOptions cfg
+  loaded <- Loader.loadBinary @arch loadOpts ehi
   let mem = Loader.memoryImage loaded
   print mem
