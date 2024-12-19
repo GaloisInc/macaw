@@ -21,6 +21,7 @@ packages: base/
           deps/macaw-loader/macaw-loader
           deps/macaw-loader/macaw-loader-aarch32
           deps/macaw-loader/macaw-loader-ppc
+          deps/macaw-loader/macaw-loader-riscv
           deps/macaw-loader/macaw-loader-x86
           deps/semmc/semmc/
           deps/semmc/semmc-ppc/
