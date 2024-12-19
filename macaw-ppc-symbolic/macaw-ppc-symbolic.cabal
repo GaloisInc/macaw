@@ -53,6 +53,7 @@ executable macaw-ppc-dump
     elf-edit,
     macaw-base,
     macaw-dump,
+    macaw-loader-ppc,
     macaw-ppc,
     macaw-ppc-symbolic,
     macaw-symbolic
