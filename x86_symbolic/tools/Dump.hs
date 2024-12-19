@@ -3,6 +3,7 @@
 
 module Main (main) where
 
+import Data.Macaw.BinaryLoader.X86 ()
 import Data.Macaw.Dump qualified as MD
 import Data.Macaw.Symbolic qualified as MS
 import Data.Macaw.X86 qualified as MX

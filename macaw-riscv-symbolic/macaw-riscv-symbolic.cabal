@@ -123,6 +123,7 @@ executable macaw-riscv32-dump
     containers,
     grift,
     macaw-dump,
+    macaw-loader-riscv,
     macaw-riscv,
     macaw-riscv-symbolic,
     macaw-symbolic
@@ -137,6 +138,7 @@ executable macaw-riscv64-dump
     containers,
     grift,
     macaw-dump,
+    macaw-loader-riscv,
     macaw-riscv,
     macaw-riscv-symbolic,
     macaw-symbolic

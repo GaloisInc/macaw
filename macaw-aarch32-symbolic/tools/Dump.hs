@@ -14,6 +14,7 @@ module Main (main) where
 import Data.Macaw.ARM.ARMReg ()
 import Data.Macaw.AArch32.Symbolic ()
 import Data.Macaw.ARM qualified as MA
+import Data.Macaw.BinaryLoader.AArch32 ()
 import Data.Macaw.Dump qualified as MD
 import Data.Macaw.Symbolic qualified as MS
 import Data.Proxy (Proxy(..))
