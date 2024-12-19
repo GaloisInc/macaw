@@ -5,6 +5,7 @@
 module Main (main) where
 
 import Data.ElfEdit qualified as EE
+import Data.Macaw.BinaryLoader.PPC ()
 import Data.Macaw.Dump qualified as MD
 import Data.Macaw.Memory.ElfLoader.PLTStubs qualified as MMEP
 import Data.Macaw.PPC qualified as PPC

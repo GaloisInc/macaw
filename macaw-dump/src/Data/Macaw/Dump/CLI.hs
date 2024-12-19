@@ -10,11 +10,13 @@ module Data.Macaw.Dump.CLI
 
 import Control.Applicative ((<**>))
 import Data.Macaw.Dump.Discover qualified as MDD
+import Data.Macaw.Dump.Memory qualified as MDM
 import Data.Macaw.Dump.Plt qualified as MDP
 import Options.Applicative qualified as Opt
 
 data Command
   = CommandDiscover MDD.DiscoverConfig
+  | CommandMemory MDM.MemoryConfig
   | CommandPlt MDP.PltConfig
 
 command :: Opt.Parser Command
@@ -22,6 +24,7 @@ command =
   Opt.subparser $
     mconcat
     [ cmdDiscover
+    , cmdMemory
     , cmdPlt
     ]
   where
@@ -30,6 +33,12 @@ command =
     Opt.command
       "discover"
       (Opt.info (CommandDiscover <$> MDD.discoverConfig) (Opt.progDesc "Perform code discovery and print CFGs"))
+
+  cmdMemory :: Opt.Mod Opt.CommandFields Command
+  cmdMemory = do
+    Opt.command
+      "memory"
+      (Opt.info (CommandMemory <$> MDM.memoryConfig) (Opt.progDesc "Print program memory"))
 
   cmdPlt :: Opt.Mod Opt.CommandFields Command
   cmdPlt = do
