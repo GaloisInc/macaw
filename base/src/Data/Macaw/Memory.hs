@@ -887,11 +887,11 @@ segmentSize = contentsSize . segmentContents
 -- | Pretty print a memory segment.
 ppMemSegment :: MemWidth w => MemSegment w -> Doc ann
 ppMemSegment s =
-  indent 2 $ vcat [ "base   =" <+> viaShow (segmentBase s)
-                  , "offset =" <+> viaShow (segmentOffset s)
-                  , "flags  =" <+> viaShow (segmentFlags s)
-                  , "size   =" <+> viaShow (segmentSize s)
-                  ]
+  align $ vcat [ "base   =" <+> viaShow (segmentBase s)
+               , "offset =" <+> viaShow (segmentOffset s)
+               , "flags  =" <+> viaShow (segmentFlags s)
+               , "size   =" <+> viaShow (segmentSize s)
+               ]
 
 instance MemWidth w => Show (MemSegment w) where
   show = show . ppMemSegment
@@ -961,7 +961,7 @@ memSegments :: Memory w -> [MemSegment w]
 memSegments m = concatMap Map.elems (Map.elems (memSegmentMap m))
 
 instance MemWidth w => Show (Memory w) where
-  show = show . memSegments
+  show = show . list . map ppMemSegment . memSegments
 
 -- | Return the number of bytes in an address.
 memWidth :: Memory w -> NatRepr w
