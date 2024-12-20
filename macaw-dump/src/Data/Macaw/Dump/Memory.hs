@@ -83,7 +83,7 @@ ppMemContent ::
 ppMemContent mem =
   PP.vcat (map (uncurry printChunk) (MM.relativeSegmentContents (MM.memSegments mem)))
   where
-  -- l = the max textual length of a MemAddr (assuming < 10 regions)
+  -- l = the max textual length of a 64-bit MemAddr (assuming < 10 regions)
   l = length "segmentN+0x0000000000000000"
   padr s =
     PP.hcat
