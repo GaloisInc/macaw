@@ -730,13 +730,9 @@ getDenominator dw sym op macawDenom = do
      assert bak denNotZero (C.AssertFailureSimError errMsg "")
   pure den
 
--- | Performs a simple unsigned division operation.
+-- | Performs unsigned division, i.e., the @div@ instruction.
 --
--- The x86 numerator is twice the size as the denominator.
---
--- This function is only reponsible for the dividend (not any
--- remainder--see uRem for that), and any divide-by-zero exception was
--- already handled via an Assert.
+-- Asserts that the denominator is not zero and the quotient doesn't overflow.
 uDivRem :: forall sym bak w
         .  (IsSymBackend sym bak)
         => Sym sym bak
@@ -767,7 +763,7 @@ uDivRem sym repsz macawNum1 macawNum2 macawDenom =
     do let qExt' = app (BVZext nw dw (ValBV dw qBV))
        qNoOverflow <- evalApp sym $ BVEq nw (ValBV nw qExt) qExt'
        let errMsg = "div: quotient overflowed"
-       assert bak qNoOverflow (C.AssertFailureSimError errMsg)
+       assert bak qNoOverflow (C.AssertFailureSimError errMsg "")
     -- Get quotient
     q <- llvmPointer_bv symi qBV
     -- Get remainder
@@ -777,6 +773,9 @@ uDivRem sym repsz macawNum1 macawNum2 macawDenom =
       llvmPointer_bv symi (rv :: RegValue sym (BVType w))
     mkPair sym q r
 
+-- | Performs signed division, i.e., the @idiv@ instruction.
+--
+-- Asserts that the denominator is not zero and the quotient doesn't overflow.
 sDivRem :: forall sym bak w
         .  (IsSymBackend sym bak)
         => Sym sym bak
