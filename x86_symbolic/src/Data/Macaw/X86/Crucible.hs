@@ -717,16 +717,17 @@ getDenominator :: (IsSymBackend sym bak)
                     => 1 <= w
                     => NatRepr w
                     -> Sym sym bak
+                    -> String -- ^ What operation was this?
                     -> AtomWrapper (RegEntry sym) (M.BVType w)
                     -> IO (E sym (BVType w))
-getDenominator dw sym macawDenom = do
+getDenominator dw sym op macawDenom = do
   let bak = symBackend sym
   den <- getBitVal bak macawDenom
   -- Check denominator is not 0
   do let bvZ = app (BVLit dw (BV.zero dw))
      denNotZero <- evalApp sym $ Not (app (BVEq dw den bvZ))
-     let errMsg = "denominator not zero"
-     assert bak denNotZero (C.AssertFailureSimError errMsg (errMsg ++ " in Data.Macaw.X86.Crucible.getDenominator"))
+     let errMsg = op ++ ": denominator was zero"
+     assert bak denNotZero (C.AssertFailureSimError errMsg "")
   pure den
 
 -- | Performs a simple unsigned division operation.
@@ -755,7 +756,7 @@ uDivRem sym repsz macawNum1 macawNum2 macawDenom =
     -- Get numerator
     numExt <- getNumerator dw sym macawNum1 macawNum2
     -- Get denominator
-    den <- getDenominator dw sym macawDenom
+    den <- getDenominator dw sym "div" macawDenom
     -- Get extended denominator
     denExt <- evalApp sym $ BVZext nw dw den
     -- Get extended quotient
@@ -765,8 +766,8 @@ uDivRem sym repsz macawNum1 macawNum2 macawDenom =
     -- Check quotient did not overflow.
     do let qExt' = app (BVZext nw dw (ValBV dw qBV))
        qNoOverflow <- evalApp sym $ BVEq nw (ValBV nw qExt) qExt'
-       let errMsg = "quotient no overflow"
-       assert bak qNoOverflow (C.AssertFailureSimError errMsg (errMsg ++ " in Data.Macaw.X86.Crucible.uDivRem"))
+       let errMsg = "div: quotient overflowed"
+       assert bak qNoOverflow (C.AssertFailureSimError errMsg)
     -- Get quotient
     q <- llvmPointer_bv symi qBV
     -- Get remainder
@@ -795,7 +796,7 @@ sDivRem sym repsz macawNum1 macawNum2 macawDenom =
     -- Get numerator
     numExt <- getNumerator dw sym macawNum1 macawNum2
     -- Get denominator
-    den <- getDenominator dw sym macawDenom
+    den <- getDenominator dw sym "idiv" macawDenom
     -- Get extended denominator
     denExt <- evalApp sym $ BVSext nw dw den
     -- Get extended quotient
@@ -805,8 +806,8 @@ sDivRem sym repsz macawNum1 macawNum2 macawDenom =
     -- Check quotient did not overflow.
     do let qExt' = app (BVSext nw dw (ValBV dw qBV))
        qNoOverflow <- evalApp sym $ BVEq nw (ValBV nw qExt) qExt'
-       let errMsg = "quotient no overflow"
-       assert bak qNoOverflow (C.AssertFailureSimError errMsg (errMsg ++ " in Data.Macaw.X86.Crucible.sDivRem"))
+       let errMsg = "idiv: quotient overflowed"
+       assert bak qNoOverflow (C.AssertFailureSimError errMsg "")
     -- Get quotient
     q <- llvmPointer_bv symi qBV
     -- Get remainder
