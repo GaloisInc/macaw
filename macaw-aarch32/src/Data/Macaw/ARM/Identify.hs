@@ -92,7 +92,7 @@ identifyCall :: MM.Memory (MC.ArchAddrWidth ARM.AArch32)
              -> Maybe (Seq.Seq (MC.Stmt ARM.AArch32 ids), MC.ArchSegmentOff ARM.AArch32)
 identifyCall mem stmts0 rs
   | not (null stmts0)
-  , Just retVal <- isValidReturnAddress (rs ^. MC.boundValue AR.arm_LR)
+  , Just retVal <- isValidReturnAddress (rs ^. MC.boundValue AR.lr)
   , Just retAddrVal <- MC.valueAsMemAddr retVal
   , Just retAddr <- MM.asSegmentOff mem retAddrVal =
       Just (stmts0, retAddr)
@@ -303,7 +303,7 @@ identifyConditionalCall
 identifyConditionalCall mem stmts s
   | not (null stmts)
   , Just (MC.Mux _ pc_c pc_t pc_f) <- simplifiedMux (s ^. MC.boundValue MC.ip_reg)
-  , Just (MC.Mux _ _lr_c lr_t lr_f) <- simplifiedMux (s ^. MC.boundValue AR.arm_LR) =
+  , Just (MC.Mux _ _lr_c lr_t lr_f) <- simplifiedMux (s ^. MC.boundValue AR.lr) =
       case asConditionalCallReturnAddress mem pc_t lr_f of
         MAI.ClassifySucceeded _ nextIP ->
           return (pc_c, pc_f, lr_f, nextIP, CallsOnFalse, stmts)

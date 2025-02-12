@@ -16,7 +16,24 @@
 
 module Data.Macaw.ARM.ARMReg
     ( ARMReg(..)
-    , arm_LR
+    , r0
+    , r1
+    , r2
+    , r3
+    , r4
+    , r5
+    , r6
+    , r7
+    , r8
+    , r9
+    , r10
+    , r11
+    , r12
+    , r13
+    , sp
+    , r14
+    , lr
+    , pc
     , branchTaken
     , linuxSystemCallPreservedRegisters
     , locToRegTH
@@ -107,9 +124,67 @@ locToRegTH (SA.Location globalRef) = do
       [| ARMDummyReg |]
     _tp -> [| error $ "locToRegTH undefined for unrecognized location: " <> $(return $ TH.LitE (TH.StringL refName)) |]
 
+r0 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r0 = ARMGlobalBV (ASL.knownGlobalRef @"_R0")
+
+r1 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r1 = ARMGlobalBV (ASL.knownGlobalRef @"_R1")
+
+r2 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r2 = ARMGlobalBV (ASL.knownGlobalRef @"_R2")
+
+r3 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r3 = ARMGlobalBV (ASL.knownGlobalRef @"_R3")
+
+r4 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r4 = ARMGlobalBV (ASL.knownGlobalRef @"_R4")
+
+r5 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r5 = ARMGlobalBV (ASL.knownGlobalRef @"_R5")
+
+r6 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r6 = ARMGlobalBV (ASL.knownGlobalRef @"_R6")
+
+r7 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r7 = ARMGlobalBV (ASL.knownGlobalRef @"_R7")
+
+r8 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r8 = ARMGlobalBV (ASL.knownGlobalRef @"_R8")
+
+r9 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r9 = ARMGlobalBV (ASL.knownGlobalRef @"_R9")
+
+r10 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r10 = ARMGlobalBV (ASL.knownGlobalRef @"_R10")
+
+r11 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r11 = ARMGlobalBV (ASL.knownGlobalRef @"_R11")
+
+r12 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r12 = ARMGlobalBV (ASL.knownGlobalRef @"_R12")
+
+-- | GPR13 is the stack pointer for ARM
+--
+-- Alias of 'r13'
+sp :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+sp = ARMGlobalBV (ASL.knownGlobalRef @"_R13")
+
+-- | Alias of 'sp'
+r13 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r13 = sp
+
 -- | GPR14 is the link register for ARM
-arm_LR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
-arm_LR = ARMGlobalBV (ASL.knownGlobalRef @"_R14")
+-- 
+-- Alias of 'r14'
+lr :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+lr = ARMGlobalBV (ASL.knownGlobalRef @"_R14")
+
+-- | Alias of 'lr'.
+r14 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r14 = lr
+
+pc :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+pc = ARMGlobalBV (ASL.knownGlobalRef @"_PC")
 
 branchTaken :: ARMReg MT.BoolType
 branchTaken = ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")
