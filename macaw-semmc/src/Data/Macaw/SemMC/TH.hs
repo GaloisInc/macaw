@@ -889,8 +889,8 @@ defaultAppEvaluator endianness elt interps = case elt of
   S.NotPred bool -> do
     e <- addEltTH endianness interps bool
     liftQ $ joinPure1 [| addApp |] [| M.NotApp |] e
-  S.ConjPred boolmap -> do
-    l <- boolMapList (addEltTH endianness interps) boolmap
+  S.ConjPred conj -> do
+    l <- conjList (addEltTH endianness interps) conj
     case all (\(bnd,_) -> isEager bnd) l of
       True -> do
         tms <- liftQ $ listE $ map (\(bnd, b) -> (tupE [refEager bnd, lift b])) l
@@ -1106,15 +1106,15 @@ joinPreds vs = do
 
 
 
-boolMapList :: (forall tp. S.Expr t tp -> MacawQ arch t fs BoundExp)
-            -> BooM.BoolMap (S.Expr t)
+conjList :: (forall tp. S.Expr t tp -> MacawQ arch t fs BoundExp)
+            -> BooM.ConjMap (S.Expr t)
             -> MacawQ arch t fs [(BoundExp, Bool)]
-boolMapList f bm = case BooM.viewBoolMap bm of
-  BooM.BoolMapUnit -> return []
-  BooM.BoolMapDualUnit -> do
+conjList f bm = case BooM.viewConjMap bm of
+  BooM.ConjTrue -> return []
+  BooM.ConjFalse -> do
     bnd <- EagerBoundExp <$> liftQ [| M.BoolValue False |]
     return $ [(bnd, True)]
-  BooM.BoolMapTerms ts -> liftM NE.toList $ forM ts $ \(e, p) -> do
+  BooM.Conjuncts ts -> liftM NE.toList $ forM ts $ \(e, p) -> do
     eE <- f e
     return $ (eE, p == BooM.Positive)
 

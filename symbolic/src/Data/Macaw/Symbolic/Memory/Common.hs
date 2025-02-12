@@ -295,7 +295,8 @@ assumeMemArr bak symArray absAddr bytes = do
       return (eq_pred : bmvals)
     let desc = printf "Bytes@[addr=%s,nbytes=%s]" (show absAddr) (show (F.toList bytes))
     prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
-    byteEqualityAssertion <- liftIO $ WEB.sbMakeExpr sym (WEA.ConjPred (BoolMap.fromVars [(e, BoolMap.Positive) | e <- initVals]))
+    let conj = WEA.ConjPred (BoolMap.ConjMap (BoolMap.fromVars [(e, BoolMap.Positive) | e <- initVals]))
+    byteEqualityAssertion <- liftIO $ WEB.sbMakeExpr sym conj
     liftIO $ CB.addAssumption bak (CB.GenericAssumption prog_loc desc byteEqualityAssertion)
   where
     sym = CB.backendGetSym bak
