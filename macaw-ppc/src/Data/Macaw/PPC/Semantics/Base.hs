@@ -60,7 +60,7 @@ crucAppToExpr :: (M.ArchConstraints (SP.AnyPPC v), MSS.SimplifierExtension (SP.A
                  S.App (S.Expr t) ctp
               -> Generator (SP.AnyPPC v) ids s (Expr (SP.AnyPPC v) ids (FromCrucibleBaseType ctp))
 crucAppToExpr (S.NotPred bool) = AppExpr . M.NotApp <$> addElt bool
-crucAppToExpr (S.ConjPred boolmap) = evalBoolMap AndOp True boolmap
+crucAppToExpr (S.ConjPred (BooM.ConjMap boolmap)) = evalBoolMap AndOp True boolmap
 crucAppToExpr (S.BaseIte bt _ test t f) = AppExpr <$>
   case bt of
     S.BaseBoolRepr ->
