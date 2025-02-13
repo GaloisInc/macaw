@@ -652,22 +652,20 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
       ARMDis.SVC_A1 ->
         case operands of
           ARMDis.Bv4 _opPred ARMDis.:< ARMDis.Bv24 imm ARMDis.:< ARMDis.Nil -> Just $ do
-            let r0 = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R0")
-            let r1 = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R1")
-            sc <- ARMSyscall imm <$> G.getRegVal r0
-                                 <*> G.getRegVal r1
-                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R2"))
-                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R3"))
-                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R4"))
-                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R5"))
-                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R6"))
-                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R7"))
+            sc <- ARMSyscall imm <$> G.getRegVal ARMReg.r0
+                                 <*> G.getRegVal ARMReg.r1
+                                 <*> G.getRegVal ARMReg.r2
+                                 <*> G.getRegVal ARMReg.r3
+                                 <*> G.getRegVal ARMReg.r4
+                                 <*> G.getRegVal ARMReg.r5
+                                 <*> G.getRegVal ARMReg.r6
+                                 <*> G.getRegVal ARMReg.r7
             res <- G.addExpr =<< evalArchFn sc
             -- res is a tuple of form (R1, R0).  This is reversed from the
             -- user provided return Assignment of empty :> R0 :> R1 because
             -- the conversion from Assignment to Tuple reversed the order.
-            G.setRegVal r1 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index0))
-            G.setRegVal r0 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index1))
+            G.setRegVal ARMReg.r1 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index0))
+            G.setRegVal ARMReg.r0 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index1))
 
             -- Increment the PC; we don't get the normal PC increment from the
             -- ASL semantics, since we are intercepting them to just add this statement
@@ -702,8 +700,6 @@ t32InstructionMatcher (ThumbDis.Instruction opc operands) =
       ThumbDis.SVC_T1 ->
         case operands of
           ThumbDis.Bv8 imm8 ThumbDis.:< ThumbDis.Nil -> Just $ do
-            let r0 = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R0")
-            let r1 = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R1")
 
             -- Thumb uses an 8 bit immediate instead of the 24 used in ARM
             -- syscalls. The kernel can't tell the difference between which
@@ -711,20 +707,20 @@ t32InstructionMatcher (ThumbDis.Instruction opc operands) =
             -- so we can just zero extend the immediate value and use the same
             -- syscall representation in macaw
             let imm24 = zeroExtend imm8 (NR.knownNat @24)
-            sc <- ARMSyscall imm24 <$> G.getRegVal r0
-                                   <*> G.getRegVal r1
-                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R2"))
-                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R3"))
-                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R4"))
-                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R5"))
-                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R6"))
-                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R7"))
+            sc <- ARMSyscall imm24 <$> G.getRegVal ARMReg.r0
+                                   <*> G.getRegVal ARMReg.r1
+                                   <*> G.getRegVal ARMReg.r2
+                                   <*> G.getRegVal ARMReg.r3
+                                   <*> G.getRegVal ARMReg.r4
+                                   <*> G.getRegVal ARMReg.r5
+                                   <*> G.getRegVal ARMReg.r6
+                                   <*> G.getRegVal ARMReg.r7
             res <- G.addExpr =<< evalArchFn sc
             -- res is a tuple of form (R1, R0).  This is reversed from the
             -- user provided return Assignment of empty :> R0 :> R1 because
             -- the conversion from Assignment to Tuple reversed the order.
-            G.setRegVal r1 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index0))
-            G.setRegVal r0 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index1))
+            G.setRegVal ARMReg.r1 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index0))
+            G.setRegVal ARMReg.r0 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index1))
 
             -- Increment the PC; we don't get the normal PC increment from the
             -- ASL semantics, since we are intercepting them to just add this statement

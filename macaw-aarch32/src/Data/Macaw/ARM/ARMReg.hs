@@ -228,8 +228,8 @@ instance ( 1 <= MC.RegAddrWidth ARMReg
          ) =>
     MC.RegisterInfo ARMReg where
       archRegs = armRegs
-      sp_reg = ARMGlobalBV (ASL.knownGlobalRef @"_R13")
-      ip_reg = ARMGlobalBV (ASL.knownGlobalRef @"_PC")
+      sp_reg = sp
+      ip_reg = pc
       syscall_num_reg = error "TODO: MC.RegisterInfo ARMReg syscall_num_reg undefined"
       syscallArgumentRegs = error "TODO: MC.RegisterInfo ARMReg syscallArgumentsRegs undefined"
 
@@ -261,14 +261,14 @@ armRegs = FC.toListFC asARMReg ( FC.fmapFC ASL.SimpleGlobalRef ASL.simpleGlobalR
 -- assumption).
 linuxSystemCallPreservedRegisters :: Set.Set (Some ARMReg)
 linuxSystemCallPreservedRegisters =
-  Set.fromList [ Some (ARMGlobalBV (ASL.knownGlobalRef @"_R8"))
-               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R9"))
-               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R10"))
-               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R11"))
-               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R12"))
-               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R13"))
-               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R14"))
-               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_PC"))
+  Set.fromList [ Some r8
+               , Some r9
+               , Some r10
+               , Some r11
+               , Some r12
+               , Some r13
+               , Some r14
+               , Some pc
                , Some (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T"))
                ]
   -- Currently, we are only considering the non-volatile GPRs.  There
@@ -279,22 +279,22 @@ branchTakenReg :: ARMReg MT.BoolType
 branchTakenReg = ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")
 
 integerToReg :: Integer -> Maybe (ARMReg (MT.BVType 32))
-integerToReg 0  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R0")
-integerToReg 1  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R1")
-integerToReg 2  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R2")
-integerToReg 3  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R3")
-integerToReg 4  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R4")
-integerToReg 5  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R5")
-integerToReg 6  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R6")
-integerToReg 7  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R7")
-integerToReg 8  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R8")
-integerToReg 9  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R9")
-integerToReg 10 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R10")
-integerToReg 11 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R11")
-integerToReg 12 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R12")
-integerToReg 13 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R13")
-integerToReg 14 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R14")
-integerToReg 15 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_PC")
+integerToReg 0  = Just $ r0
+integerToReg 1  = Just $ r1
+integerToReg 2  = Just $ r2
+integerToReg 3  = Just $ r3
+integerToReg 4  = Just $ r4
+integerToReg 5  = Just $ r5
+integerToReg 6  = Just $ r6
+integerToReg 7  = Just $ r7
+integerToReg 8  = Just $ r8
+integerToReg 9  = Just $ r9
+integerToReg 10 = Just $ r10
+integerToReg 11 = Just $ r11
+integerToReg 12 = Just $ r12
+integerToReg 13 = Just $ r13
+integerToReg 14 = Just $ r14
+integerToReg 15 = Just $ pc
 integerToReg _  = Nothing
 
 integerToSIMDReg :: Integer -> Maybe (ARMReg (MT.BVType 128))
