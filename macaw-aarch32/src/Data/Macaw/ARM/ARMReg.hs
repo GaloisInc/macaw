@@ -202,13 +202,13 @@ instance MC.PrettyF ARMReg where
   prettyF = PP.pretty . showF
 
 instance EqF ARMReg where
-  r1 `eqF` r2 = isJust (r1 `testEquality` r2)
+  reg1 `eqF` reg2 = isJust (reg1 `testEquality` reg2)
 
 instance Eq (ARMReg tp) where
-  r1 == r2 = r1 `eqF` r2
+  reg1 == reg2 = reg1 `eqF` reg2
 
 instance Ord (ARMReg tp) where
-  r1 `compare` r2 = toOrdering (r1 `compareF` r2)
+  reg1 `compare` reg2 = toOrdering (reg1 `compareF` reg2)
 
 
 instance MT.HasRepr ARMReg MT.TypeRepr where
