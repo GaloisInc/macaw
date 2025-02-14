@@ -157,11 +157,25 @@ r9 = ARMGlobalBV (ASL.knownGlobalRef @"_R9")
 r10 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
 r10 = ARMGlobalBV (ASL.knownGlobalRef @"_R10")
 
-r11 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
-r11 = ARMGlobalBV (ASL.knownGlobalRef @"_R11")
+-- | GRP11 is the frame pointer for ARM
+--
+-- Alias of 'r11'
+fp :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+fp = ARMGlobalBV (ASL.knownGlobalRef @"_R11")
 
+-- | Alias of 'fp'
+r11 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r11 = fp
+
+-- | GRP12 is the intra-procedure call scratch register for ARM
+--
+-- Alias of 'r12
+ip :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+ip = ARMGlobalBV (ASL.knownGlobalRef @"_R12")
+
+-- | Alias of 'ip'
 r12 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
-r12 = ARMGlobalBV (ASL.knownGlobalRef @"_R12")
+r12 = ip
 
 -- | GPR13 is the stack pointer for ARM
 --
@@ -174,7 +188,7 @@ r13 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
 r13 = sp
 
 -- | GPR14 is the link register for ARM
--- 
+--
 -- Alias of 'r14'
 lr :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
 lr = ARMGlobalBV (ASL.knownGlobalRef @"_R14")
@@ -183,8 +197,15 @@ lr = ARMGlobalBV (ASL.knownGlobalRef @"_R14")
 r14 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
 r14 = lr
 
+-- | GPR15 is the program counter for ARM
+--
+-- Alias of 'r15'
 pc :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
 pc = ARMGlobalBV (ASL.knownGlobalRef @"_PC")
+
+-- | Alias of 'pc'.
+r15 :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
+r15 = pc
 
 branchTaken :: ARMReg MT.BoolType
 branchTaken = ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")
@@ -279,22 +300,22 @@ branchTakenReg :: ARMReg MT.BoolType
 branchTakenReg = ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")
 
 integerToReg :: Integer -> Maybe (ARMReg (MT.BVType 32))
-integerToReg 0  = Just $ r0
-integerToReg 1  = Just $ r1
-integerToReg 2  = Just $ r2
-integerToReg 3  = Just $ r3
-integerToReg 4  = Just $ r4
-integerToReg 5  = Just $ r5
-integerToReg 6  = Just $ r6
-integerToReg 7  = Just $ r7
-integerToReg 8  = Just $ r8
-integerToReg 9  = Just $ r9
-integerToReg 10 = Just $ r10
-integerToReg 11 = Just $ r11
-integerToReg 12 = Just $ r12
-integerToReg 13 = Just $ r13
-integerToReg 14 = Just $ r14
-integerToReg 15 = Just $ pc
+integerToReg 0  = Just r0
+integerToReg 1  = Just r1
+integerToReg 2  = Just r2
+integerToReg 3  = Just r3
+integerToReg 4  = Just r4
+integerToReg 5  = Just r5
+integerToReg 6  = Just r6
+integerToReg 7  = Just r7
+integerToReg 8  = Just r8
+integerToReg 9  = Just r9
+integerToReg 10 = Just r10
+integerToReg 11 = Just r11
+integerToReg 12 = Just r12
+integerToReg 13 = Just r13
+integerToReg 14 = Just r14
+integerToReg 15 = Just pc
 integerToReg _  = Nothing
 
 integerToSIMDReg :: Integer -> Maybe (ARMReg (MT.BVType 128))

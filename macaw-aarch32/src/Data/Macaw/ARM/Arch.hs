@@ -669,10 +669,9 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
 
             -- Increment the PC; we don't get the normal PC increment from the
             -- ASL semantics, since we are intercepting them to just add this statement
-            let pc = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_PC")
-            pc_orig <- G.getRegVal pc
+            pc_orig <- G.getRegVal ARMReg.pc
             pc_next <- G.addExpr (G.AppExpr (MC.BVAdd NR.knownNat pc_orig (MC.BVValue NR.knownNat 4)))
-            G.setRegVal pc pc_next
+            G.setRegVal ARMReg.pc pc_next
 
             G.finishWithTerminator MCB.FetchAndExecute
       _ | isUninterpretedOpcode opc -> Just $ do
@@ -724,10 +723,9 @@ t32InstructionMatcher (ThumbDis.Instruction opc operands) =
 
             -- Increment the PC; we don't get the normal PC increment from the
             -- ASL semantics, since we are intercepting them to just add this statement
-            let pc = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_PC")
-            pc_orig <- G.getRegVal pc
+            pc_orig <- G.getRegVal ARMReg.pc
             pc_next <- G.addExpr (G.AppExpr (MC.BVAdd NR.knownNat pc_orig (MC.BVValue NR.knownNat 2)))
-            G.setRegVal pc pc_next
+            G.setRegVal ARMReg.pc pc_next
 
             G.finishWithTerminator MCB.FetchAndExecute
 
