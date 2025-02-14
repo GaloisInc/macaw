@@ -28,11 +28,14 @@ module Data.Macaw.ARM.ARMReg
     , r9
     , r10
     , r11
+    , fp
     , r12
+    , ip
     , r13
     , sp
     , r14
     , lr
+    , r15
     , pc
     , branchTaken
     , linuxSystemCallPreservedRegisters
