@@ -105,7 +105,7 @@ mkInitialAbsState :: MM.Memory 32
                   -> MC.ArchSegmentOff ARM.AArch32
                   -> MA.AbsBlockState (MC.ArchReg ARM.AArch32)
 mkInitialAbsState _mem startAddr =
-  s0 & MA.absRegState . MC.boundValue AR.arm_LR .~ MA.ReturnAddr
+  s0 & MA.absRegState . MC.boundValue AR.lr .~ MA.ReturnAddr
      & MA.absRegState . MC.boundValue pstate_t_reg .~ MA.FinSet (Set.fromList [pstate_t_val])
   -- FIXME: Initialize every single global to macaw's "Initial" value
   where initRegVals = MapF.fromList []

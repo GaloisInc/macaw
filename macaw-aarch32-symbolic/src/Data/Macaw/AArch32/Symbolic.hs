@@ -278,7 +278,7 @@ aarch32GenTermStmt ts regs mfallthroughLabel =
       newRegsAtom <- MSB.mkAtom regsType
 
       let pcIdx = MSB.crucibleIndex (indexForReg MC.ip_reg)
-      let lrIdx = MSB.crucibleIndex (indexForReg MAR.arm_LR)
+      let lrIdx = MSB.crucibleIndex (indexForReg MAR.lr)
 
       let stmts = [ CR.DefineAtom initialRegsAtom $ CR.ReadReg regsReg
                   , CR.DefineAtom pcRegsAtom $ CR.EvalApp $ LCE.SetStruct tps initialRegsAtom pcIdx pc
