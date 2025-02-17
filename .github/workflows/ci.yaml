@@ -175,6 +175,9 @@ jobs:
       if: runner.os == 'Linux'
       run: cabal test pkg:macaw-refinement
 
+    - name: Build crucible-macaw-debug
+      run: cabal build pkg:crucible-macaw-debug
+
     - name: Build compare-dwarfdump
       run: cabal build compare-dwarfdump
 

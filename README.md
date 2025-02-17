@@ -53,6 +53,9 @@ The Macaw libraries are:
 * macaw-refinement -- Enables additional architecture-independent
   refinement of code discovery.  This can enable discovery of more
   functionality than is revealed by the analysis in macaw-base.
+* crucible-macaw-debug: Enables introspecting macaw-specific information when
+  using [crucible's interactive
+  debugger](https://github.com/GaloisInc/crucible/tree/master/crucible-debug).
 
 The libraries that make up Macaw are released under the BSD license.
 
