@@ -1,4 +1,5 @@
 packages: base/
+          crucible-macaw-debug/
           macaw-aarch32/
           macaw-aarch32-symbolic/
           macaw-aarch32-syntax/
@@ -36,6 +37,7 @@ packages: base/
           deps/dismantle/dismantle-thumb/
           deps/crucible/crucible/
           deps/crucible/crucible-cli/
+          deps/crucible/crucible-debug/
           deps/crucible/crucible-llvm/
           deps/crucible/crucible-llvm-syntax/
           deps/crucible/crucible-symio/
