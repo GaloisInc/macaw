@@ -102,7 +102,7 @@ jobs:
       run: cabal test pkg:macaw-symbolic-syntax
 
     - name: Build macaw-x86
-      run: cabal build pkg:macaw-x86 pkg:macaw-x86-symbolic
+      run: cabal build pkg:macaw-x86 pkg:macaw-x86-symbolic pkg:macaw-loader-x86
 
     - name: Test macaw-x86
       run: cabal test pkg:macaw-x86
@@ -123,7 +123,7 @@ jobs:
       run: cabal test pkg:macaw-x86-cli
 
     - name: Build macaw-aarch32
-      run: cabal build pkg:macaw-aarch32 pkg:macaw-aarch32-symbolic
+      run: cabal build pkg:macaw-aarch32 pkg:macaw-aarch32-symbolic pkg:macaw-loader-aarch32
     - name: Test macaw-aarch32
       run: cabal test pkg:macaw-aarch32
     - name: Test macaw-aarch32-symbolic
@@ -137,7 +137,7 @@ jobs:
       run: cabal test pkg:macaw-aarch32-syntax
 
     - name: Build macaw-ppc
-      run: cabal build pkg:macaw-ppc pkg:macaw-ppc-symbolic
+      run: cabal build pkg:macaw-ppc pkg:macaw-ppc-symbolic pkg:macaw-loader-ppc
 
     - name: Test macaw-ppc
       run: cabal test pkg:macaw-ppc
@@ -155,7 +155,7 @@ jobs:
       run: cabal test pkg:macaw-ppc-syntax
 
     - name: Build macaw-riscv
-      run: cabal build pkg:macaw-riscv pkg:macaw-riscv-symbolic
+      run: cabal build pkg:macaw-riscv pkg:macaw-riscv-symbolic pkg:macaw-loader-riscv
 
     - name: Test macaw-riscv
       run: cabal test pkg:macaw-riscv
