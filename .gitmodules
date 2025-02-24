@@ -19,9 +19,6 @@
 [submodule "submodules/dismantle"]
 	path = deps/dismantle
 	url = git@github.com:GaloisInc/dismantle.git
-[submodule "submodules/macaw-loader"]
-	path = deps/macaw-loader
-	url = git@github.com:GaloisInc/macaw-loader.git
 [submodule "deps/llvm-pretty-bc-parser"]
 	path = deps/llvm-pretty-bc-parser
 	url = https://github.com/GaloisInc/llvm-pretty-bc-parser
