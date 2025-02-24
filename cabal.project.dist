@@ -4,6 +4,11 @@ packages: base/
           macaw-aarch32-symbolic/
           macaw-aarch32-syntax/
           macaw-dump/
+          macaw-loader
+          macaw-loader-aarch32
+          macaw-loader-ppc
+          macaw-loader-riscv
+          macaw-loader-x86
           macaw-semmc/
           macaw-ppc/
           macaw-ppc-symbolic/
