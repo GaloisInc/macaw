@@ -7,7 +7,7 @@ license:             BSD3
 license-file:        LICENSE
 author:              Galois, Inc.
 maintainer:          kquick@galois.com
-copyright:           2018, Galois Inc.
+copyright:           2018-2025, Galois Inc.
 category:            Development
 build-type:          Simple
 extra-source-files:  ChangeLog.md
