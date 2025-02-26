@@ -1,0 +1,17 @@
+This library provides a uniform interface to load a binary (e.g. in
+ELF format) and get [[https://github.com/GaloisInc/macaw][macaw]] Memory and a list of entry points.
+
+This also helps extracting auxiliary information (e.g. the PPC
+TOC/Table-Of-Contents).  It tries to encapsulate a lot of the extra
+logic around entry point identification (like wanting to use the TOC
+on PowerPC).
+
+The 'binaryRepr' used here is not just a width in order to allow
+future support of a Mach-O and/or PE repr as well as the ELF format.
+
+* Hierarchy
+
+The modules in this repository should require macaw-base, and possibly
+semmc, but they should not require any higher-level macaw operations.
+These modules should be useable independently of or by the
+higher-level macaw modules.

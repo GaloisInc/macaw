@@ -1,0 +1,28 @@
+name:                macaw-loader-x86
+version:             0.1.0.0
+synopsis:            Library to load x86 binary images and get macaw Memory and entry points.
+-- description:
+homepage:            https://github.com/GaloisInc/macaw-loader/macaw-loader-x86
+license:             BSD3
+license-file:        LICENSE
+author:              Galois, Inc.
+maintainer:          kquick@galois.com
+copyright:           2018-2025, Galois Inc.
+category:            Development
+build-type:          Simple
+extra-source-files:  ChangeLog.md
+cabal-version:       >=1.10
+
+library
+  exposed-modules: Data.Macaw.BinaryLoader.X86
+  build-depends:       base >=4.9 && <5
+                     , bytestring
+                     , containers
+                     , elf-edit >= 0.39
+                     , exceptions
+                     , macaw-base
+                     , macaw-loader
+                     , macaw-x86
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+  ghc-options:         -Wall -Wcompat

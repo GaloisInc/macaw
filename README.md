@@ -50,6 +50,10 @@ The Macaw libraries are:
 * macaw-ppc-symbolic -- Enables Macaw/Crucible symbolic simulation for
   PPC architectures
 * macaw-riscv -- Enables Macaw for RISC-V (RV32GC and RV64GC variants) binaries.
+* macaw-loader -- Provides a uniform interface to load a binary (e.g., in ELF
+  format) and convert it into a Macaw-based memory and list of entry points.
+* macaw-loader-{aarch32,ppc,riscv,x86} -- Provides macaw-loader backends for the
+  ARM, PPC, RISC-V, and x86_64 architectures, respectively.
 * macaw-refinement -- Enables additional architecture-independent
   refinement of code discovery.  This can enable discovery of more
   functionality than is revealed by the analysis in macaw-base.

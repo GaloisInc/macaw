@@ -1,0 +1,29 @@
+name:                macaw-loader-riscv
+version:             0.1.0.0
+synopsis:            Library to load RISC-V binary images and get macaw Memory and entry points.
+-- description:
+homepage:            https://github.com/GaloisInc/macaw-loader/macaw-loader-riscv
+license:             BSD3
+license-file:        LICENSE
+author:              Galois, Inc.
+maintainer:          rscott@galois.com
+copyright:           2024-2025, Galois Inc.
+category:            Development
+build-type:          Simple
+extra-source-files:  ChangeLog.md
+cabal-version:       >=1.10
+
+library
+  exposed-modules:     Data.Macaw.BinaryLoader.RISCV
+  build-depends:       base >=4.9 && <5,
+                       bytestring,
+                       containers,
+                       elf-edit >= 0.39,
+                       exceptions,
+                       grift,
+                       macaw-base,
+                       macaw-loader,
+                       macaw-riscv
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+  ghc-options:         -Wall -Wcompat

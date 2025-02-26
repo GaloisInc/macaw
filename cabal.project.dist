@@ -4,6 +4,11 @@ packages: base/
           macaw-aarch32-symbolic/
           macaw-aarch32-syntax/
           macaw-dump/
+          macaw-loader
+          macaw-loader-aarch32
+          macaw-loader-ppc
+          macaw-loader-riscv
+          macaw-loader-x86
           macaw-semmc/
           macaw-ppc/
           macaw-ppc-symbolic/
@@ -19,11 +24,6 @@ packages: base/
           x86_symbolic/
           refinement/
           utils/compare-dwarfdump
-          deps/macaw-loader/macaw-loader
-          deps/macaw-loader/macaw-loader-aarch32
-          deps/macaw-loader/macaw-loader-ppc
-          deps/macaw-loader/macaw-loader-riscv
-          deps/macaw-loader/macaw-loader-x86
           deps/semmc/semmc/
           deps/semmc/semmc-ppc/
           deps/semmc/semmc-arm/
