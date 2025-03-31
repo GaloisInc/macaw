@@ -5,11 +5,8 @@ Author:        Galois Inc.
 Maintainer:    langston@galois.com
 Build-type:    Simple
 License:       BSD-3-Clause
-License-file:  LICENSE
 Category:      Language
 Synopsis:      A tool to display internal Macaw data structures
-
-extra-doc-files: README.md
 
 common shared
   -- Specifying -Wall and -Werror can cause the project to fail to build on
