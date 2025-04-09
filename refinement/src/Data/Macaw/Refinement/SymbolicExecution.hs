@@ -235,7 +235,7 @@ smtSolveTransfer ctx slice
                 C.AbortedResult _ aborted_res -> case aborted_res of
                   C.AbortedExec reason _ ->
                     return (Error ("simulation abort: " ++ show (CB.ppAbortExecReason reason)))
-                  C.AbortedExit code ->
+                  C.AbortedExit code _ ->
                     return (Error ("simulation halt: " ++ show code))
                   C.AbortedBranch{} ->
                     return (Error "simulation abort branch")
