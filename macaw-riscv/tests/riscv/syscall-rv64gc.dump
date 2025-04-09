@@ -1,0 +1,24 @@
+
+syscall-rv64gc.exe:     file format elf64-littleriscv
+
+
+Disassembly of section .text:
+
+000000000001010c <_start>:
+   1010c:	1141                	c.addi	sp,-16
+   1010e:	e406                	c.sdsp	ra,8(sp)
+   10110:	e022                	c.sdsp	s0,0(sp)
+   10112:	0800                	c.addi4spn	s0,sp,16
+   10114:	010000ef          	jal	ra,10124 <__getpid>
+   10118:	0001                	c.addi	zero,0
+   1011a:	60a2                	c.ldsp	ra,8(sp)
+   1011c:	6402                	c.ldsp	s0,0(sp)
+   1011e:	0141                	c.addi	sp,16
+   10120:	8082                	c.jr	ra
+	...
+
+0000000000010124 <__getpid>:
+   10124:	0ac00893          	addi	a7,zero,172
+   10128:	00000073          	ecall
+   1012c:	8082                	c.jr	ra
+	...

@@ -10,10 +10,11 @@ tested-with: GHC == 8.0.2
 
 library
   build-depends:
-    base >= 4,
+    base >= 4.13,
     bytestring,
     containers,
-    flexdis86 >= 0.1.2,
+    elf-edit,
+    flexdis86 >= 0.1.5,
     lens >= 4.7,
     macaw-base >= 0.3.3,
     mtl,
@@ -38,6 +39,7 @@ library
     Data.Macaw.X86.Semantics.AESNI
     Data.Macaw.X86.Semantics.AVX
     Data.Macaw.X86.Semantics.BMI2
+    Data.Macaw.X86.Semantics.SHA
     Data.Macaw.X86.SyscallInfo
     Data.Macaw.X86.SyscallInfo.FreeBSD
     Data.Macaw.X86.SyscallInfo.Linux
@@ -49,8 +51,7 @@ library
   ghc-options: -Wall -Wcompat
   ghc-options: -fno-warn-unticked-promoted-constructors
   ghc-prof-options: -O2 -fprof-auto-top
-  if impl(ghc >= 8.6)
-     default-extensions: NoStarIsType
+  default-extensions: NoStarIsType
 
 test-suite macaw-x86-tests
   type: exitcode-stdio-1.0
@@ -70,6 +71,7 @@ test-suite macaw-x86-tests
     lens,
     macaw-base,
     parameterized-utils,
+    prettyprinter,
     macaw-x86,
     temporary,
     tasty,

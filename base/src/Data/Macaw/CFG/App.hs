@@ -1,7 +1,4 @@
 {-|
-Copyright        : (c) Galois, Inc 2015-2018
-Maintainer       : Joe Hendrix <jhendrix@galois.com>
-
 This defines a data type `App` for representing operations that can be
 applied to a range of values.  We call it an `App` because it
 represents an application of an operation.  In mathematics, we would
@@ -12,21 +9,28 @@ probably call it a signature.
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.CFG.App
-  ( App(..)
+  ( -- * App
+    App(..)
   , ppApp
   , ppAppA
+    -- ** Rendering
+  , AppRender(..)
+  , AppRenderArg(..)
+  , rendApp
     -- * Casting proof objects.
   , WidthEqProof(..)
   , widthEqProofEq
   , widthEqProofCompare
   , widthEqSource
   , widthEqTarget
+  , widthEqSym
   ) where
 
 import           Control.Monad.Identity
@@ -35,7 +39,15 @@ import           Data.Parameterized.Classes
 import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TH.GADT
-import           Data.Parameterized.TraversableFC
+import Data.Parameterized.TraversableFC
+    ( TraversableFC(..),
+      FoldableFC(toListFC, foldMapFC, foldlFC'),
+      FunctorFC(..),
+      fmapFCDefault,
+      foldMapFCDefault )
+import           Data.Text (Text)
+import qualified Data.Text as Text
+import Numeric.Natural ( Natural )
 import           Prettyprinter
 
 import           Data.Macaw.Types
@@ -82,6 +94,16 @@ data WidthEqProof (in_tp :: Type) (out_tp :: Type) where
 
   -- | Allows transitivity composing proofs.
   WidthEqTrans :: !(WidthEqProof x y) -> !(WidthEqProof y z) -> WidthEqProof x z
+
+-- | Apply symmetry to a width equality proof.
+widthEqSym :: WidthEqProof x y -> WidthEqProof y x
+widthEqSym (PackBits n w) = UnpackBits n w
+widthEqSym (UnpackBits n w) = PackBits n w
+widthEqSym (FromFloat r) = ToFloat r
+widthEqSym (ToFloat r) = FromFloat r
+widthEqSym (VecEqCongruence n p) = VecEqCongruence n (widthEqSym p)
+widthEqSym (WidthEqRefl tp) = WidthEqRefl tp
+widthEqSym (WidthEqTrans x y) = WidthEqTrans (widthEqSym y) (widthEqSym x)
 
 -- | Return the input type of the width equality proof
 widthEqSource :: WidthEqProof i o -> TypeRepr i
@@ -130,7 +152,7 @@ widthEqProofCompare :: WidthEqProof xi xo
                     -> OrderingF (WidthEqProof xi xo) (WidthEqProof yi yo)
 widthEqProofCompare p q =
   joinOrderingF (compareF (widthEqSource p) (widthEqSource q)) $
-    joinOrderingF (compareF (widthEqTarget p) (widthEqTarget q)) $
+    joinOrderingF (compareF (widthEqTarget p) (widthEqTarget q))
       EQF
 
 -- | This datatype defines operations used on multiple architectures.
@@ -145,6 +167,16 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
 
   Mux :: !(TypeRepr tp) -> !(f BoolType) -> !(f tp) -> !(f tp) -> App f tp
 
+  ----------------------------------------------------------------------
+  -- Boolean operations
+
+  AndApp :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+  OrApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+  NotApp :: !(f BoolType) -> App f BoolType
+  XorApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+
+  ----------------------------------------------------------------------
+  -- Tuples
 
   -- | Create a tuple from a list of fields
   MkTuple :: !(P.List TypeRepr flds)
@@ -155,12 +187,14 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
   TupleField :: !(P.List TypeRepr l) -> !(f (TupleType l)) -> !(P.Index l r) -> App f r
 
   ----------------------------------------------------------------------
-  -- Boolean operations
+  -- Vector
 
-  AndApp :: !(f BoolType) -> !(f BoolType) -> App f BoolType
-  OrApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
-  NotApp :: !(f BoolType) -> App f BoolType
-  XorApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+  -- | Extracts an element at given constant index from vector
+  ExtractElement :: !(TypeRepr tp) -> !(f (VecType n tp)) -> !Int -> App f tp
+
+  -- | Sets an element at given constant in vector.
+  InsertElement :: !(TypeRepr (VecType n tp))
+                -> !(f (VecType n tp)) -> !Int -> !(f tp) -> App f (VecType n tp)
 
   ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
@@ -334,7 +368,7 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
 $(pure [])
 
 instance TestEquality f => Eq (App f tp) where
-  (==) = \x y -> isJust (testEquality x y)
+  x == y = isJust (testEquality x y)
 
 instance TestEquality f => TestEquality (App f) where
   testEquality = $(structuralTypeEquality [t|App|]
@@ -351,20 +385,20 @@ instance TestEquality f => TestEquality (App f) where
                    ]
                   )
 
-instance HashableF f => Hashable (App f tp) where
+instance (HashableF f, TestEquality f) => Hashable (App f tp) where
   hashWithSalt = $(structuralHashWithSalt [t|App|]
                      [ (DataArg 0 `TypeApp` AnyType, [|hashWithSaltF|])
                      , (ConType [t|TypeRepr|] `TypeApp` AnyType, [|\s _c -> s|])
                      , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType
                        , [|\s _c -> s|])
                      , (ConType [t|P.List|] `TypeApp` DataArg 0 `TypeApp` AnyType
-                       , [|\s l -> foldlFC' hashWithSaltF s l |])
+                       , [|foldlFC' hashWithSaltF|])
                      , (ConType [t|WidthEqProof|] `TypeApp` AnyType `TypeApp` AnyType
                        , [|\s _c -> s|])
                      ]
                   )
 
-instance HashableF f => HashableF (App f) where
+instance (HashableF f, TestEquality f) => HashableF (App f) where
   hashWithSaltF = hashWithSalt
 
 instance OrdF f => OrdF (App f) where
@@ -408,64 +442,79 @@ instance TraversableFC App where
 ------------------------------------------------------------------------
 -- App pretty printing
 
-prettyPure :: (Applicative m, Pretty v) => v -> m (Doc ann)
-prettyPure = pure . pretty
+data AppRenderArg (f :: Type -> Kind.Type) where
+  Val :: f tp -> AppRenderArg f
+  -- Type argument (for bitcast)
+  Type :: !(TypeRepr tp) -> AppRenderArg f
+  -- Index into vector or tuple (must be valid for type)
+  Index :: Natural -> AppRenderArg f
+  -- Width argument passed to extension (must be positive)
+  Width :: Natural -> AppRenderArg f
+
+data AppRender (f :: Type -> Kind.Type) = AppRender Text [AppRenderArg f]
 
 -- | Pretty print an 'App' as an expression using the given function
 -- for printing arguments.
-rendAppA :: Applicative m
-         => (forall u . f u -> m (Doc ann))
-         -> App f tp
-         -> (String, [m (Doc ann)])
-rendAppA pp a0 =
+rendApp :: App f tp -> AppRender f
+rendApp a0 = do
+  let app = AppRender
   case a0 of
-    Eq x y      -> (,) "eq" [ pp x, pp y ]
-    Mux _ c x y -> (,) "mux" [ pp c, pp x, pp y ]
-    MkTuple _ flds -> (,) "tuple" (toListFC pp flds)
-    TupleField _ x i -> (,) "tuple_field" [ pp x, prettyPure (P.indexValue i) ]
-    AndApp x y -> (,) "and" [ pp x, pp y ]
-    OrApp  x y -> (,) "or"  [ pp x, pp y ]
-    NotApp x   -> (,) "not" [ pp x ]
-    XorApp  x y -> (,) "xor"  [ pp x, pp y ]
-    Trunc x w -> (,) "trunc" [ pp x, ppNat w ]
-    SExt x w -> (,) "sext" [ pp x, ppNat w ]
-    UExt x w -> (,) "uext" [ pp x, ppNat w ]
-    Bitcast x tp -> (,) "bitcast" [ pp x, pure (viaShow (widthEqTarget tp)) ]
-    BVAdd _ x y   -> (,) "bv_add" [ pp x, pp y ]
-    BVAdc _ x y c -> (,) "bv_adc" [ pp x, pp y, pp c ]
-    BVSub _ x y -> (,) "bv_sub" [ pp x, pp y ]
-    BVSbb _ x y b -> (,) "bv_sbb" [ pp x, pp y, pp b ]
-    BVMul _ x y -> (,) "bv_mul" [ pp x, pp y ]
-    BVUnsignedLt x y  -> (,) "bv_ult"  [ pp x, pp y ]
-    BVUnsignedLe x y  -> (,) "bv_ule"  [ pp x, pp y ]
-    BVSignedLt x y    -> (,) "bv_slt"  [ pp x, pp y ]
-    BVSignedLe x y    -> (,) "bv_sle"  [ pp x, pp y ]
-    BVTestBit x i -> (,) "bv_testbit" [ pp x, pp i]
-    BVComplement _ x -> (,) "bv_complement" [ pp x ]
-    BVAnd _ x y -> (,) "bv_and" [ pp x, pp y ]
-    BVOr  _ x y -> (,) "bv_or"  [ pp x, pp y ]
-    BVXor _ x y -> (,) "bv_xor" [ pp x, pp y ]
-    BVShl _ x y -> (,) "bv_shl" [ pp x, pp y ]
-    BVShr _ x y -> (,) "bv_shr" [ pp x, pp y ]
-    BVSar _ x y -> (,) "bv_sar" [ pp x, pp y ]
-    PopCount _ x -> (,) "popcount" [ pp x ]
-    ReverseBytes _ x -> (,) "reverse_bytes" [ pp x ]
-    UadcOverflows x y c -> (,) "uadc_overflows" [ pp x, pp y, pp c ]
-    SadcOverflows x y c -> (,) "sadc_overflows" [ pp x, pp y, pp c ]
-    UsbbOverflows x y c -> (,) "usbb_overflows" [ pp x, pp y, pp c ]
-    SsbbOverflows x y c -> (,) "ssbb_overflows" [ pp x, pp y, pp c ]
-    Bsf _ x -> (,) "bsf" [ pp x ]
-    Bsr _ x -> (,) "bsr" [ pp x ]
+    Eq x y       -> app "eq" [ Val x, Val y ]
+    Mux   _ c x y -> app "mux" [ Val c, Val x, Val y ]
+    AndApp x y -> app "and" [ Val x, Val y ]
+    OrApp  x y -> app "or"  [ Val x, Val y ]
+    NotApp x   -> app "not" [ Val x ]
+    XorApp  x y -> app "xor"  [ Val x, Val y ]
+    MkTuple _ flds -> app "tuple" (toListFC Val flds)
+    TupleField _ x i -> app "tuple_field" [ Val x, Index (fromInteger (P.indexValue i)) ]
+    ExtractElement _ v i -> app "extract_element" [ Val v, Index (fromIntegral i) ]
+    InsertElement _ s i v -> app "insert_element" [ Val s, Index (fromIntegral i), Val v ]
+    Trunc x w -> app "trunc" [ Val x, Width (natValue w) ]
+    SExt x w -> app "sext" [ Val x, Width (natValue w) ]
+    UExt x w -> app "uext" [ Val x, Width (natValue w) ]
+    Bitcast x tp -> app "bitcast" [ Val x, Type (widthEqTarget tp) ]
+    BVAdd _ x y   -> app "bv_add" [ Val x, Val y ]
+    BVAdc _ x y c -> app "bv_adc" [ Val x, Val y, Val c ]
+    BVSub _ x y -> app "bv_sub" [ Val x, Val y ]
+    BVSbb _ x y b -> app "bv_sbb" [ Val x, Val y, Val b ]
+    BVMul _ x y -> app "bv_mul" [ Val x, Val y ]
+    BVUnsignedLt x y  -> app "bv_ult"  [ Val x, Val y ]
+    BVUnsignedLe x y  -> app "bv_ule"  [ Val x, Val y ]
+    BVSignedLt x y    -> app "bv_slt"  [ Val x, Val y ]
+    BVSignedLe x y    -> app "bv_sle"  [ Val x, Val y ]
+    BVTestBit x i -> app "bv_testbit" [ Val x, Val i]
+    BVComplement _ x -> app "bv_complement" [ Val x ]
+    BVAnd _ x y -> app "bv_and" [ Val x, Val y ]
+    BVOr  _ x y -> app "bv_or"  [ Val x, Val y ]
+    BVXor _ x y -> app "bv_xor" [ Val x, Val y ]
+    BVShl _ x y -> app "bv_shl" [ Val x, Val y ]
+    BVShr _ x y -> app "bv_shr" [ Val x, Val y ]
+    BVSar _ x y -> app "bv_sar" [ Val x, Val y ]
+    PopCount _ x -> app "popcount" [ Val x ]
+    ReverseBytes _ x -> app "reverse_bytes" [ Val x ]
+    UadcOverflows x y c -> app "uadc_overflows" [ Val x, Val y, Val c ]
+    SadcOverflows x y c -> app "sadc_overflows" [ Val x, Val y, Val c ]
+    UsbbOverflows x y c -> app "usbb_overflows" [ Val x, Val y, Val c ]
+    SsbbOverflows x y c -> app "ssbb_overflows" [ Val x, Val y, Val c ]
+    Bsf _ x -> app "bsf" [ Val x ]
+    Bsr _ x -> app "bsr" [ Val x ]
 
 -- | Pretty print an 'App' as an expression using the given function
 -- for printing arguments.
-ppAppA :: Applicative m
-      => (forall u . f u -> m (Doc ann))
-      -> App f tp
-      -> m (Doc ann)
+ppAppA :: forall m f tp ann
+       . Applicative m
+       => (forall u . f u -> m (Doc ann))
+       -> App f tp
+       -> m (Doc ann)
 ppAppA pp a0 =
-  let (nm,args) = rendAppA pp a0
-   in sexpr nm <$> sequenceA args
+  case rendApp a0 of
+    AppRender nm args -> do
+      let rendArg :: AppRenderArg f -> m (Doc ann)
+          rendArg (Val v) = pp v
+          rendArg (Type tp) = pure (viaShow tp)
+          rendArg (Index i) = pure (viaShow i)
+          rendArg (Width i) = pure (viaShow i)
+      sexpr (Text.unpack nm) <$> traverse rendArg args
 
 ppApp :: (forall u . f u -> Doc ann)
       -> App f tp
@@ -480,18 +529,22 @@ instance HasRepr (App f) TypeRepr where
     case a of
       Eq _ _       -> knownRepr
       Mux tp _ _ _ -> tp
-      MkTuple fieldTypes _ -> TupleTypeRepr fieldTypes
-      TupleField f _ i -> f P.!! i
-
-      Trunc _ w -> BVTypeRepr w
-      SExt  _ w -> BVTypeRepr w
-      UExt  _ w -> BVTypeRepr w
-      Bitcast _ p -> widthEqTarget p
 
       AndApp{} -> knownRepr
       OrApp{}  -> knownRepr
       NotApp{} -> knownRepr
       XorApp{} -> knownRepr
+
+      MkTuple fieldTypes _ -> TupleTypeRepr fieldTypes
+      TupleField f _ i -> f P.!! i
+
+      ExtractElement tp _ _ -> tp
+      InsertElement tp _ _ _ -> tp
+
+      Trunc _ w -> BVTypeRepr w
+      SExt  _ w -> BVTypeRepr w
+      UExt  _ w -> BVTypeRepr w
+      Bitcast _ p -> widthEqTarget p
 
       BVAdd w _ _   -> BVTypeRepr w
       BVAdc w _ _ _ -> BVTypeRepr w

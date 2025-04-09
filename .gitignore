@@ -12,3 +12,5 @@
 /TAGS
 /**/tests/samples/*.last-actual
 /**/tests/samples/*.s
+_darcs
+.boring

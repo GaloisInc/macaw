@@ -1,18 +1,29 @@
 packages: base/
+          crucible-macaw-debug/
           macaw-aarch32/
           macaw-aarch32-symbolic/
+          macaw-aarch32-syntax/
+          macaw-dump/
+          macaw-loader
+          macaw-loader-aarch32
+          macaw-loader-ppc
+          macaw-loader-riscv
+          macaw-loader-x86
           macaw-semmc/
           macaw-ppc/
           macaw-ppc-symbolic/
+          macaw-ppc-syntax/
+          macaw-riscv/
+          macaw-riscv-symbolic/
+          macaw-riscv-syntax/
+          macaw-x86-cli/
+          macaw-x86-syntax/
           x86/
           symbolic/
+          symbolic-syntax/
           x86_symbolic/
           refinement/
           utils/compare-dwarfdump
-          deps/macaw-loader/macaw-loader
-          deps/macaw-loader/macaw-loader-aarch32
-          deps/macaw-loader/macaw-loader-ppc
-          deps/macaw-loader/macaw-loader-x86
           deps/semmc/semmc/
           deps/semmc/semmc-ppc/
           deps/semmc/semmc-arm/
@@ -25,9 +36,13 @@ packages: base/
           deps/dismantle/dismantle-arm-xml/
           deps/dismantle/dismantle-thumb/
           deps/crucible/crucible/
+          deps/crucible/crucible-cli/
+          deps/crucible/crucible-debug/
           deps/crucible/crucible-llvm/
+          deps/crucible/crucible-llvm-syntax/
+          deps/crucible/crucible-symio/
+          deps/crucible/crucible-syntax/
           deps/what4/what4/
-          deps/what4-serialize/
           deps/dwarf/
           deps/elf-edit/
           deps/flexdis86/
@@ -36,3 +51,7 @@ packages: base/
           deps/llvm-pretty-bc-parser/
           deps/asl-translator/
           deps/arm-asl-parser/
+          deps/grift/grift/
+          deps/bv-sized/
+          deps/bv-sized-float/
+          deps/softfloat-hs/

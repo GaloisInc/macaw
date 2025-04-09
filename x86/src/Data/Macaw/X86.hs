@@ -9,23 +9,20 @@ x86_64 programs.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NondecreasingIndentation #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 module Data.Macaw.X86
        ( x86_64_info
        , x86_64_freeBSD_info
        , x86_64_linux_info
        , x86_64CallParams
+       , x86_64PLTStubInfo
        , freeBSD_syscallPersonality
        , linux_syscallPersonality
          -- * Low level exports
@@ -55,9 +52,11 @@ module Data.Macaw.X86
        ) where
 
 import           Control.Lens
-import           Control.Monad.Cont
-import           Control.Monad.Except
+import           Control.Monad (when)
+import           Control.Monad.Except (ExceptT, MonadError(..), runExceptT, withExceptT)
 import           Control.Monad.ST
+import           Control.Monad.Trans (MonadTrans(..))
+import qualified Data.ElfEdit as EE
 import           Data.Foldable
 import qualified Data.Map as Map
 import           Data.Parameterized.Classes
@@ -79,7 +78,9 @@ import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
+import           Data.Macaw.Discovery ( defaultClassifier )
 import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MMEP
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
   ( n8
@@ -179,8 +180,12 @@ disassembleInstruction curIPAddr contents =
     Right r -> do
       pure r
 
--- | Translate block, returning blocks read, ending
--- PC, and an optional error.  and ending PC.
+-- | Translate one instruction, returning:
+-- * the parsed instruction,
+-- * an updated block, either unfinished or finished,
+-- * the size of the parsed instruction,
+-- * the next PC,
+-- * the rest of the instruction memory contents.
 translateStep :: forall st_s ids
                      .  NonceGenerator (ST st_s) ids
                         -- ^ Generator for new assign ids
@@ -282,8 +287,9 @@ translateInstruction gen initRegs addr =
       (_i, res, instSize, _nextIP, _nextContents) <- translateStep gen pblock 0 addr contents
       pure $! (finishPartialBlock res, fromIntegral instSize)
 
--- | Translate block, returning block read, number of bytes in block,
--- remaining bytes to parse, and an optional error.
+-- | Translate one block, returning:
+-- * the read block,
+-- * the offset of the next instruction after this block.
 translateBlockImpl :: forall st_s ids
                      .  NonceGenerator (ST st_s) ids
                         -- ^ Generator for new assign ids
@@ -386,6 +392,13 @@ transferAbsValue r f =
     AESNI_AESDec{} -> TopV
     AESNI_AESDecLast{} -> TopV
     AESNI_AESKeyGenAssist{} -> TopV
+    AESNI_AESIMC{} -> TopV
+    SHA_sigma0{} -> TopV
+    SHA_sigma1{} -> TopV
+    SHA_Sigma0{} -> TopV
+    SHA_Sigma1{} -> TopV
+    SHA_Ch{} -> TopV
+    SHA_Maj{} -> TopV
 
     -- XXX: Is 'TopV' the right thing for the AVX instruction below?
     VOp1 {} -> TopV
@@ -395,6 +408,7 @@ transferAbsValue r f =
     PointwiseLogicalShiftR {} -> TopV
     VExtractF128 {} -> TopV
     VInsert {} -> TopV
+    X86Syscall {} -> TopV
 
 -- | Extra constraints on block for disassembling.
 data X86BlockPrecond = X86BlockPrecond { blockInitX87TopReg :: !Word8
@@ -545,25 +559,13 @@ postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                         -> AbsProcessorState X86Reg ids
                         -> Jmp.IntraJumpBounds X86_64 ids
                         -> RegState X86Reg (Value X86_64 ids)
-                        -> X86TermStmt ids
+                        -> X86TermStmt (Value X86_64 ids)
                         -> Maybe ( MemSegmentOff 64
                                  , AbsBlockState X86Reg
                                  , Jmp.InitJumpBounds X86_64
                                  )
-postX86TermStmtAbsState preservePred mem s bnds regs tstmt =
+postX86TermStmtAbsState _preservePred _mem _s _bnds _regs tstmt =
   case tstmt of
-    X86Syscall ->
-      case regs^.curIP of
-        RelocatableValue _ addr | Just nextIP <- asSegmentOff mem addr -> do
-          let params = CallParams { postCallStackDelta = 0
-                                  , preserveReg = preservePred
-                                  , stackGrowsDown = True
-                                  }
-          Just ( nextIP
-               , absEvalCall params s regs nextIP
-               , Jmp.postCallBounds params bnds regs
-               )
-        _ -> error $ "Sycall could not interpret next IP"
     Hlt ->
       Nothing
     UD2 ->
@@ -600,6 +602,7 @@ x86_64_info preservePred =
                    , rewriteArchTermStmt = rewriteX86TermStmt
                    , archDemandContext = x86DemandContext
                    , postArchTermStmtAbsState = postX86TermStmtAbsState preservePred
+                   , archClassifier = defaultClassifier
                    }
 
 -- | Architecture information for X86_64 on FreeBSD.
@@ -617,6 +620,13 @@ x86_64_linux_info :: ArchitectureInfo X86_64
 x86_64_linux_info = x86_64_info preserveFn
   where preserveFn r = Set.member (Some r) linuxSystemCallPreservedRegisters
 
+-- | PLT stub information for X86_64 relocation types.
+x86_64PLTStubInfo :: MMEP.PLTStubInfo EE.X86_64_RelocationType
+x86_64PLTStubInfo = MMEP.PLTStubInfo
+  { MMEP.pltFunSize     = 16
+  , MMEP.pltStubSize    = 16
+  , MMEP.pltGotStubSize = 8
+  }
 
 {-# DEPRECATED disassembleBlock "Use disassembleFn x86_64_info" #-}
 

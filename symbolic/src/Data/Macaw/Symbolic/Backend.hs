@@ -11,11 +11,25 @@ module Data.Macaw.Symbolic.Backend (
     -- $archBackend
     CG.MacawArchStmtExtension
   , CG.CrucGen
+  , CG.translateFns
+  , CG.crucRegisterReg
+  , CG.mkAtom
   , PS.macawAssignToCrucM
   , CG.valueToCrucible
   , CG.evalArchStmt
+  , CG.evalAtom
+  , CG.evalMacawStmt
+  , CG.appAtom
+  , CG.addTermStmt
+  , CG.createRegStruct
+  , CG.setMachineRegs
+  , CG.addExtraBlock
+  , CG.freshValueIndex
+  , CG.addStmt
+  , CG.bvLit
+  , CG.ArchRegStruct
   , MacawArchEvalFn(..)
-  , EvalStmtFunc
+  , MacawEvalStmtFunc
     -- ** Simulator Operations
   , MO.doPtrAdd
   , MO.doPtrSub
@@ -50,8 +64,13 @@ import qualified Data.Macaw.Symbolic.CrucGen as CG
 import qualified Data.Macaw.Symbolic.PersistentState as PS
 import qualified Data.Macaw.Symbolic.MemOps as MO
 
--- | A type for an evaluator of architecture-specific statements
-type EvalStmtFunc f p sym ext =
+-- | A type for an evaluator of architecture-specific statements.
+--  Note that this must map fairly directly to the C.EvalStmtFunc
+--  except that the `f` parameter here is used as a type family that
+--  is given a specific instance in the architecture-specific module,
+--  so this cannot be expressed directly as a `C.EvalStmtFunc`.
+
+type MacawEvalStmtFunc f p sym ext =
   forall rtp blocks r ctx tp'.
     f (C.RegEntry sym) tp'
     -> C.CrucibleState p sym ext rtp blocks r ctx
@@ -63,8 +82,13 @@ type EvalStmtFunc f p sym ext =
 -- architecture-specific backends - client code should not need to construct
 -- values of this type, and instead should obtain values of this type from the
 -- 'withArchEval' function.
-newtype MacawArchEvalFn sym mem arch =
-  MacawArchEvalFn (C.GlobalVar mem -> MO.GlobalMap sym mem (M.ArchAddrWidth arch) -> EvalStmtFunc (CG.MacawArchStmtExtension arch) (MO.MacawSimulatorState sym) sym (CG.MacawExt arch))
+newtype MacawArchEvalFn p sym mem arch =
+  MacawArchEvalFn (C.GlobalVar mem
+                  -> MO.GlobalMap sym mem (M.ArchAddrWidth arch)
+                  -> MacawEvalStmtFunc (CG.MacawArchStmtExtension arch)
+                                       p
+                                       sym
+                                       (CG.MacawExt arch))
 
 -- $archBackend
 --

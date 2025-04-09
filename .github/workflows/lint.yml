@@ -1,0 +1,23 @@
+name: lint
+on:
+  push:
+    branches: [master, "release-**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    name: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - shell: bash
+        run: |
+          curl --location -o hlint.tar.gz \
+            https://github.com/ndmitchell/hlint/releases/download/v3.8/hlint-3.8-x86_64-linux.tar.gz
+          tar xvf hlint.tar.gz
+
+          (cd symbolic/; ../hlint-3.8/hlint src test)

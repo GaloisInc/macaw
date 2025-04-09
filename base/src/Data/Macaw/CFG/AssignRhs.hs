@@ -1,10 +1,8 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -76,14 +74,11 @@ type family ArchStmt (arch :: Kind.Type) = (stmt :: (Type -> Kind.Type) -> Kind.
 -- | A type family for defining architecture-specific statements that
 -- may have instruction-specific effects on control-flow and register state.
 --
--- The second type parameter is the ids phantom type used to provide
--- uniqueness of Nonce values that identify assignments.
---
 -- An architecture-specific terminal statement may have side effects and change register
--- values, it may or may not return to the current function.  If it does return to the
--- current function, it is assumed to be at most one location, and the block-translator
--- must provide that value at translation time.
-type family ArchTermStmt (arch :: Kind.Type) :: Kind.Type -> Kind.Type
+-- values, it may or may not return to the current function.
+--
+-- Note that the meaning of the type parameter is identical to that of 'ArchStmt'
+type family ArchTermStmt (arch :: Kind.Type) :: (Type -> Kind.Type) -> Kind.Type
    -- NOTE: Not injective because PPC32 and PPC64 use the same type.
 
 -- | Number of bits in addreses for architecture.
@@ -107,8 +102,8 @@ data MemRepr (tp :: Type) where
   FloatMemRepr :: !(FloatInfoRepr f) -> !Endianness -> MemRepr (FloatType f)
   -- | A vector of values with zero entry first.
   --
-  -- The first value is stored at the address, the second is stored at address + sizeof eltType,
-  -- etc.
+  -- The first value is stored at the address, the second is stored at
+  -- address + sizeof eltType, etc.
   PackedVecMemRepr :: !(NatRepr n) -> !(MemRepr tp) -> MemRepr (VecType n tp)
 
 ppEndianness :: Endianness -> Doc ann
@@ -141,6 +136,9 @@ instance TestEquality MemRepr where
     Refl <- testEquality xe ye
     Just Refl
   testEquality _ _ = Nothing
+
+instance Eq (MemRepr tp) where
+  a == b = isJust (testEquality a b)
 
 instance Hashable (MemRepr tp) where
   hashWithSalt s mr =

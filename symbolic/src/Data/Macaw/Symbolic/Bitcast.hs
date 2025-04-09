@@ -43,13 +43,14 @@ checkMacawFloatEq f =
     M.X86_80FloatRepr -> Refl
 
 
-doBitcast :: forall sym i o
-          .  IsSymInterface sym
-          => sym
+doBitcast :: forall sym bak i o
+          .  (IsSymBackend sym bak)
+          => bak
           -> C.RegValue sym (ToCrucibleType i)
           -> M.WidthEqProof i o
           -> IO (C.RegValue sym (ToCrucibleType o))
-doBitcast sym x eqPr =
+doBitcast bak x eqPr =
+  let sym = backendGetSym bak in
   case eqPr of
     M.PackBits (n :: NatRepr n) (w :: NatRepr w) -> do
       let outW = natMultiply n w
@@ -58,13 +59,15 @@ doBitcast sym x eqPr =
       when (fromIntegral (V.length x) /= natValue n) $ do
         fail "bitcast: Incorrect input vector length"
       -- We should have at least one element due to constraint on n
-      let Just h = x V.!? 0
+      h <- case x V.!? 0 of
+             Just h -> pure h
+             Nothing -> error "doBitcast: impossible"
       let rest :: V.Vector (MM.LLVMPtr sym w)
           rest = V.tail x
-      extH <- bvZext sym outW =<< MM.projectLLVM_bv sym h
+      extH <- bvZext sym outW =<< MM.projectLLVM_bv bak h
       let doPack :: (Integer,SymBV sym (n GHC.TypeLits.* w)) -> MM.LLVMPtr sym w -> IO (Integer, SymBV sym (n GHC.TypeLits.* w))
           doPack (i,r) y = do
-            extY <- bvZext sym outW =<< MM.projectLLVM_bv sym y
+            extY <- bvZext sym outW =<< MM.projectLLVM_bv bak y
             shiftAmt <- bvLit sym outW (BV.mkBV outW i)
             r' <- bvOrBits sym r =<< bvShl sym extY shiftAmt
             pure (i+intValue w,r')
@@ -74,7 +77,7 @@ doBitcast sym x eqPr =
       let inW = natMultiply n w
       LeqProof <- pure $ leqMulPos n w
       LeqProof <- pure $ plus1LeqDbl n w
-      xbv <- MM.projectLLVM_bv sym x
+      xbv <- MM.projectLLVM_bv bak x
       V.generateM (fromIntegral (natValue n)) $ \i -> do
         shiftAmt <- bvLit sym inW (BV.mkBV inW (toInteger i * intValue w))
         MM.llvmPointer_bv sym =<< bvTrunc sym w =<< bvLshr sym xbv shiftAmt
@@ -83,13 +86,13 @@ doBitcast sym x eqPr =
       xbv <- C.iFloatToBinary sym (floatInfoToCrucible f) x
       MM.llvmPointer_bv sym xbv
     M.ToFloat f -> do
-      xbv <- MM.projectLLVM_bv sym x
+      xbv <- MM.projectLLVM_bv bak x
       Refl <- pure $ checkMacawFloatEq f
       C.iFloatFromBinary sym (floatInfoToCrucible f) xbv
     M.VecEqCongruence _n eltPr -> do
-      forM x $ \e -> doBitcast sym e eltPr
+      forM x $ \e -> doBitcast bak e eltPr
     M.WidthEqRefl _ -> do
       pure x
     M.WidthEqTrans p q -> do
-      y <- doBitcast sym x p
-      doBitcast sym y q
+      y <- doBitcast bak x p
+      doBitcast bak y q

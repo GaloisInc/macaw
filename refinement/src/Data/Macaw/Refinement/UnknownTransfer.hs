@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RankNTypes #-}
@@ -135,6 +136,7 @@ import           Data.Maybe ( isJust, isNothing )
 import           Data.Parameterized.Some ( Some(..), viewSome )
 import qualified Data.Set as S
 import           GHC.TypeLits
+import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Lumberjack as LJ
 
 -- | This is the main entrypoint, which is given the current Discovery
@@ -152,6 +154,7 @@ symbolicUnkTransferRefinement
      , MU.MonadUnliftIO m
      , LJ.HasLog (RefinementLog arch) m
      , X.MonadThrow m
+     , ?memOpts :: LLVM.MemOptions
      )
   => RSE.RefinementContext arch
   -- ^ Configuration
@@ -185,6 +188,7 @@ refineFunction
      , MU.MonadUnliftIO m
      , LJ.HasLog (RefinementLog arch) m
      , X.MonadThrow m
+     , ?memOpts :: LLVM.MemOptions
      )
   => RSE.RefinementContext arch
   -> RefinementFindings arch
@@ -227,6 +231,7 @@ refineBlockTransfer
      , MU.MonadUnliftIO m
      , LJ.HasLog (RefinementLog arch) m
      , X.MonadThrow m
+     , ?memOpts :: LLVM.MemOptions
      )
   => RSE.RefinementContext arch
   -> RefinementFindings arch
@@ -278,6 +283,7 @@ refineSlice :: ( MS.SymArchConstraints arch
                , MU.MonadUnliftIO m
                , LJ.HasLog (RefinementLog arch) m
                , X.MonadThrow m
+               , ?memOpts :: LLVM.MemOptions
                )
             => RSE.RefinementContext arch
             -> RP.CFGSlice arch ids
@@ -323,6 +329,7 @@ solve :: ( MS.SymArchConstraints arch
          , MU.MonadUnliftIO m
          , LJ.HasLog (RefinementLog arch) m
          , X.MonadThrow m
+         , ?memOpts :: LLVM.MemOptions
          )
       => RSE.RefinementContext arch
       -> RP.CFGSlice arch ids

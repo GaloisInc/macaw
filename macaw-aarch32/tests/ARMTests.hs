@@ -1,21 +1,25 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module ARMTests
     ( armAsmTests
+    , SaveMacaw(..)
     )
     where
 
 
-import           Control.Lens hiding ( ignored )
+import           Control.Lens ( (^.) )
 import           Control.Monad ( when )
 import           Control.Monad.Catch ( throwM, Exception )
+import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ElfEdit as E
 import qualified Data.Foldable as F
 import qualified Data.Macaw.ARM as RO
 import qualified Data.Macaw.ARM.BinaryFormat.ELF as ARMELF
+import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Map as M
@@ -26,15 +30,24 @@ import qualified Data.Set as S
 import           Data.Typeable ( Typeable )
 import           Data.Word ( Word64 )
 import           Shared
-import           System.FilePath ( dropExtension, replaceExtension )
+import           System.FilePath ( dropExtension, replaceExtension, takeFileName, (</>), (<.>) )
 import qualified Test.Tasty as T
+import qualified Test.Tasty.Options as TTO
 import qualified Test.Tasty.HUnit as T
+import qualified Prettyprinter as PP
 import           Prettyprinter.Util ( putDocW )
 import           Text.Printf ( PrintfArg, printf )
 import           Text.Read ( readMaybe )
 
 import           Prelude
 
+data SaveMacaw = SaveMacaw Bool
+
+instance TTO.IsOption SaveMacaw where
+  defaultValue = SaveMacaw False
+  parseValue v = SaveMacaw <$> TTO.safeReadBool v
+  optionName = pure "save-macaw"
+  optionHelp = pure "Save Macaw IR for each test case to /tmp for debugging"
 
 -- | Set to true to build with chatty output.
 isChatty :: Bool
@@ -56,8 +69,9 @@ armAsmTests = T.testGroup "ARM" . map mkTest
 
 -- | Read in a test case from disk and output a test tree.
 mkTest :: FilePath -> T.TestTree
-mkTest fp = T.testCase fp $ do x <- getExpected fp
-                               withELF exeFilename $ testDiscovery x
+mkTest fp = T.askOption $ \saveMacaw@(SaveMacaw _) -> T.testCase fp $
+  do x <- getExpected fp
+     withELF exeFilename $ testDiscovery saveMacaw exeFilename x
   where
     asmFilename = dropExtension fp
     exeFilename = replaceExtension asmFilename "exe"
@@ -113,20 +127,37 @@ getExpected expectedFilename = do
           ignoredBlocks = S.fromList (ignoreBlocks er)
       in return (expectedEntries, ignoredBlocks)
 
+escapeSlash :: Char -> Char
+escapeSlash '/' = '_'
+escapeSlash c = c
 
-testDiscovery :: ExpectedResult -> E.ElfHeaderInfo w -> IO ()
-testDiscovery expRes elf =
+toSavedMacawPath :: String -> FilePath
+toSavedMacawPath testName = "/tmp" </> name <.> "macaw"
+  where
+    name = fmap escapeSlash testName
+
+writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> MD.DiscoveryFunInfo arch ids -> IO ()
+writeMacawIR (SaveMacaw sm) name dfi
+  | not sm = return ()
+  | otherwise = writeFile (toSavedMacawPath name) (show (PP.pretty dfi))
+
+testDiscovery :: SaveMacaw -> FilePath -> ExpectedResult -> E.ElfHeaderInfo w -> IO ()
+testDiscovery saveMacaw exeFile expRes elf =
     case E.headerClass (E.header elf) of
-      E.ELFCLASS32 -> testDiscovery32 expRes elf
+      E.ELFCLASS32 -> testDiscovery32 saveMacaw testName expRes elf
       E.ELFCLASS64 -> error "testDiscovery64 TBD"
+    where
+      testName = takeFileName exeFile
 
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
-testDiscovery32 :: ExpectedResult -> E.ElfHeaderInfo 32 -> IO ()
-testDiscovery32 (funcblocks, ignored) ehdr =
+testDiscovery32 :: SaveMacaw -> String -> ExpectedResult -> E.ElfHeaderInfo 32 -> IO ()
+testDiscovery32 saveMacaw testName (funcblocks, ignored) ehdr =
   withMemory MM.Addr32 ehdr $ \mem -> do
-    let Just entryPoint = MM.asSegmentOff mem epinfo
-        epinfo = findEntryPoint ehdr mem
+    let epinfo = findEntryPoint ehdr mem
+    entryPoint <- case MM.asSegmentOff mem epinfo of
+      Just entryPoint' -> pure entryPoint'
+      Nothing -> error "testDiscovery32: Could not resolve entry point segment offset"
     when isChatty $
          do chatty $ "entryPoint: " <> show entryPoint
             chatty $ "sections = " <> show (ARMELF.getElfSections ehdr) <> "\n"
@@ -135,6 +166,11 @@ testDiscovery32 (funcblocks, ignored) ehdr =
             chatty ""
 
     let discoveryInfo = MD.cfgFromAddrs RO.arm_linux_info mem mempty [entryPoint] []
+
+    F.forM_ (discoveryInfo ^. MD.funInfo) $ \(PU.Some dfi) -> do
+      let funcFileName = testName <.> BSC.unpack (MD.discoveredFunName dfi)
+      writeMacawIR saveMacaw funcFileName dfi
+
     chatty $ "di = " <> (show $ MD.ppDiscoveryStateBlocks discoveryInfo) <> "\n"
 
     let getAbsBlkAddr = fromJust . MM.asAbsoluteAddr . MM.segoffAddr . MD.pblockAddr

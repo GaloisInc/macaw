@@ -1,0 +1,10 @@
+(defun @id ((regs X86Regs)) (Ptr 64)
+   (start start: (let b (get-reg rip regs)) (return b)))
+
+id
+%0
+  % 3:12
+  $1 = getStruct($0, 0, IntrinsicRepr LLVM_pointer [BVRepr 64])
+  % 4:5
+  return $1
+  % no postdom

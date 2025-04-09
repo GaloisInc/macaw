@@ -17,13 +17,16 @@ cabal-version:       >=1.10
 
 library
   exposed-modules: Data.Macaw.PPC.Symbolic
+                   Data.Macaw.PPC.Symbolic.Regs
   other-modules:   Data.Macaw.PPC.Symbolic.AtomWrapper
                    Data.Macaw.PPC.Symbolic.Functions
+                   Data.Macaw.PPC.Symbolic.Panic
                    Data.Macaw.PPC.Symbolic.Repeat
   -- other-extensions:
   build-depends:       base >=4.10 && <5,
                        containers,
                        lens,
+                       panic,
                        exceptions,
                        text,
                        parameterized-utils,
@@ -38,4 +41,51 @@ library
                        what4
   hs-source-dirs:      src
   default-language:    Haskell2010
-  ghc-options:         -Wall
+  ghc-options:         -Wall -Wcompat
+
+executable macaw-ppc-dump
+  hs-source-dirs: tools
+  main-is: Dump.hs
+  default-language: Haskell2010
+  ghc-options: -Wall -Wcompat
+  build-depends:
+    base,
+    elf-edit,
+    macaw-base,
+    macaw-dump,
+    macaw-loader-ppc,
+    macaw-ppc,
+    macaw-ppc-symbolic,
+    macaw-symbolic
+
+test-suite macaw-ppc-symbolic-tests
+  type: exitcode-stdio-1.0
+  default-language: Haskell2010
+  ghc-options: -Wall -Wcompat
+  main-is: Main.hs
+  hs-source-dirs: tests
+  build-depends:
+    base >= 4,
+    bytestring,
+    containers,
+    crucible,
+    crucible-llvm,
+    elf-edit,
+    filepath,
+    Glob >= 0.9 && < 0.11,
+    lens,
+    dismantle-ppc,
+    semmc-ppc,
+    macaw-base,
+    macaw-loader,
+    macaw-symbolic,
+    macaw-ppc,
+    macaw-loader-ppc,
+    macaw-ppc-symbolic,
+    parameterized-utils,
+    prettyprinter,
+    tasty,
+    tasty-hunit,
+    text,
+    what4,
+    vector

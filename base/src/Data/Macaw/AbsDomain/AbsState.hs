@@ -9,9 +9,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.AbsDomain.AbsState
@@ -35,7 +33,6 @@ module Data.Macaw.AbsDomain.AbsState
   , absTrue
   , absFalse
   , subValue
-  , concreteStackOffset
   , concretize
   , asConcreteSingleton
   , meet
@@ -64,7 +61,8 @@ module Data.Macaw.AbsDomain.AbsState
 
 import           Control.Exception (assert)
 import           Control.Lens
-import           Control.Monad.State.Strict
+import           Control.Monad (guard)
+import           Control.Monad.State.Strict (MonadState(..), State, modify, runState)
 import           Data.Bits
 import           Data.Foldable
 import           Data.Int
@@ -93,8 +91,35 @@ import           Data.Macaw.Types
 ------------------------------------------------------------------------
 -- Utilities
 
-addOff :: NatRepr w -> Integer -> Integer -> Integer
-addOff w o v = toUnsigned w (o + v)
+-- | A helper for computing new signed offsets for values of type 'StackOffsetAbsVal'
+--
+-- This is a bit fiddly because 'StackOffsetAbsVal' has an 'Int64' as its second
+-- value, so we need to be very careful when converting from bitvectors (encoded
+-- as 'Integer') to 'Int64'.
+addSignedOffset
+  :: Int64   -- ^ The current offset of a 'StackOffsetAbsVal'
+  -> Integer -- ^ The offset to add (to the current offset)
+  -> Int64
+addSignedOffset curOff i =
+  curOff + fromIntegral i
+
+-- | Add an offset represented as a bitvector to the current offset of a 'StackOffsetAbsVal'
+--
+-- Like 'addSignedOffset', this is tricky because the result is an 'Int64' while
+-- bitvectors are represented as raw 'Integer'.
+--
+-- This handles the interpretation of the bitvector as an 'Int64'. It uses the
+-- signed conversion function from the 'Data.Parameterized.NatRepr' module. This
+-- takes the low @w@ bits of the Integer and represents it in twos-complement so
+-- that the conversion to an 'Int64' properly sign extends.
+addSignedOffsetBV
+  :: (1 <= w)
+  => NatRepr w
+  -> Int64 -- ^ The current offset of a 'StackOffsetAbsVal'
+  -> Integer -- ^ A *bitvector* of width @w@ represented as an 'Integer' to add to the current offset; it will be interpreted as signed
+  -> Int64
+addSignedOffsetBV w curOff bv =
+  curOff + fromIntegral (toSigned w bv)
 
 ------------------------------------------------------------------------
 -- AbsDomain
@@ -611,6 +636,14 @@ asBoolConst (BoolConst b) = Just b
 asBoolConst TopV = Nothing
 
 -- | Add an integer to the abstract value.
+--
+-- This is not exported and is only used to increment or decrement the stack
+-- pointer by a known (by the architecture backend) signed integer after a call
+-- returns. The integer is *not* a bitvector.
+--
+-- The 'Integer' needs to be in range of an 'Int64', but isn't changed to that
+-- type currently to avoid some other code churn. In practice, this 'Integer' is
+-- 0, 4, or 8.
 bvinc :: forall w u
       .  NatRepr u
       -> AbsValue w (BVType u)
@@ -621,8 +654,9 @@ bvinc w (FinSet s) o =
   FinSet $ Set.map (toUnsigned w . (+o)) s
 bvinc _ (CodePointers _  _) _ =
   TopV
-bvinc w (StackOffsetAbsVal a s) o =
-  StackOffsetAbsVal a (fromInteger (toUnsigned w (o+toInteger s)))
+bvinc _w (StackOffsetAbsVal a s) o =
+  assert (o < toInteger (maxBound :: Int64)) $
+    StackOffsetAbsVal a (addSignedOffset s o)
 bvinc _ (SomeStackOffset a) _ =
   SomeStackOffset a
 -- Strided intervals
@@ -647,12 +681,12 @@ bvadc w (StackOffsetAbsVal a j) (FinSet t) c
   | [o0] <- Set.toList t
   , BoolConst b <- c
   , o <- if b then o0 + 1 else o0 =
-    StackOffsetAbsVal a (fromInteger (addOff w o (toInteger j)))
+    StackOffsetAbsVal a (addSignedOffsetBV w j o)
 bvadc w (FinSet t) (StackOffsetAbsVal a j) c
   | [o0] <- Set.toList t
   , BoolConst b <- c
   , o <- if b then o0 + 1 else o0 =
-    StackOffsetAbsVal a (fromInteger (addOff w o (toInteger j)))
+    StackOffsetAbsVal a (addSignedOffsetBV w j o)
 -- Two finite sets
 bvadc w (FinSet l) (FinSet r) (BoolConst b)
   | ls <- Set.toList l
@@ -743,7 +777,7 @@ bvsbb _ w (FinSet s) (asFinSet "bvsub3" -> IsFin t) (BoolConst b) =
 bvsbb _ w (StackOffsetAbsVal ax x) (asFinSet "bvsub6" -> IsFin t) (BoolConst False) =
   case Set.toList t of
     [] -> FinSet Set.empty
-    [y] -> StackOffsetAbsVal ax (fromInteger (toUnsigned w (toInteger x - y)))
+    [y] -> StackOffsetAbsVal ax (addSignedOffsetBV w x (negate (toSigned w y)))
     _ -> SomeStackOffset ax
 bvsbb _ _ (StackOffsetAbsVal ax _) _ _ = SomeStackOffset ax
 bvsbb _ _ _ (StackOffsetAbsVal _ _) _ = TopV
@@ -805,7 +839,7 @@ bvsub _ w v v'
 bvsub _ w (StackOffsetAbsVal ax x) (asFinSet "bvsub6" -> IsFin t) =
   case Set.toList t of
     [] -> FinSet Set.empty
-    [y] -> StackOffsetAbsVal ax (fromInteger (toUnsigned w (toInteger x - y)))
+    [y] -> StackOffsetAbsVal ax (addSignedOffsetBV w x (negate (toSigned w y)))
     _ -> SomeStackOffset ax
 bvsub _ _ (StackOffsetAbsVal ax _) _ = SomeStackOffset ax
 bvsub _ _ _ (StackOffsetAbsVal _ _) = TopV
@@ -846,10 +880,10 @@ bitop :: MemWidth w
       -> AbsValue w (BVType u)
 bitop doOp w (StackOffsetAbsVal a j) (FinSet t)
   | [o] <- Set.toList t
-  = StackOffsetAbsVal a $ fromInteger $ toUnsigned w $ flip doOp o $ toInteger j
+  = StackOffsetAbsVal a $ fromInteger $ toSigned w $ flip doOp o $ toInteger j
 bitop doOp w (FinSet t) (StackOffsetAbsVal a j)
   | [o] <- Set.toList t
-  = StackOffsetAbsVal a $ fromInteger $ toUnsigned w $ doOp o $ toInteger j
+  = StackOffsetAbsVal a $ fromInteger $ toSigned w $ doOp o $ toInteger j
 bitop doOp _w (asFinSet "bitop" -> IsFin s) (asConcreteSingleton -> Just v)
   = FinSet (Set.map (flip doOp v) s)
 bitop doOp _w (asConcreteSingleton -> Just v) (asFinSet "bitop" -> IsFin s)
@@ -1143,10 +1177,10 @@ setAbsIP a b
 ------------------------------------------------------------------------
 -- AbsProcessorState
 
--- | The absolute value associated with a given architecture.
+-- | The type of abstract values associated with a given architecture.
 --
 -- This is only a function of the address width.
-type ArchAbsValue arch = AbsValue (RegAddrWidth (ArchReg arch))
+type ArchAbsValue arch = AbsValue (ArchAddrWidth arch)
 
 -- | This stores the abstract state of the system which may be within
 -- a block.
@@ -1424,7 +1458,7 @@ absEvalCall :: forall arch ids
                  -> AbsProcessorState (ArchReg arch) ids
                     -- ^ State before call
                  -> RegState (ArchReg arch) (Value arch ids)
-                 -> MemSegmentOff (ArchAddrWidth arch)
+                 -> ArchSegmentOff arch
                     -- ^ Address we are jumping to
                  -> AbsBlockState (ArchReg arch)
 absEvalCall params ab0 regs addr =

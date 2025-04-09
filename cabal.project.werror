@@ -7,6 +7,8 @@ package macaw-semmc
   ghc-options: -Wall
 package macaw-symbolic
   ghc-options: -Wall -Werror
+package macaw-symbolic-syntax
+  ghc-options: -Wall -Werror
 -- Macaw-ppc has warnings.
 package macaw-ppc
   ghc-options: -Wall -Werror

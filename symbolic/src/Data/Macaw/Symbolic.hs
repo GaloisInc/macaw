@@ -1,6 +1,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NondecreasingIndentation #-}
@@ -56,6 +57,8 @@ module Data.Macaw.Symbolic
   , IsMemoryModel(..)
   , LLVMMemory
   , SB.MacawArchEvalFn
+  , MacawArchStmtExtensionOverride(..)
+  , defaultMacawArchStmtExtensionOverride
     -- * Translation of Macaw IR into Crucible
     -- $translationNaming
     -- $translationExample
@@ -76,6 +79,8 @@ module Data.Macaw.Symbolic
     -- * Translating slices of CFGs
   , mkBlockSliceRegCFG
   , mkBlockSliceCFG
+  , MacawSlicingFunctions(..)
+  , noSlicingFunctions
     -- ** Post-processing helpers
   , toCoreCFG
     -- ** Translation-related types
@@ -113,10 +118,30 @@ module Data.Macaw.Symbolic
     -- $simulationExample
   , SymArchConstraints
   , macawExtensions
-  , MO.GlobalMap
+  , PtrOp
+  , ptrOp
+  , isValidPtr
+  , mkUndefinedBool
+  , MO.GlobalMap(..)
+  , unsupportedFunctionCalls
   , MO.LookupFunctionHandle(..)
+  , unsupportedSyscalls
+  , MO.LookupSyscallHandle(..)
+  , ResolvePointer
+  , ConcreteImmutableGlobalRead
+  , LazilyPopulateGlobalMem
   , MO.MacawSimulatorState(..)
+  , MO.MacawLazySimulatorState(..)
+  , MO.emptyMacawLazySimulatorState
+  , MO.HasMacawLazySimulatorState(..)
+  , MO.populatedMemChunks
   , MkGlobalPointerValidityAssertion
+  , MemModelConfig(..)
+    -- $readingWritingMemModel
+  , doReadMemModel
+  , doCondReadMemModel
+  , doWriteMemModel
+  , doCondWriteMemModel
   , PointerUse(..)
   , PointerUseTag(..)
   , pointerUseLocation
@@ -130,7 +155,7 @@ import           GHC.Exts
 
 import           Control.Lens ((^.))
 import           Control.Monad
-import           Control.Monad.IO.Class
+import           Control.Monad.State
 import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as Map
@@ -143,9 +168,11 @@ import           Data.Parameterized.Some ( Some(Some) )
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Set as S
 import qualified Data.Text as T
+import qualified Data.Vector as V
 
 import qualified What4.FunctionName as C
 import           What4.Interface
+import           What4.InterpretedFloatingPoint (freshFloatConstant)
 import qualified What4.Utils.StringLiteral as C
 import qualified What4.ProgramLoc as WPL
 
@@ -173,7 +200,9 @@ import qualified Data.Macaw.Types as M
 
 import qualified Data.Macaw.Symbolic.Backend as SB
 import           Data.Macaw.Symbolic.Bitcast ( doBitcast )
-import           Data.Macaw.Symbolic.CrucGen as CG hiding (bvLit)
+import qualified Data.Macaw.Symbolic.CrucGen as CG
+import           Data.Macaw.Symbolic.CrucGen hiding (bvLit)
+import qualified Data.Macaw.Symbolic.Panic as P
 import           Data.Macaw.Symbolic.PersistentState as PS
 import           Data.Macaw.Symbolic.MemOps as MO
 
@@ -192,16 +221,43 @@ import           Data.Macaw.Symbolic.MemOps as MO
 -- The 'mem' type parameter indicates the memory model to be used for translation.
 -- The type alias 'ArchInfo' specializes this class to the llvm memory model
 -- using the 'LLVMMemory' type tag.
+--
+-- The 'Maybe (MacawArchStmtExtensionOverride arch)' parameter allows client
+-- code to override the default handling of 'MacawArchStmtExtension's.  It is
+-- an optional parameter and supplying 'Nothing' will cause the backend to use
+-- the default translation for all 'MacawArchStmtExtension's.
 class GenArchInfo mem arch where
-  genArchVals :: proxy mem -> proxy' arch -> Maybe (GenArchVals mem arch)
+  genArchVals :: proxy mem
+              -> proxy' arch
+              -> Maybe (MacawArchStmtExtensionOverride arch)
+              -> Maybe (GenArchVals mem arch)
 
 type ArchInfo arch = GenArchInfo LLVMMemory arch
+
+-- | A function to enable overriding of the default 'MacawArchStmtExtension'
+-- translation.  It takes a statement and a crucible state, and returns an
+-- optional tuple containing the value produced by the statement, as well as an
+-- updated state.  Returning 'Nothing' indicates that the backend should use
+-- its default handler for the statement.
+newtype MacawArchStmtExtensionOverride arch =
+  MacawArchStmtExtensionOverride (
+    forall p sym ext rtp blocks r ctx tp'
+    .  MacawArchStmtExtension arch (C.RegEntry sym) tp'
+    -> C.CrucibleState p sym ext rtp blocks r ctx
+    -> IO (Maybe (C.RegValue sym tp', C.CrucibleState p sym ext rtp blocks r ctx)))
+
+-- | A 'MacawArchStmtExtensionOverride' that always returns 'Nothing', and
+-- therefore always uses the backend's default translation.
+defaultMacawArchStmtExtensionOverride :: MacawArchStmtExtensionOverride arch
+defaultMacawArchStmtExtensionOverride =
+  MacawArchStmtExtensionOverride (\_ _ -> return Nothing)
 
 archVals
   :: ArchInfo arch
   => proxy arch
+  -> Maybe (MacawArchStmtExtensionOverride arch)
   -> Maybe (ArchVals arch)
-archVals p = genArchVals (Proxy @LLVMMemory) p
+archVals p override = genArchVals (Proxy @LLVMMemory) p override
 
 data LLVMMemory
 
@@ -219,10 +275,11 @@ data GenArchVals mem arch = GenArchVals
   -- ^ This is the set of functions used by the translator, and is passed as the
   -- first argument to the translation functions (e.g., 'mkBlocksCFG').
   , withArchEval
-      :: forall a m sym
-       . (IsSymInterface sym, IsMemoryModel mem, MemModelConstraint mem sym, MonadIO m)
+      :: forall a m p sym
+       . ( IsSymInterface sym, IsMemoryModel mem, MemModelConstraint mem sym, MonadIO m
+         , ?memOpts :: MM.MemOptions )
       => sym
-      -> (SB.MacawArchEvalFn sym (MemModelType mem arch) arch -> m a)
+      -> (SB.MacawArchEvalFn p sym (MemModelType mem arch) arch -> m a)
       -> m a
   -- ^ This function provides a context with a callback that gives access to the
   -- set of architecture-specific function evaluators ('MacawArchEvalFn'), which
@@ -281,8 +338,7 @@ mkCrucRegCFG :: forall arch ids
                 -- ^ Action to run
             -> IO (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkCrucRegCFG archFns halloc nm action = do
-  let crucRegTypes = crucArchRegTypes archFns
-  let macawStructRepr = C.StructRepr crucRegTypes
+  let macawStructRepr = CG.crucGenRegStructType archFns
   let argTypes = Empty :> macawStructRepr
   h <- C.mkHandle' halloc nm argTypes macawStructRepr
   Some (ng :: NonceGenerator IO s) <- newIONonceGenerator
@@ -393,7 +449,7 @@ termStmtToReturn tm0 =
     M.ParsedCall r _ -> M.ParsedReturn r
     M.ParsedJump r _ -> M.ParsedReturn r
     M.ParsedBranch r _ _ _ -> M.ParsedReturn r
-    M.ParsedLookupTable r _ _ -> M.ParsedReturn r
+    M.ParsedLookupTable _layout r _ _ -> M.ParsedReturn r
     M.ParsedArchTermStmt _ r _ -> M.ParsedReturn r
     M.ClassifyFailure r _ -> M.ParsedReturn r
     M.PLTStub{} -> tm0
@@ -411,7 +467,7 @@ termStmtToJump tm0 addr =
     M.ParsedBranch r _ _ _ -> M.ParsedJump r addr
     M.ParsedCall r _ -> M.ParsedJump r addr
     M.ParsedReturn r -> M.ParsedJump r addr
-    M.ParsedLookupTable r _ _ -> M.ParsedJump r addr
+    M.ParsedLookupTable _layout r _ _ -> M.ParsedJump r addr
     M.ParsedArchTermStmt _ r _ -> M.ParsedJump r addr
     M.ClassifyFailure r _ -> M.ParsedJump r addr
     M.PLTStub{} -> tm0
@@ -444,7 +500,7 @@ mkParsedBlockRegCFG archFns halloc posFn b = crucGenArchConstraints archFns $ do
     let entryAddr = M.pblockAddr strippedBlock
 
     -- Get type for representing Machine registers
-    let regType = C.StructRepr (crucArchRegTypes archFns)
+    let regType = CG.crucGenRegStructType archFns
     let entryPos = posFn entryAddr
     -- Create Crucible "register" (i.e. a mutable variable) for
     -- current value of Macaw machine registers.
@@ -464,7 +520,10 @@ mkParsedBlockRegCFG archFns halloc posFn b = crucGenArchConstraints archFns $ do
     entryLabel <- CR.Label <$> mmFreshNonce
     let initPosFn :: M.ArchAddrWord arch -> WPL.Position
         initPosFn off = posFn r
-          where Just r = M.incSegmentOff entryAddr (toInteger off)
+          where r = case M.incSegmentOff entryAddr (toInteger off) of
+                      Just r' -> r'
+                      Nothing -> error $ "mkParsedBlockRegCFG: Out-of-bounds offset: "
+                                      ++ show off
     (initCrucibleBlock,initExtraCrucibleBlocks) <-
       runCrucGen archFns initPosFn entryLabel regReg $ do
         -- Initialize value in regReg with initial registers
@@ -509,7 +568,7 @@ parsedTermTargets t =
     M.ParsedCall _ (Just ret) -> [ret]
     M.ParsedJump _ addr -> [addr]
     M.ParsedBranch _ _ taddr faddr -> [taddr, faddr]
-    M.ParsedLookupTable _ _ addrs -> F.toList addrs
+    M.ParsedLookupTable _layout _ _ addrs -> F.toList addrs
     M.ParsedReturn {} -> []
     M.ParsedArchTermStmt _ _ Nothing -> []
     M.ParsedArchTermStmt _ _ (Just addr) -> [addr]
@@ -517,9 +576,21 @@ parsedTermTargets t =
     M.ParsedTranslateError {} -> []
     M.ClassifyFailure {} -> []
 
+data MacawSlicingFunctions arch
+ = MacawSlicingFunctions
+   { sliceTermFn :: !(forall ids s. M.ParsedTermStmt arch ids -> CrucGen arch ids s ())
+     -- ^ action to run just prior to all terminal statements. Takes the original
+     -- terminal statement as an argument, before it is (potentially) rewritten into
+     -- a return.
+   }
+
+noSlicingFunctions :: MacawSlicingFunctions arch
+noSlicingFunctions = MacawSlicingFunctions (\_ -> return ())
+
 -- | See the documentation for 'mkBlockSliceCFG'
 mkBlockSliceRegCFG :: forall arch ids
                     . MacawSymbolicArchFunctions arch
+                   -> MacawSlicingFunctions arch
                    -> C.HandleAllocator
                    -> (M.ArchSegmentOff arch -> WPL.Position)
                    -> M.ParsedBlock arch ids
@@ -531,7 +602,7 @@ mkBlockSliceRegCFG :: forall arch ids
                    -> [(M.ArchSegmentOff arch, M.ArchSegmentOff arch)]
                    -- ^ (Source, target) block address pairs to convert to returns
                    -> IO (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArchConstraints archFns $ mkCrucRegCFG archFns halloc "" $ do
+mkBlockSliceRegCFG archFns sliceFns halloc posFn entry body0 terms retEdges_ = crucGenArchConstraints archFns $ mkCrucRegCFG archFns halloc "" $ do
   -- Build up some initial values needed to set up the entry point to the
   -- function (including the initial value of all registers)
   inputRegId <- mmFreshNonce
@@ -597,6 +668,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArc
     let labelMapWithReturns = Map.union (lookupRetEdges blockAddr) labelMap
     (mainCrucBlock, auxCrucBlocks) <- runCrucGen archFns (offPosFn blockAddr) label inputReg $ do
       mapM_ (addMacawStmt blockAddr) (M.pblockStmts block)
+      sliceTermFn sliceFns (M.pblockTermStmt block)
       case S.member blockAddr termAddrs of
         True -> do
           -- NOTE: If the entry block is also a terminator, we'll just
@@ -615,7 +687,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArc
   where
     entryAddr = M.pblockAddr entry
     entryPos = posFn entryAddr
-    archRegTy = C.StructRepr (crucArchRegTypes archFns)
+    archRegTy = CG.crucGenRegStructType archFns
     -- Addresses of blocks marked as terminators
     termAddrs = S.fromList (fmap M.pblockAddr terms)
     retEdges = Map.fromListWith S.union [(src, S.singleton tgt) | (src, tgt) <- retEdges_]
@@ -696,6 +768,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArc
 -- after the fragment executes.
 mkBlockSliceCFG :: forall arch ids
                  . MacawSymbolicArchFunctions arch
+                -> MacawSlicingFunctions arch
                 -> C.HandleAllocator
                 -> (M.ArchSegmentOff arch -> WPL.Position)
                 -> M.ParsedBlock arch ids
@@ -707,8 +780,8 @@ mkBlockSliceCFG :: forall arch ids
                 -> [(M.ArchSegmentOff arch, M.ArchSegmentOff arch)]
                 -- ^ (Source, target) block address pairs to convert to returns
                 -> IO (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlockSliceCFG archFns halloc posFn entry body terms retEdges =
-  toCoreCFG archFns <$> mkBlockSliceRegCFG archFns halloc posFn entry body terms retEdges
+mkBlockSliceCFG archFns sliceFns halloc posFn entry body terms retEdges =
+  toCoreCFG archFns <$> mkBlockSliceRegCFG archFns sliceFns halloc posFn entry body terms retEdges
 
 mkBlockPathRegCFG
   :: forall arch ids
@@ -723,17 +796,24 @@ mkBlockPathRegCFG
   -> IO (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkBlockPathRegCFG arch_fns halloc pos_fn blocks =
   crucGenArchConstraints arch_fns $ mkCrucRegCFG arch_fns halloc "" $ do
-    let entry_addr = M.pblockAddr $ head blocks
+    let (blocksHead, blocksTail) =
+          case blocks of
+            blk:blks -> (blk, blks)
+            [] -> P.panic
+                    P.Symbolic
+                    "mkBlockPathRegCFG"
+                    ["Empty list of blocks"]
+    let entry_addr = M.pblockAddr blocksHead
     let first_blocks = zipWith
           (\block next_block ->
             block { M.pblockTermStmt = termStmtToJump (M.pblockTermStmt block) (M.pblockAddr next_block) })
           (take (length blocks - 1) blocks)
-          (tail blocks)
+          blocksTail
     let last_block = (last blocks) { M.pblockTermStmt = termStmtToReturn (M.pblockTermStmt (last blocks)) }
     let block_path = first_blocks ++ [last_block]
 
     -- Get type for representing Machine registers
-    let arch_reg_struct_type = C.StructRepr $ crucArchRegTypes arch_fns
+    let arch_reg_struct_type = CG.crucGenRegStructType arch_fns
     let entry_pos = pos_fn entry_addr
     -- Create Crucible "register" (i.e. a mutable variable) for
     -- current value of Macaw machine registers.
@@ -832,7 +912,7 @@ mkFunRegCFG archFns halloc nm posFn fn = crucGenArchConstraints archFns $ do
     -- Get list of blocks
     let blockList = Map.elems (fn^.M.parsedBlocks)
     -- Get type for representing Machine registers
-    let regType = C.StructRepr (crucArchRegTypes archFns)
+    let regType = CG.crucGenRegStructType archFns
     let entryPos = posFn entryAddr
     -- Create Crucible "register" (i.e. a mutable variable) for
     -- current value of Macaw machine registers.
@@ -851,7 +931,10 @@ mkFunRegCFG archFns halloc nm posFn fn = crucGenArchConstraints archFns $ do
     entryLabel <- CR.Label <$> mmFreshNonce
     let initPosFn :: M.ArchAddrWord arch -> WPL.Position
         initPosFn off = posFn r
-          where Just r = M.incSegmentOff entryAddr (toInteger off)
+          where r = case M.incSegmentOff entryAddr (toInteger off) of
+                      Just r' -> r'
+                      Nothing -> error $ "mkFunRegCFG: Out-of-bounds offset: "
+                                      ++ show off
     (initCrucibleBlock,initExtraCrucibleBlocks) <-
       runCrucGen archFns initPosFn entryLabel regReg $ do
         -- Initialize value in regReg with initial registers
@@ -894,15 +977,17 @@ toCoreCFG archFns (CR.SomeCFG cfg) = crucGenArchConstraints archFns $ C.toSSA cf
 
 -- * Symbolic simulation
 
-evalMacawExprExtension :: forall sym arch f tp
-                       .  IsSymInterface sym
-                       => sym
+evalMacawExprExtension :: forall sym bak arch f tp p rtp blocks r ctx ext
+                       .  (IsSymBackend sym bak)
+                       => bak
                        -> C.IntrinsicTypes sym
                        -> (Int -> String -> IO ())
+                       -> C.CrucibleState p sym ext rtp blocks r ctx
                        -> (forall utp . f utp -> IO (C.RegValue sym utp))
                        -> MacawExprExtension arch f tp
                        -> IO (C.RegValue sym tp)
-evalMacawExprExtension sym _iTypes _logFn f e0 =
+evalMacawExprExtension bak _iTypes _logFn _cst f e0 =
+  let sym = backendGetSym bak in
   case e0 of
 
     MacawOverflows op w xv yv cv -> do
@@ -945,7 +1030,7 @@ evalMacawExprExtension sym _iTypes _logFn f e0 =
     MacawNullPtr w | LeqProof <- addrWidthIsPos w -> MM.mkNullPointer sym (M.addrWidthNatRepr w)
     MacawBitcast xExpr eqPr -> do
       x <- f xExpr
-      doBitcast sym x eqPr
+      doBitcast bak x eqPr
 
 -- | A use of a pointer in a memory operation
 --
@@ -994,81 +1079,141 @@ type MkGlobalPointerValidityAssertion sym w = sym
                                             -- ^ The address written to or read from
                                             -> IO (Maybe (Assertion sym))
 
+-- | A default 'MO.LookupFunctionHandle' that raises an error if it is invoked
+--
+-- Some uses of the symbolic execution engine do not need to support function
+-- calls (e.g., some test suites or compositional verifiers). In those cases, it
+-- may be reasonable to use this default handler that raises an error if
+-- invoked.
+unsupportedFunctionCalls
+  :: String
+  -- ^ The name of the component providing the handler
+  -> MO.LookupFunctionHandle p sym arch
+unsupportedFunctionCalls compName =
+  MO.LookupFunctionHandle $ \_ _ _ -> error ("Symbolically executing function calls is not supported in " ++ compName)
+
+-- | A default 'MO.LookupSyscallHandle' that raises an error if it is invoked
+--
+-- Most applications will not need to directly symbolically execute system call
+-- models, as they should probably prefer to provide overrides at a higher level
+-- (e.g., libc).  This is a reasonable handler that raises an error if it
+-- encounters a system call.
+unsupportedSyscalls
+  :: String
+  -- ^ The name of the component providing the handler
+  -> MO.LookupSyscallHandle p sym arch
+unsupportedSyscalls compName =
+  MO.LookupSyscallHandle $ \_ _ _ _ -> error ("Symbolically executing system calls is not supported in " ++ compName)
+
+-- | Attempt to resolve a possibly symbolic pointer value as concrete,
+-- returning the original pointer unchanged if this cannot be done.
+type ResolvePointer sym w = MM.LLVMPtr sym w -> IO (MM.LLVMPtr sym w)
+
+-- | If reading a value of type @ty@ from a concrete and immutable (i.e.,
+-- read-only) section of the global address space, then returning @Just val@
+-- will bypass having to perform a full read from the underlying memory model.
+-- Bypassing a full read is likely to be more performant.
+type ConcreteImmutableGlobalRead sym w =
+     forall ty
+   . M.MemRepr ty
+  -> MM.LLVMPtr sym w
+  -> IO (Maybe (C.RegValue sym (PS.ToCrucibleType ty)))
+
+-- | Modify the simulator state just before a read or write based on the type
+-- @ty@ of the value being read of written.
+type LazilyPopulateGlobalMem p sym ext w =
+     forall ty rtp f args
+   . M.MemRepr ty
+  -> MM.LLVMPtr sym w
+  -> C.SimState p sym ext rtp f args
+  -> IO (C.SimState p sym ext rtp f args)
+
+-- | Configuration options for the @macaw-symbolic@ memory model.
+data MemModelConfig p sym arch mem = MemModelConfig
+  { globalMemMap :: MO.GlobalMap sym mem (M.ArchAddrWidth arch)
+    -- ^ How to translate machine words to LLVM memory model pointers.
+  , lookupFunctionHandle :: MO.LookupFunctionHandle p sym arch
+    -- ^ Turn machine addresses into Crucible function handles (which can also
+    -- perform lazy CFG creation).
+  , lookupSyscallHandle :: MO.LookupSyscallHandle p sym arch
+    -- ^ Examine the machine state to determine which system call
+    -- should be invoked. Returns the function handle to invoke.
+  , resolvePointer :: ResolvePointer sym (M.ArchAddrWidth arch)
+    -- ^ Attempt to resolve a possibly symbolic pointer value as concrete,
+    -- returning the original pointer unchanged if this cannot be done. This is
+    -- used whenever the memory model performs a read or write. Concretizing
+    -- pointers can often be beneficial for performance, so consider
+    -- implementing this option using 'resolvePointerOnline' if you have access
+    -- to an online SMT solver connection.
+  , mkGlobalPointerValidityAssertion :: MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
+    -- ^ A function to make memory validity predicates (see
+    -- 'MkGlobalPointerValidityAssertion' for details).
+  , concreteImmutableGlobalRead :: ConcreteImmutableGlobalRead sym (M.ArchAddrWidth arch)
+    -- ^ If reading a value of type @ty@ from a concrete and immutable (i.e.,
+    -- read-only) section of the global address space, you can return
+    -- @Just val@ here to bypass having to perform a full read from the
+    -- underlying memory model. Bypassing a full read is likely to be more
+    -- performant. For instance, the lazy memory model makes use of this
+    -- option—see @Note [Lazy memory model]@ in
+    -- "Data.Macaw.Symbolic.Memory.Lazy".
+    --
+    -- Note that it is always fine to return 'Nothing' as a default
+    -- implementation, even when reading from concrete, immutable sections of
+    -- the global address space. The only thing that will be impacted is
+    -- performance.
+  , lazilyPopulateGlobalMem :: LazilyPopulateGlobalMem p sym (MacawExt arch) (M.ArchAddrWidth arch)
+    -- ^ The memory model will call this function just before performing a full
+    -- read or write, which allows users to modify the simulator state based on
+    -- the type @ty@ of the value being read or written. For instance, the lazy
+    -- memory model uses this to incrementally update an SMT array used to back
+    -- global memory—see @Note [Lazy memory model]@ in
+    -- "Data.Macaw.Symbolic.Memory.Lazy".
+    --
+    -- If you have no need for lazy updating of simulator state, an acceptable
+    -- default implementation of this function is to return the 'C.SimState'
+    -- argument unchanged.
+  }
+
 -- | This evaluates a Macaw statement extension in the simulator.
 execMacawStmtExtension
-  :: forall sym arch
-  . (IsSymInterface sym, MM.HasLLVMAnn sym)
-  => SB.MacawArchEvalFn sym MM.Mem arch
+  :: forall p sym arch
+  . (IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
+  => SB.MacawArchEvalFn p sym MM.Mem arch
   -- ^ Simulation-time interpretations of architecture-specific functions
   -> C.GlobalVar MM.Mem
   -- ^ The distinguished global variable holding the current state of the memory model
-  -> MO.GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
-  -- ^ The translation from machine words to LLVM memory model pointers
-  -> MO.LookupFunctionHandle sym arch
-  -- ^ A function to turn machine addresses into Crucible function
-  -- handles (which can also perform lazy CFG creation)
-  -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
-  -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
-  -> SB.EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) toMemPred s0 st =
+  -> MemModelConfig p sym arch MM.Mem
+  -- ^ Configuration options for the memory model.
+  -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) p sym (MacawExt arch)
+execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar mmConf s0 st =
+  C.withBackend (st^.C.stateContext) $ \bak ->
+  let sym = backendGetSym bak in
   case s0 of
-    MacawReadMem addrWidth memRep ptr0 -> do
-      let sym = st^.C.stateSymInterface
-      mem <- getMem st mvar
-      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
-      let puse = PointerUse (st ^. C.stateLocation) PointerRead
-      mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
-      case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion sym globalPtrValid
-        Nothing -> return ()
-      (,st) <$> doReadMem sym mem addrWidth memRep ptr
-    MacawCondReadMem addrWidth memRep cond ptr0 condFalseValue -> do
-      let sym = st^.C.stateSymInterface
-      mem <- getMem st mvar
-      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
-      let puse = PointerUse (st ^. C.stateLocation) PointerRead
-      mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
-      case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion sym globalPtrValid
-        Nothing -> return ()
-      (,st) <$> doCondReadMem sym mem addrWidth memRep (C.regValue cond) ptr (C.regValue condFalseValue)
+    MacawReadMem addrWidth memRep ptr0 ->
+      doReadMemModel mvar mmConf addrWidth memRep ptr0 st
+    MacawCondReadMem addrWidth memRep cond ptr0 condFalseValue ->
+      doCondReadMemModel mvar mmConf addrWidth memRep cond ptr0 condFalseValue st
     MacawWriteMem addrWidth memRep ptr0 v -> do
-      let sym = st^.C.stateSymInterface
-      mem <- getMem st mvar
-      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
-      let puse = PointerUse (st ^. C.stateLocation) PointerWrite
-      mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
-      case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion sym globalPtrValid
-        Nothing -> return ()
-      mem1 <- doWriteMem sym mem addrWidth memRep ptr (C.regValue v)
-      pure ((), setMem st mvar mem1)
+      st' <- doWriteMemModel mvar mmConf addrWidth memRep ptr0 v st
+      pure ((), st')
     MacawCondWriteMem addrWidth memRep cond ptr0 v -> do
-      let sym = st^.C.stateSymInterface
-      mem <- getMem st mvar
-      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
-      let puse = PointerUse (st ^. C.stateLocation) PointerWrite
-      mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
-      case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion sym globalPtrValid
-        Nothing -> return ()
-      mem1 <- doCondWriteMem sym mem addrWidth memRep (C.regValue cond) ptr (C.regValue v)
-      pure ((), setMem st mvar mem1)
+      st' <- doCondWriteMemModel mvar mmConf addrWidth memRep cond ptr0 v st
+      pure ((), st')
     MacawGlobalPtr w addr ->
       M.addrWidthClass w $ doGetGlobal st mvar globs addr
 
     MacawFreshSymbolic t -> -- XXX: user freshValue
-      do nm <- case userSymbol "macawFresh" of
-                 Right a -> return a
-                 Left err -> fail (show err)
-         v <- case t of
-               M.BoolTypeRepr -> freshConstant sym nm C.BaseBoolRepr
-               _ -> error ("MacawFreshSymbolic: XXX type " ++ show t)
+      do v <- freshCrucibleConstant sym (safeSymbol "macawFresh") t
          return (v,st)
-      where sym = st^.C.stateSymInterface
 
     MacawLookupFunctionHandle _ args -> do
       (hv, st') <- doLookupFunctionHandle lookupH st mvar (C.regValue args)
+      return (C.HandleFnVal hv, st')
+
+    MacawLookupSyscallHandle argReprs retRepr argStruct -> do
+      -- Note that unlike 'MacawLookupFunctionHandle', the system call lookup
+      -- function does not require access to memory
+      (hv, st') <- lookupSyscall argReprs retRepr st argStruct
       return (C.HandleFnVal hv, st')
 
     MacawArchStmtExtension s    -> archStmtFn mvar globs s st
@@ -1082,41 +1227,244 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
     PtrAdd w x y                -> doPtrAdd st mvar w x y
     PtrSub w x y                -> doPtrSub st mvar w x y
     PtrAnd w x y                -> doPtrAnd st mvar w x y
+    PtrXor w x y                -> doPtrXor st mvar w x y
+    PtrTrunc w x                -> doPtrTrunc st mvar x w
+    PtrUExt w x                 -> doPtrUExt st mvar x w
+  where
+    globs = globalMemMap mmConf
+    MO.LookupFunctionHandle lookupH = lookupFunctionHandle mmConf
+    MO.LookupSyscallHandle lookupSyscall = lookupSyscallHandle mmConf
 
+{- $readingWritingMemModel
+
+The 'doReadMemModel', 'doCondReadMemModel', 'doWriteMemModel', and
+'doCondWriteMemModel' are very similar to the "Data.Macaw.Symbolic.MemOps"
+functions 'MO.doReadMem', 'MO.doCondReadMem', 'MO.doWriteMem',
+'MO.doCondWriteMem', respectively. The former functions can be thought of as
+higher-level abstractions built on top of the latter functions. In particular,
+note the following differences:
+
+* 'MO.doReadMem' unconditionally reads from memory, whereas 'doReadMemModel'
+  may skip reading from memory and instead return a result directly if the
+  'MemModelConfig' is configured to do so. (See 'concreteImmutableGlobalRead'.)
+  Similarly for 'MO.doCondReadMem' versus 'doCondReadMemModel'.
+
+* 'MO.doReadMem' never modifies the 'C.SimState', whereas 'doReadMemModel'
+  may do so if the 'MemModelConfig' is configured to lazily populate global
+  memory. (See 'lazilyPopulateGlobalMem'.) Similarly for 'MO.doCondReadMem'
+  versus 'doCondReadMemModel'.
+
+* The @*MemModel@ functions perform additional validity checks (see
+  'mkGlobalPointerValidityAssertion) that the "Data.Macaw.Symbolic.MemOps"
+  functions do not.
+
+* The @*MemModel@ functions attempt to map machine words representing global
+  addresses to LLVM memory model pointers (see 'globalMemMap'), but the
+  "Data.Macaw.Symbolic.MemOps" functions do not.
+
+* The @*MemModel@ functions will attempt to resolve the pointer argument (see
+  'resolvePointer') for efficiency reasons, but the "Data.Macaw.Symbolic.MemOps"
+  functions do not.
+-}
+
+-- | Perform a read from the underlying memory model.
+doReadMemModel ::
+  (MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions) =>
+  C.GlobalVar MM.Mem ->
+  MemModelConfig p sym arch MM.Mem ->
+  ArchAddrWidthRepr arch ->
+  M.MemRepr ty ->
+  C.RegEntry sym (MM.LLVMPointerType (M.ArchAddrWidth arch)) ->
+  C.SimState p sym (MacawExt arch) rtp f args ->
+  IO ( C.RegValue sym (ToCrucibleType ty)
+     , C.SimState p sym (MacawExt arch) rtp f args
+     )
+doReadMemModel mvar mmConf addrWidth memRep ptr0 st0 =
+  C.withBackend (st0^.C.stateContext) $ \bak -> do
+    let sym = backendGetSym bak
+    let globs = globalMemMap mmConf
+    let toMemPred = mkGlobalPointerValidityAssertion mmConf
+    mem <- getMem st0 mvar
+    ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
+    ptr2 <- resolvePointer mmConf ptr1
+    mbReadVal <- concreteImmutableGlobalRead mmConf memRep ptr2
+    case mbReadVal of
+      Just readVal -> pure (readVal, st0)
+      Nothing -> do
+        st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+        let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
+        mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
+        case mGlobalPtrValid of
+          Just globalPtrValid -> addAssertion bak globalPtrValid
+          Nothing -> return ()
+        (,st1) <$> doReadMem bak mem addrWidth memRep ptr2
+
+-- | Perform a read from the underlying memory model if the supplied condition
+-- holds.
+doCondReadMemModel ::
+  (MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions) =>
+  C.GlobalVar MM.Mem ->
+  MemModelConfig p sym arch MM.Mem ->
+  ArchAddrWidthRepr arch ->
+  M.MemRepr ty ->
+  C.RegEntry sym C.BoolType ->
+  C.RegEntry sym (MM.LLVMPointerType (M.ArchAddrWidth arch)) ->
+  C.RegEntry sym (ToCrucibleType ty) ->
+  C.SimState p sym (MacawExt arch) rtp f args ->
+  IO ( C.RegValue sym (ToCrucibleType ty)
+     , C.SimState p sym (MacawExt arch) rtp f args
+     )
+doCondReadMemModel mvar mmConf addrWidth memRep cond ptr0 condFalseValue st0 =
+  C.withBackend (st0^.C.stateContext) $ \bak -> do
+    let sym = backendGetSym bak
+    let globs = globalMemMap mmConf
+    let toMemPred = mkGlobalPointerValidityAssertion mmConf
+    mem <- getMem st0 mvar
+    ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
+    ptr2 <- resolvePointer mmConf ptr1
+    mbReadVal <- concreteImmutableGlobalRead mmConf memRep ptr2
+    case mbReadVal of
+      Just readVal -> do
+        readVal' <- muxMemReprValue sym memRep (C.regValue cond) readVal (C.regValue condFalseValue)
+        pure (readVal', st0)
+      Nothing -> do
+        st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+        let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
+        mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
+        case mGlobalPtrValid of
+          Just globalPtrValid -> addAssertion bak globalPtrValid
+          Nothing -> return ()
+        (,st1) <$> doCondReadMem bak mem addrWidth memRep (C.regValue cond) ptr2 (C.regValue condFalseValue)
+
+-- | Perform a write from the underlying memory model.
+doWriteMemModel ::
+  (MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions) =>
+  C.GlobalVar MM.Mem ->
+  MemModelConfig p sym arch MM.Mem ->
+  ArchAddrWidthRepr arch ->
+  M.MemRepr ty ->
+  C.RegEntry sym (MM.LLVMPointerType (M.ArchAddrWidth arch)) ->
+  C.RegEntry sym (ToCrucibleType ty) ->
+  C.SimState p sym (MacawExt arch) rtp f args ->
+  IO (C.SimState p sym (MacawExt arch) rtp f args)
+doWriteMemModel mvar mmConf addrWidth memRep ptr0 v st0 =
+  C.withBackend (st0^.C.stateContext) $ \bak -> do
+    let sym = backendGetSym bak
+    let globs = globalMemMap mmConf
+    let toMemPred = mkGlobalPointerValidityAssertion mmConf
+    mem <- getMem st0 mvar
+    ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
+    ptr2 <- resolvePointer mmConf ptr1
+    st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+    let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
+    mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
+    case mGlobalPtrValid of
+      Just globalPtrValid -> addAssertion bak globalPtrValid
+      Nothing -> return ()
+    mem1 <- doWriteMem bak mem addrWidth memRep ptr2 (C.regValue v)
+    pure (setMem st1 mvar mem1)
+
+-- | Perform a write from the underlying memory model if the supplied condition
+-- holds.
+doCondWriteMemModel ::
+  (MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions) =>
+  C.GlobalVar MM.Mem ->
+  MemModelConfig p sym arch MM.Mem ->
+  ArchAddrWidthRepr arch ->
+  M.MemRepr ty ->
+  C.RegEntry sym C.BoolType ->
+  C.RegEntry sym (MM.LLVMPointerType (M.ArchAddrWidth arch)) ->
+  C.RegEntry sym (ToCrucibleType ty) ->
+  C.SimState p sym (MacawExt arch) rtp f args ->
+  IO (C.SimState p sym (MacawExt arch) rtp f args)
+doCondWriteMemModel mvar mmConf addrWidth memRep cond ptr0 v st0 =
+  C.withBackend (st0^.C.stateContext) $ \bak -> do
+    let sym = backendGetSym bak
+    let globs = globalMemMap mmConf
+    let toMemPred = mkGlobalPointerValidityAssertion mmConf
+    mem <- getMem st0 mvar
+    ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
+    ptr2 <- resolvePointer mmConf ptr1
+    st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+    let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
+    mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
+    case mGlobalPtrValid of
+      Just globalPtrValid -> addAssertion bak globalPtrValid
+      Nothing -> return ()
+    mem1 <- doCondWriteMem bak mem addrWidth memRep (C.regValue cond) ptr2 (C.regValue v)
+    pure (setMem st1 mvar mem1)
+
+-- | Create a fresh Crucible constant based on the supplied Macaw 'M.TypeRepr'.
+freshCrucibleConstant ::
+  forall sym tp.
+  IsSymInterface sym =>
+  sym ->
+  SolverSymbol ->
+  M.TypeRepr tp ->
+  IO (C.RegValue sym (ToCrucibleType tp))
+freshCrucibleConstant sym nm = go
+  where
+    go :: forall tp'.
+          M.TypeRepr tp' ->
+          IO (C.RegValue sym (ToCrucibleType tp'))
+    go M.BoolTypeRepr =
+      freshConstant sym nm C.BaseBoolRepr
+    go (M.BVTypeRepr w) = do
+      {-
+      We have a choice here of what block number to use. If we want something
+      that can possibly be a pointer, then we must use a symbolic block number.
+      On the other hand, symbolic pointers are often cumbersome in practice,
+      since any read or write to the pointer will possibly alias with any other
+      pointer.
+
+      For this reason, we choose to use block number 0 with a symbolic offset,
+      which gives us a symbolic bitvector that cannot possibly be a pointer.
+      For Macaw's needs, this is probably fine, since Macaw usually overwrites
+      these symbolic values without meaningfully using them. If this choice
+      ever becomes a problem in practice, I have included the code for creating
+      symboic pointers—see "Alternative implementation" below.
+      -}
+      off <- freshConstant sym nm (C.BaseBVRepr w)
+      MM.llvmPointer_bv sym off
+      {- Alternative implementation: -}
+      -- blk <- freshNat sym nm
+      -- off <- freshConstant sym nm (C.BaseBVRepr w)
+      -- pure $ MM.LLVMPointer blk off
+    go (M.FloatTypeRepr fi) =
+      freshFloatConstant sym nm (floatInfoToCrucible fi)
+    go (M.TupleTypeRepr l) = macawListToCrucibleM (fmap C.RV . go) l
+    go (M.VecTypeRepr n tp) =
+      V.replicateM (fromIntegral (natValue n)) (go tp)
 
 -- | Return macaw extension evaluation functions.
 macawExtensions
-  :: (IsSymInterface sym, MM.HasLLVMAnn sym)
-  => SB.MacawArchEvalFn sym MM.Mem arch
+  :: (IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
+  => SB.MacawArchEvalFn personality sym MM.Mem arch
   -- ^ A set of interpretations for architecture-specific functions
   -> C.GlobalVar MM.Mem
   -- ^ The Crucible global variable containing the current state of the memory
   -- model
-  -> GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
-  -- ^ A function that maps bitvectors to valid memory model pointers
-  -> LookupFunctionHandle sym arch
-  -- ^ A function to translate virtual addresses into function handles
-  -- dynamically during symbolic execution
-  -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
-  -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
-  -> C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
-macawExtensions f mvar globs lookupH toMemPred =
-  C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
-                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH toMemPred
+  -> MemModelConfig personality sym arch MM.Mem
+  -- ^ Configuration options for the memory model.
+  -> C.ExtensionImpl personality sym (MacawExt arch)
+macawExtensions f mvar mmConf =
+  C.ExtensionImpl { C.extensionEval = \sym iTypes logFn cst g -> evalMacawExprExtension sym iTypes logFn cst g
+                  , C.extensionExec = execMacawStmtExtension f mvar mmConf
                   }
 
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock
-  :: forall sym arch blocks
-   . (C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym, MM.HasLLVMAnn sym)
-  => sym
+  :: forall sym bak arch blocks
+   . ( C.IsSyntaxExtension (MacawExt arch)
+     , IsSymBackend sym bak
+     , MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions )
+  => bak
   -> MacawSymbolicArchFunctions arch
   -- ^ Translation functions
-  -> SB.MacawArchEvalFn sym MM.Mem arch
+  -> SB.MacawArchEvalFn (MacawSimulatorState sym) sym MM.Mem arch
   -> C.HandleAllocator
-  -> (MM.MemImpl sym, GlobalMap sym MM.Mem (M.ArchAddrWidth arch))
-  -> LookupFunctionHandle sym arch
-  -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
+  -> MM.MemImpl sym
+  -> MemModelConfig (MacawSimulatorState sym) sym arch MM.Mem
   -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
   -- ^ Register assignment
@@ -1126,18 +1474,17 @@ runCodeBlock
           sym
           (MacawExt arch)
           (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g regStruct = do
-  mvar <- MM.mkMemVar halloc
-  let crucRegTypes = crucArchRegTypes archFns
-  let macawStructRepr = C.StructRepr crucRegTypes
+runCodeBlock bak archFns archEval halloc initMem mmConf g regStruct = do
+  mvar <- MM.mkMemVar "macaw:codeblock_llvm_memory" halloc
+  let macawStructRepr = CG.crucGenRegStructType archFns
 
   let ctx :: C.SimContext (MacawSimulatorState sym) sym (MacawExt arch)
       ctx = let fnBindings = C.insertHandleMap (C.cfgHandle g)
                              (C.UseCFG g (C.postdomInfo g)) $
                              C.emptyHandleMap
-                extImpl = macawExtensions archEval mvar globs lookupH toMemPred
-            in C.initSimContext sym llvmIntrinsicTypes halloc stdout
-               fnBindings extImpl MacawSimulatorState
+                extImpl = macawExtensions archEval mvar mmConf
+            in C.initSimContext bak llvmIntrinsicTypes halloc stdout
+               (C.FnBindings fnBindings) extImpl MacawSimulatorState
   -- Create the symbolic simulator state
   let initGlobals = C.insertGlobal mvar initMem C.emptyGlobals
   let retType = macawStructRepr
@@ -1186,7 +1533,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --           -> (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch) -> IO a)
 --           -> IO a
 -- translate dfi useCFG =
---   case MS.archVals (Proxy @arch) of
+--   case MS.archVals (Proxy @arch) Nothing of
 --     Nothing -> fail "Architecture does not support symbolic reasoning"
 --     Just avals -> do
 --       let archFns = MS.archFunctions avals
@@ -1222,6 +1569,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --
 -- >>> :set -XFlexibleContexts
 -- >>> :set -XImplicitParams
+-- >>> :set -XOverloadedStrings
 -- >>> :set -XScopedTypeVariables
 -- >>> import           Data.IORef
 -- >>> import qualified Data.Macaw.CFG as MC
@@ -1258,13 +1606,13 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --   let ?recordLLVMAnnotation = \_ _ -> (pure () :: IO ())
 --   in MS.withArchEval avals sym $ \archEvalFns -> do
 --     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
---     memModelVar <- CLM.mkMemVar hdlAlloc
+--     memModelVar <- CLM.mkMemVar "macaw:llvm_memory" hdlAlloc
 --     -- For demonstration purposes, do not enforce any pointer validity constraints
 --     -- See Data.Macaw.Symbolic.Memory for an example of a more sophisticated approach.
 --     let mkValidityPred :: MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
 --         mkValidityPred _ _ _ _ = return Nothing
 --     let extImpl = MS.macawExtensions archEvalFns memModelVar globalMap lfh mkValidityPred
---     let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
+--     let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr (CS.FnBindings CFH.emptyHandleMap) extImpl MS.MacawSimulatorState
 --     let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
 --     let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
 --     let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler rep (CS.runOverrideSim rep simulation)

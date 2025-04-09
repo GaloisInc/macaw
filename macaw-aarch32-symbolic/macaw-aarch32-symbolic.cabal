@@ -19,14 +19,19 @@ extra-source-files:  CHANGELOG.md
 
 library
   exposed-modules:     Data.Macaw.AArch32.Symbolic
+                       Data.Macaw.AArch32.Symbolic.ABI
+                       Data.Macaw.AArch32.Symbolic.Regs
   other-modules:       Data.Macaw.AArch32.Symbolic.AtomWrapper
                        Data.Macaw.AArch32.Symbolic.Functions
                        Data.Macaw.AArch32.Symbolic.Panic
   -- other-extensions:
   build-depends:       base >=4.10 && <5,
+                       bv-sized,
                        containers,
                        lens,
                        panic,
+                       text,
+                       mtl,
                        parameterized-utils,
                        asl-translator,
                        what4,
@@ -40,3 +45,49 @@ library
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options: -Wall -Wcompat
+
+executable macaw-aarch32-dump
+  hs-source-dirs: tools
+  main-is: Dump.hs
+  default-language: Haskell2010
+  ghc-options: -Wall -Wcompat
+  build-depends:
+    base,
+    containers,
+    macaw-aarch32,
+    macaw-aarch32-symbolic,
+    macaw-dump,
+    macaw-loader-aarch32,
+    macaw-symbolic
+
+test-suite macaw-aarch32-symbolic-tests
+  type: exitcode-stdio-1.0
+  default-language: Haskell2010
+  ghc-options: -Wall -Wcompat
+  main-is: Main.hs
+  hs-source-dirs: tests
+  build-depends:
+    base >= 4,
+    bv-sized,
+    bytestring,
+    containers,
+    crucible,
+    crucible-llvm,
+    elf-edit,
+    filepath,
+    Glob >= 0.9 && < 0.11,
+    lens,
+    dismantle-arm-xml,
+    asl-translator,
+    semmc-aarch32,
+    macaw-aarch32,
+    macaw-aarch32-symbolic,
+    macaw-base,
+    macaw-symbolic,
+    parameterized-utils,
+    prettyprinter,
+    tasty,
+    tasty-hunit,
+    text,
+    what4,
+    vector

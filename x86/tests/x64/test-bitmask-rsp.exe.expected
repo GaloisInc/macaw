@@ -1,3 +1,4 @@
-R { funcs = [(Addr 0 0x401000, [(Addr 0 0x401000,33), (Addr 0 0x401021, 2)])]
+R { funcs = [ (Addr 0 0x401000, [(Addr 0 0x401000,33), (Addr 0 0x401021, 2)])
+            ]
   , ignoreBlocks = []
   }

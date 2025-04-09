@@ -1,59 +1,192 @@
+# Note: We build everything on all architectures, but we only test things
+# requiring SMT solvers on Linux
 name: CI
 on:
   push:
 
+# The CACHE_VERSION can be updated to force the use of a new cache if
+# the current cache contents become corrupted/invalid.  This can
+# sometimes happen when (for example) the OS version is changed but
+# older .so files are cached, which can have various effects
+# (e.g. cabal complains it can't find a valid version of the "happy"
+# tool).
+env:
+  CACHE_VERSION: 3
+
 jobs:
   build-linux:
-    runs-on: ubuntu-latest
+
+    env:
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      TZ: America/Los_Angeles
+      CI_TEST_LEVEL: "2"
+
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        ghc-ver: ["8.6.5", "8.8.4", "8.10.2"]
+        ghc-ver: ["9.4.8", "9.6.6", "9.8.2"]
+        cabal: [ '3.10.3.0' ]
+        os: [self-hosted]
       # complete all jobs
       fail-fast: false
-    name: Macaw - GHC v${{ matrix.ghc-ver }} - ubuntu-latest
+    name: Macaw - GHC v${{ matrix.ghc-ver }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         submodules: true
+
+    - uses: haskell-actions/setup@v2
+      id: setup-haskell
+      name: Setup Haskell
+      with:
+        ghc-version: ${{ matrix.ghc-ver }}
+        cabal-version: ${{ matrix.cabal }}
+
+    - name: System Dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y software-properties-common apt-transport-https ca-certificates wget
+        sudo apt install -y curl zlibc zlib1g zlib1g-dev git zip \
+          libgmp3-dev build-essential libtinfo-dev autoconf automake gperf cmake locales \
+          python3-distutils python-setuptools antlr3 libantlr3c-dev libtool libtool-bin libboost-all-dev python3-pip libfftw3-dev \
+          language-pack-en-base language-pack-en
+        sudo locale-gen en_US.UTF-8
+        sudo update-locale LANG=$LANG LANGUAGE=$LANGUAGE
+        # Softfloat repo needs to be recursively cloned
+        cd deps/softfloat-hs
+        git submodule update --init --recursive
+        cd ../..
+
     - name: Copy cabal project files
       run: |
-        cp cabal.project.dist                                  cabal.project
-        cp cabal.project.werror                                cabal.project.local
-        cp cabal.project.dist.ghc-${{ matrix.ghc-ver }}.freeze cabal.project.freeze
-    - name: Get GHC
-      run: |
-        sudo apt-get install --no-install-recommends -y cabal-install-3.2 ghc-${{ matrix.ghc-ver }} llvm
-        echo "/opt/cabal/bin" >> $GITHUB_PATH
-        echo "/opt/ghc/${{ matrix.ghc-ver }}/bin" >> $GITHUB_PATH
-    - name: Cache
-      uses: actions/cache@v1
+        cp cabal.project.dist cabal.project
+        cp cabal.project.werror cabal.project.local
+        cp cabal.project.freeze.ghc-${{ matrix.ghc-ver }} cabal.project.freeze
+
+    # WARNING: Make sure this step remains after the step that creates
+    # cabal.project.freeze, or the cache key will be incorrect!
+    - uses: actions/cache/restore@v4
+      name: Restore cabal store cache
       with:
-        path: /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+        path: |
+          /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+          dist-newstyle
         # Prefer previous SHA hash if it is still cached
-        key: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
+        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
         # otherwise just use most recent build.
-        restore-keys: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
+        restore-keys: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
+
     - name: Cabal update
       run: cabal update
       # Build macaw-base dependencies and crucible separately just so later
       # steps are less verbose and major dependency failures are separate.
     - name: Cabal dependencies
       run: |
-        cabal build --only-dependencies macaw-base
-        cabal build crucible-llvm
-    - name: macaw-x86 tests
-      run: |
-        cabal build pkg:macaw-x86 pkg:macaw-x86-symbolic
-        cabal test pkg:macaw-x86
-        cabal test pkg:macaw-x86-symbolic
-    - name: macaw-aarch32 tests
-      run: |
-        cabal build pkg:macaw-aarch32 pkg:macaw-aarch32-symbolic
-        cabal test pkg:macaw-aarch32
-    - name: macaw-ppc tests
-      run: |
-        cabal build pkg:macaw-ppc pkg:macaw-ppc-symbolic
-        cabal test pkg:macaw-ppc
-    - name: compare-dwarfdump
+        cabal configure --enable-tests all
+        cabal build -j --only-dependencies pkg:macaw-base
+        cabal build -j pkg:crucible-llvm pkg:dismantle-ppc pkg:dismantle-arm-xml
+    - name: Install Solvers
+      if: runner.os == 'Linux'
+      run: .github/ci.sh install_system_deps
+      env:
+        Z3_VERSION: "4.8.8"
+        YICES_VERSION: "2.6.2"
+        CVC4_VERSION: "4.1.8"
+
+    - name: Build macaw-symbolic-syntax
+      run: cabal build pkg:macaw-symbolic-syntax
+
+    - name: Test macaw-symbolic-syntax
+      run: cabal test pkg:macaw-symbolic-syntax
+
+    - name: Build macaw-x86
+      run: cabal build pkg:macaw-x86 pkg:macaw-x86-symbolic pkg:macaw-loader-x86
+
+    - name: Test macaw-x86
+      run: cabal test pkg:macaw-x86
+
+    - name: Test macaw-x86-symbolic
+      run: cabal test pkg:macaw-x86-symbolic
+
+    - name: Build macaw-x86-syntax
+      run: cabal build pkg:macaw-x86-syntax
+
+    - name: Test macaw-x86-syntax
+      run: cabal test pkg:macaw-x86-syntax
+
+    - name: Build macaw-x86-cli
+      run: cabal build pkg:macaw-x86-cli
+
+    - name: Test macaw-x86-cli
+      run: cabal test pkg:macaw-x86-cli
+
+    - name: Build macaw-aarch32
+      run: cabal build pkg:macaw-aarch32 pkg:macaw-aarch32-symbolic pkg:macaw-loader-aarch32
+    - name: Test macaw-aarch32
+      run: cabal test pkg:macaw-aarch32
+    - name: Test macaw-aarch32-symbolic
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-aarch32-symbolic
+    - name: Build macaw-aarch32-syntax
+      if: runner.os == 'Linux'
+      run: cabal build pkg:macaw-aarch32-syntax
+    - name: Test macaw-aarch32-syntax
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-aarch32-syntax
+
+    - name: Build macaw-ppc
+      run: cabal build pkg:macaw-ppc pkg:macaw-ppc-symbolic pkg:macaw-loader-ppc
+
+    - name: Test macaw-ppc
+      run: cabal test pkg:macaw-ppc
+
+    - name: Test macaw-ppc-symbolic
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-ppc-symbolic
+
+    - name: Build macaw-ppc-syntax
+      if: runner.os == 'Linux'
+      run: cabal build pkg:macaw-ppc-syntax
+
+    - name: Test macaw-ppc-syntax
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-ppc-syntax
+
+    - name: Build macaw-riscv
+      run: cabal build pkg:macaw-riscv pkg:macaw-riscv-symbolic pkg:macaw-loader-riscv
+
+    - name: Test macaw-riscv
+      run: cabal test pkg:macaw-riscv
+
+    - name: Test macaw-riscv-symbolic
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-riscv-symbolic
+
+    - name: Test macaw-riscv-syntax
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-riscv-syntax
+
+    - name: Build macaw-refinement
+      run: cabal build pkg:macaw-refinement
+
+    - name: Test macaw-refinement
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-refinement
+
+    - name: Build crucible-macaw-debug
+      run: cabal build pkg:crucible-macaw-debug
+
+    - name: Build compare-dwarfdump
       run: cabal build compare-dwarfdump
+
+    - uses: actions/cache/save@v4
+      name: Save cabal store cache
+      if: always()
+      with:
+        path: |
+          /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+          dist-newstyle
+        # Prefer previous SHA hash if it is still cached
+        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}

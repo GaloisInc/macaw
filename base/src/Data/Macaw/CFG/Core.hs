@@ -23,6 +23,7 @@ single CFG.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
 module Data.Macaw.CFG.Core
   ( -- * Stmt level declarations
     Stmt(..)
@@ -74,6 +75,7 @@ module Data.Macaw.CFG.Core
   , PrettyRegValue(..)
   , IsArchFn(..)
   , IsArchStmt(..)
+  , IsArchTermStmt(..)
   , collectValueRep
   , ppValueAssignments'
   , DocF
@@ -87,14 +89,15 @@ module Data.Macaw.CFG.Core
     -- ** Synonyms
   , ArchAddrValue
   , ArchSegmentOff
+  , ArchBlockPrecond
   , Data.Parameterized.TraversableFC.FoldableFC(..)
   , module Data.Macaw.CFG.AssignRhs
   , module Data.Macaw.Utils.Pretty
   ) where
 
 import           Control.Lens
-import           Control.Monad.Identity
-import           Control.Monad.State.Strict
+import           Control.Monad (when)
+import           Control.Monad.State.Strict (MonadState(..), State, gets, modify, runState)
 import           Data.Bits
 import           Data.Int (Int64)
 import qualified Data.Kind as Kind
@@ -110,9 +113,8 @@ import           Data.Parameterized.TraversableFC (FoldableFC(..))
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Text (Text)
-import           GHC.TypeLits
 import           Numeric (showHex)
-import           Numeric.Natural
+import           Numeric.Natural (Natural)
 import           Prettyprinter as PP
 
 import           Data.Macaw.CFG.App
@@ -121,6 +123,18 @@ import           Data.Macaw.Memory
 import           Data.Macaw.Types
 import           Data.Macaw.Utils.Pretty
 
+-- | This family maps architecture parameters to information needed to
+-- successfully translate machine code into Macaw CFGs.
+--
+-- This is currently used for registers values that are required to be
+-- known constants at translation time.  For example, on X86_64, due to
+-- aliasing between the FPU and MMX registers, we require that the
+-- floating point stack value is known at translation time so that
+-- we do not need to check which register is modified when pushing or
+-- poping from the x86 stack.
+--
+-- If no preconditions are needed, this can just be set to the unit type.
+type family ArchBlockPrecond (arch :: Kind.Type) :: Kind.Type
 
 -- | A pair containing a segment and valid offset within the segment.
 type ArchSegmentOff arch = MemSegmentOff (ArchAddrWidth arch)
@@ -227,6 +241,9 @@ instance TestEquality (CValue arch) where
     if x == y then Just Refl else Nothing
   testEquality _ _ = Nothing
 
+instance Eq (CValue arch tp) where
+  a == b = isJust (testEquality a b)
+
 instance OrdF (CValue arch) where
   compareF (BoolCValue x) (BoolCValue y) = fromOrdering (compare x y)
   compareF BoolCValue{} _ = LTF
@@ -299,7 +316,7 @@ instance Show (CValue arch tp) where
 -- and are immutable within that context (i.e. their value would not
 -- change from a memory write).
 data Value arch ids tp where
-  -- | A constant vlaue
+  -- | A constant value
   CValue :: !(CValue arch tp) -> Value arch ids tp
   -- | Value from an assignment statement.
   AssignedValue :: !(Assignment arch ids tp)
@@ -724,6 +741,12 @@ class IsArchStmt (f :: (Type -> Kind.Type) -> Kind.Type)  where
              -> f v
              -> Doc ann
 
+class IsArchTermStmt (f :: (Type -> Kind.Type) -> Kind.Type) where
+  ppArchTermStmt :: (forall u . v u -> Doc ann)
+                 -- ^ Function to pretty print contained values
+                 -> f v
+                 -> Doc ann
+
 -- | Constructs expected by architectures type classes.
 type ArchConstraints arch
    = ( RegisterInfo (ArchReg arch)
@@ -731,7 +754,7 @@ type ArchConstraints arch
      , IsArchFn   (ArchFn arch)
      , IsArchStmt (ArchStmt arch)
      , FoldableF  (ArchStmt arch)
-     , PrettyF    (ArchTermStmt arch)
+     , IsArchTermStmt (ArchTermStmt arch)
      , IPAlignment arch
      )
 

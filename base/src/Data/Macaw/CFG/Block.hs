@@ -40,7 +40,7 @@ data TermStmt arch ids
     --
     -- The registers include the state of registers just before the terminal statement
     -- executes.
-  | ArchTermStmt !(ArchTermStmt arch ids)
+  | ArchTermStmt !(ArchTermStmt arch (Value arch ids))
                  !(RegState (ArchReg arch) (Value arch ids))
 
 instance ArchConstraints arch
@@ -55,7 +55,7 @@ instance ArchConstraints arch
     , indent 2 (pretty s) ]
   pretty (ArchTermStmt ts regs) =
     vcat
-    [ prettyF ts
+    [ ppArchTermStmt pretty ts
     , indent 2 (pretty regs) ]
 
 ------------------------------------------------------------------------
@@ -65,7 +65,7 @@ instance ArchConstraints arch
 --
 -- The discovery process will attempt to map each block to a suitable ParsedBlock.
 data Block arch ids
-   = Block { blockStmts :: !([Stmt arch ids])
+   = Block { blockStmts :: ![Stmt arch ids]
              -- ^ List of statements in the block.
            , blockTerm :: !(TermStmt arch ids)
              -- ^ The last statement in the block.

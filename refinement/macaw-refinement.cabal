@@ -9,7 +9,7 @@ license-file:  LICENSE
 
 build-type:    Simple
 cabal-version: >= 2.0
-               
+
 description:
   The refinement library provides supplemental functionality for
   discovery of elements that macaw-base is not able to discover
@@ -42,7 +42,7 @@ extra-source-files:  Changelog.md
 
 source-repository head
   type: git
-  location: git://github.com/GaloisInc/macaw.git
+  location: https://github.com/GaloisInc/macaw.git
 
 
 library
@@ -61,12 +61,12 @@ library
                , macaw-ppc-symbolic
                , mtl
                , parameterized-utils
-               , prettyprinter
+               , prettyprinter >= 1.7
                , text
                , what4 >= 0.4.0
                , scheduler >= 1.4 && < 1.6
                , async
-               , lumberjack >= 0.1.0.2 && < 0.2
+               , lumberjack >= 0.1.0.2 && < 1.1
                , unliftio-core >= 0.2 && < 0.3
                , exceptions >= 0.10 && < 0.11
                , haggle
@@ -117,6 +117,7 @@ executable run-refinement
                , text
                , what4
                , crucible
+               , crucible-llvm
                , mtl
                , lumberjack
                , unliftio-core
@@ -151,7 +152,7 @@ test-suite test-refinements
                , crucible
                , crucible-llvm
                , what4
-               , optparse-applicative >= 0.13 && < 0.16
+               , optparse-applicative >= 0.13 && < 0.19
                , parameterized-utils
                , QuickCheck >= 2.7
                , semmc-ppc

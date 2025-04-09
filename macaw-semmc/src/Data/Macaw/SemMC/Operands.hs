@@ -6,6 +6,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Data.Macaw.SemMC.Operands (
   ExtractValue(..),
@@ -19,7 +20,6 @@ import           Data.Macaw.Types
 import           Data.Parameterized.NatRepr as NR
 import           Data.Word ( Word32 )
 import qualified Data.Word.Indexed as W
-import           GHC.TypeLits
 
 class ExtractValue arch a tp | arch a -> tp where
   extractValue :: MC.RegState (MC.ArchReg arch) (MC.Value arch ids) -> a -> MC.Value arch ids tp

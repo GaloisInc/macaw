@@ -1,6 +1,9 @@
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 
 module PPC64InstructionCoverage (
   ppc64InstructionCoverageTests
@@ -20,12 +23,12 @@ import qualified Test.Tasty.HUnit as T
 
 import qualified Data.ElfEdit as E
 
+import qualified Data.Macaw.Architecture.Info as MAI
 import qualified Data.Macaw.BinaryLoader as MBL
 import           Data.Macaw.BinaryLoader.PPC ()
+import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory as MM
-import qualified Data.Macaw.Memory.ElfLoader as MM
-import qualified Data.Macaw.PPC as RO
 import qualified Data.Parameterized.Some as PU
 
 import           Shared
@@ -34,16 +37,18 @@ ppc64InstructionCoverageTests :: [FilePath] -> T.TestTree
 ppc64InstructionCoverageTests = T.testGroup "PPCCoverage" . map mkTest
 
 mkTest :: FilePath -> T.TestTree
-mkTest fp = T.testCase fp (withELF64 fp (testMacaw fp))
+mkTest fp = T.testCase fp (withPPCELF fp (testMacaw fp))
 
-testMacaw :: FilePath -> E.ElfHeaderInfo 64 -> IO ()
-testMacaw fpath elf = do
-  let loadCfg = MM.defaultLoadOptions { MM.loadOffset = Just 0 }
-  loadedBinary <- MBL.loadBinary loadCfg elf
+testMacaw
+  :: (MC.ArchAddrWidth arch ~ w, MC.MemWidth w, MBL.BinaryLoader arch (E.ElfHeaderInfo w))
+  => FilePath
+  -> MAI.ArchitectureInfo arch
+  -> MBL.LoadedBinary arch (E.ElfHeaderInfo w)
+  -> IO ()
+testMacaw fpath archInfo loadedBinary = do
   entries <- MBL.entryPoints loadedBinary
-  let cfg = RO.ppc64_linux_info loadedBinary
   let mem = MBL.memoryImage loadedBinary
-  let di = MD.cfgFromAddrs cfg mem M.empty (F.toList entries) []
+  let di = MD.cfgFromAddrs archInfo mem M.empty (F.toList entries) []
   let allFoundBlockAddrs :: S.Set Word64
       allFoundBlockAddrs =
         S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.segoffAddr (MD.pblockAddr pbr))))

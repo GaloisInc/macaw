@@ -1,0 +1,41 @@
+name:                macaw-loader
+version:             0.1.0.0
+synopsis:            Uniform interface Library providing macaw Memory and entrypoints for a binary image.
+description:
+            .
+            This library provides a uniform interface to load a binary
+            (e.g. in ELF format) and get macaw Memory and a list of
+            entry points.
+            .
+            This also helps extracting auxiliary information (e.g. the
+            PPC TOC/Table-Of-Contents).  It tries to encapsulate a lot
+            of the extra logic around entry point identification (like
+            wanting to use the TOC on PowerPC).
+            .
+            The 'binaryRepr' used is not just a width in order to
+            allow future support of a Mach-O and/or PE repr as well as
+            the ELF format.
+
+homepage:            https://github.com/GaloisInc/macaw-loader
+license:             BSD3
+license-file:        LICENSE
+author:              Galois, Inc.
+maintainer:          kquick@galois.com
+copyright:           2018-2025, Galois Inc.
+category:            Development
+build-type:          Simple
+extra-source-files:  ChangeLog.md
+cabal-version:       >=1.10
+
+library
+  exposed-modules: Data.Macaw.BinaryLoader
+                   Data.Macaw.BinaryLoader.ELF
+  build-depends:       base >=4.9 && <5
+                     , bytestring
+                     , elf-edit >= 0.39
+                     , exceptions
+                     , macaw-base
+                     , parameterized-utils
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+  ghc-options:         -Wall -Wcompat

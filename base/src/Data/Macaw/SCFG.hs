@@ -7,9 +7,7 @@ for simple optimizations including mem2reg
 -}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
 module Data.Macaw.SCFG
   ( SCFG(..)
   , SCFGBlock(..)

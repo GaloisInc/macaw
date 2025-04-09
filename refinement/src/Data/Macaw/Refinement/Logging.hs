@@ -8,7 +8,7 @@ module Data.Macaw.Refinement.Logging (
 import qualified Control.Exception as X
 import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.Memory as MM
-import qualified Data.Text.Prettyprint.Doc as PP
+import qualified Prettyprinter as PP
 import           Text.Printf ( printf )
 
 data RefinementLog arch = RefiningTransferAt (MC.ArchSegmentOff arch)

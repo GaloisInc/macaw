@@ -4,18 +4,22 @@ task needed before deleting unused code.
 -}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Analysis.RegisterUse
   ( -- * Exports for function recovery
     registerUse
+  , BlockInvariantMap
   , RegisterUseError(..)
+  , RegisterUseErrorReason(..)
+  , ppRegisterUseErrorReason
+  , RegisterUseErrorTag(..)
     -- ** Input information
   , RegisterUseContext(..)
   , ArchFunType
@@ -23,17 +27,19 @@ module Data.Macaw.Analysis.RegisterUse
   , PostTermStmtInvariants
   , PostValueMap
   , pvmFind
+  , MemSlice(..)
     -- * Architecture specific summarization
   , ArchTermStmtUsageFn
   , RegisterUseM
   , BlockStartConstraints(..)
+  , locDomain
   , postCallConstraints
   , BlockUsageSummary(..)
   , RegDependencyMap
   , setRegDep
   , StartInferContext
   , InferState
-  , InferValue(..)
+  , BlockInferValue(..)
   , valueDeps
     -- *** FunPredMap
   , FunPredMap
@@ -46,9 +52,13 @@ module Data.Macaw.Analysis.RegisterUse
   , biPredPostValues
   , biLocMap
   , biCallFunType
+  , biAssignMap
   , LocList(..)
+  , StackAnalysis.LocMap(..)
+  , StackAnalysis.locMapToList
+  , StackAnalysis.BoundLoc(..)
   , MemAccessInfo(..)
-  , ValueRegUseDomain(..)
+  , InitInferValue(..)
     -- *** Mem Access info
   , StmtIndex
     -- *** Use information
@@ -57,9 +67,13 @@ module Data.Macaw.Analysis.RegisterUse
   ) where
 
 import           Control.Lens
-import           Control.Monad.Except
-import           Control.Monad.Reader
-import           Control.Monad.State.Strict
+import           Control.Monad (unless, when, zipWithM_)
+import           Control.Monad.Except (MonadError(..), Except)
+import           Control.Monad.Reader (MonadReader(..), ReaderT(..), asks)
+import           Control.Monad.State.Strict (MonadState(..), State, StateT, execStateT, evalState, gets, modify)
+import qualified Data.Bits as Bits
+import qualified Data.ByteString.Char8 as BSC
+import qualified Data.ByteString as BS
 import           Data.Foldable
 import           Data.Kind
 import           Data.Map.Strict (Map)
@@ -70,10 +84,12 @@ import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Set (Set)
 import qualified Data.Set as Set
+import           Data.Word (Word64)
 import           GHC.Stack
 import           Prettyprinter
+import           Text.Printf (printf)
 
-import           Data.Macaw.AbsDomain.StackAnalysis
+import           Data.Macaw.AbsDomain.StackAnalysis as StackAnalysis
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
   ( DemandContext
@@ -87,11 +103,13 @@ import           Data.Macaw.AbsDomain.CallParams
 
 import           Data.STRef
 
+import           Data.Parameterized.TH.GADT
+
 -------------------------------------------------------------------------------
 -- funBlockPreds
 
--- | A map from each address `l` to the addresses of blocks that may
--- jump to `l`.
+-- | A map from each starting block address @l@ to the addresses of
+-- blocks that may jump to @l@.
 type FunPredMap w = Map (MemSegmentOff w) [MemSegmentOff w]
 
 -- | Return the FunPredMap for the discovered block function.
@@ -109,51 +127,105 @@ funBlockPreds info = Map.fromListWith (++)
 -- RegisterUseError
 
 -- | Errors from register use
-data RegisterUseError arch
-   = CallStackHeightError !(MemAddr (ArchAddrWidth arch))
-   | UnresolvedFunctionTypeError !(ArchSegmentOff arch) !String
+--
+-- Tag parameter used for addition information in tag
+data RegisterUseErrorTag e where
+  -- | Could not resolve height of call stack at given block
+  CallStackHeightError :: RegisterUseErrorTag ()
+  -- | The value read at given block and statement index could not
+  -- be resolved.
+  UnresolvedStackRead :: RegisterUseErrorTag ()
+  -- | We do not have support for stack reads.
+  UnsupportedCondStackRead :: RegisterUseErrorTag ()
+  -- | Call with indirect target
+  IndirectCallTarget :: RegisterUseErrorTag ()
+  -- | Call target address was not a valid memory location.
+  InvalidCallTargetAddress :: RegisterUseErrorTag Word64
+  -- | Call target was not a known function.
+  CallTargetNotFunctionEntryPoint :: RegisterUseErrorTag Word64
+  -- | Could not determine arguments to call.
+  UnknownCallTargetArguments :: RegisterUseErrorTag BS.ByteString
+  -- | We could not resolve the arguments to a known var-args function.
+  ResolutonFailureCallToKnownVarArgsFunction :: RegisterUseErrorTag String
+  -- | We do not yet support the calling convention needed for this function.
+  UnsupportedCallTargetCallingConvention :: RegisterUseErrorTag BS.ByteString
 
-instance MemWidth (RegAddrWidth (ArchReg arch)) => Show (RegisterUseError arch) where
-  show (CallStackHeightError addr) =
-    "Could not resolve concrete stack height for call at "
-      ++ show addr
-  show (UnresolvedFunctionTypeError addr msg) =
-    show addr ++ ": "  ++ msg
+instance Show (RegisterUseErrorTag e) where
+  show CallStackHeightError = "Symbolic call stack height"
+  show UnresolvedStackRead = "Unresolved stack read"
+  show UnsupportedCondStackRead = "Conditional stack read"
+  show IndirectCallTarget = "Indirect call target"
+  show InvalidCallTargetAddress = "Invalid call target address"
+  show CallTargetNotFunctionEntryPoint = "Call target not function entry point"
+  show UnknownCallTargetArguments = "Unresolved call target arguments"
+  show ResolutonFailureCallToKnownVarArgsFunction = "Could not resolve varargs args"
+  show UnsupportedCallTargetCallingConvention = "Unsupported calling convention"
+
+$(pure [])
+
+instance TestEquality RegisterUseErrorTag where
+  testEquality = $(structuralTypeEquality [t|RegisterUseErrorTag|] [])
+
+instance OrdF RegisterUseErrorTag where
+  compareF = $(structuralTypeOrd [t|RegisterUseErrorTag|] [])
+
+data RegisterUseErrorReason = forall e . Reason !(RegisterUseErrorTag e) !e
+
+-- | Errors from register use
+data RegisterUseError arch
+   = RegisterUseError {
+     ruBlock :: !(ArchSegmentOff arch),
+     ruStmt :: !StmtIndex,
+     ruReason :: !RegisterUseErrorReason
+   }
+
+ppRegisterUseErrorReason :: RegisterUseErrorReason -> String
+ppRegisterUseErrorReason (Reason tag v) =
+  case tag of
+    CallStackHeightError ->  "Could not resolve concrete stack height."
+    UnresolvedStackRead -> "Unresolved stack read."
+    UnsupportedCondStackRead -> "Unsupported conditional stack read."
+    IndirectCallTarget -> "Indirect call target."
+    InvalidCallTargetAddress -> "Invalid call target address."
+    CallTargetNotFunctionEntryPoint -> "Call target not function entry point."
+    UnknownCallTargetArguments -> printf "Unknown arguments to %s." (BSC.unpack v)
+    ResolutonFailureCallToKnownVarArgsFunction -> "Could not resolve varargs args."
+    UnsupportedCallTargetCallingConvention -> "Unsupported calling convention."
 
 -------------------------------------------------------------------------------
--- StackOffset information
+-- InitInferValue
 
--- | This represents a predicate that captures information about the
--- value of a register, stack location, or assignment.
-data ValueRegUseDomain arch tp where
+-- | This denotes specific value equalities that invariant inferrences
+-- associates with Macaw values.
+data InitInferValue arch tp where
   -- | Denotes the value must be the given offset of the stack frame.
-  ValueRegUseStackOffset :: !(MemInt (ArchAddrWidth arch))
-                         -> ValueRegUseDomain arch (BVType (ArchAddrWidth arch))
+  InferredStackOffset :: !(MemInt (ArchAddrWidth arch))
+                         -> InitInferValue arch (BVType (ArchAddrWidth arch))
   -- | Denotes the value must be the value passed into the function at
   -- the given register.
   FnStartRegister :: !(ArchReg arch tp)
-                  -> ValueRegUseDomain arch tp
-  -- | This indicates the value is equal to the value stored at the
-  -- location.
+                  -> InitInferValue arch tp
+  -- | Denotes a value is equal to the value stored at the
+  -- representative location when the block start.
   --
-  -- Note. The location in this is a "representative" location in that
-  -- if a location @l@ maps to @RegEqualLoc r@, then all locations
-  -- that are equal to this location will map to @RegEqualLoc r@.
+  -- Note. The location in this must a "representative" location.
+  -- Representative locations are those locations chosen to represent
+  -- equivalence classes of locations inferred equal by block inference.
   RegEqualLoc :: !(BoundLoc (ArchReg arch) tp)
-              -> ValueRegUseDomain arch tp
+              -> InitInferValue arch tp
 
-instance ShowF (ArchReg arch) => Show (ValueRegUseDomain arch tp) where
-  showsPrec _ (ValueRegUseStackOffset o) =
+instance ShowF (ArchReg arch) => Show (InitInferValue arch tp) where
+  showsPrec _ (InferredStackOffset o) =
     showString "(stack_offset " . shows o . showString ")"
   showsPrec _ (FnStartRegister r) =
     showString "(saved_reg " . showsF r . showString ")"
   showsPrec _ (RegEqualLoc l) =
     showString "(block_loc " . shows (pretty l) . showString ")"
 
-instance ShowF (ArchReg arch) => ShowF (ValueRegUseDomain arch)
+instance ShowF (ArchReg arch) => ShowF (InitInferValue arch)
 
-instance TestEquality (ArchReg arch) => TestEquality (ValueRegUseDomain arch) where
-  testEquality (ValueRegUseStackOffset x) (ValueRegUseStackOffset y) =
+instance TestEquality (ArchReg arch) => TestEquality (InitInferValue arch) where
+  testEquality (InferredStackOffset x) (InferredStackOffset y) =
     if x == y then Just Refl else Nothing
   testEquality (FnStartRegister x) (FnStartRegister y) =
     testEquality x y
@@ -161,11 +233,11 @@ instance TestEquality (ArchReg arch) => TestEquality (ValueRegUseDomain arch) wh
     testEquality x y
   testEquality _ _ = Nothing
 
-instance OrdF (ArchReg arch) => OrdF (ValueRegUseDomain arch) where
-  compareF (ValueRegUseStackOffset x) (ValueRegUseStackOffset y) =
+instance OrdF (ArchReg arch) => OrdF (InitInferValue arch) where
+  compareF (InferredStackOffset x) (InferredStackOffset y) =
     fromOrdering (compare x y)
-  compareF (ValueRegUseStackOffset _)  _ = LTF
-  compareF _ (ValueRegUseStackOffset _)  = GTF
+  compareF (InferredStackOffset _)  _ = LTF
+  compareF _ (InferredStackOffset _)  = GTF
 
   compareF (FnStartRegister x) (FnStartRegister y) = compareF x y
   compareF (FnStartRegister _) _ = LTF
@@ -182,7 +254,7 @@ instance OrdF (ArchReg arch) => OrdF (ValueRegUseDomain arch) where
 -- If a register or stack location does not appear here, it
 -- is implicitly set to itself.
 newtype BlockStartConstraints arch =
-  BSC { bscLocMap :: LocMap (ArchReg arch) (ValueRegUseDomain arch) }
+  BSC { bscLocMap :: LocMap (ArchReg arch) (InitInferValue arch) }
 
 data TypedPair (key :: k -> Type)  (tp :: k) = TypedPair !(key tp) !(key tp)
 
@@ -200,29 +272,29 @@ instance OrdF k => OrdF (TypedPair k) where
 locDomain :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
           => BlockStartConstraints arch
           -> BoundLoc (ArchReg arch) tp
-          -> ValueRegUseDomain arch tp
+          -> InitInferValue arch tp
 locDomain cns l = fromMaybe (RegEqualLoc l) (locLookup l (bscLocMap cns))
 
 -- | Function for joining constraints on a specific location.
 --
 -- Used by @joinBlockStartConstraints@ below.
-joinValueRegUseDomain :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
+joinInitInferValue :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                       => BlockStartConstraints arch
                          -- ^ New constraints being added to existing one.
-                      -> STRef s (LocMap (ArchReg arch) (ValueRegUseDomain arch))
+                      -> STRef s (LocMap (ArchReg arch) (InitInferValue arch))
                          -- ^ Map from locations to values that will be used in resulr.
-                      -> STRef s (MapF (TypedPair (ValueRegUseDomain arch)) (BoundLoc (ArchReg arch)))
+                      -> STRef s (MapF (TypedPair (InitInferValue arch)) (BoundLoc (ArchReg arch)))
                          -- ^ Cache that maps (old,new) constraints to
                          -- a location that satisfied those
                          -- constraints in old and new constraint set
                          -- respectively.
                       -> BoundLoc (ArchReg arch) tp
-                      -> ValueRegUseDomain arch tp
+                      -> InitInferValue arch tp
                         -- ^ Old domain for location.
                       -> Changed s ()
-joinValueRegUseDomain newCns cnsRef cacheRef l oldDomain = do
+joinInitInferValue newCns cnsRef cacheRef l oldDomain = do
   case (oldDomain, locDomain newCns l) of
-    (ValueRegUseStackOffset i, ValueRegUseStackOffset j)
+    (InferredStackOffset i, InferredStackOffset j)
       | i == j ->
           changedST $ modifySTRef cnsRef $ nonOverlapLocInsert l oldDomain
     (FnStartRegister rx,  FnStartRegister ry)
@@ -261,17 +333,17 @@ joinBlockStartConstraints (BSC oldCns) newCns = do
   cacheRef <- changedST $ newSTRef MapF.empty
 
   let regFn :: ArchReg arch tp
-            -> ValueRegUseDomain arch tp
+            -> InitInferValue arch tp
             -> Changed s ()
-      regFn r d = joinValueRegUseDomain newCns cnsRef cacheRef (RegLoc r) d
+      regFn r d = joinInitInferValue newCns cnsRef cacheRef (RegLoc r) d
   MapF.traverseWithKey_ regFn (locMapRegs oldCns)
 
   let stackFn :: MemInt (ArchAddrWidth arch)
               -> MemRepr tp
-              -> ValueRegUseDomain arch tp
+              -> InitInferValue arch tp
               -> Changed s ()
       stackFn o r d =
-        joinValueRegUseDomain newCns cnsRef cacheRef (StackOffLoc o r) d
+        joinInitInferValue newCns cnsRef cacheRef (StackOffLoc o r) d
   memMapTraverseWithKey_ stackFn (locMapStack oldCns)
 
   changedST $ BSC <$> readSTRef cnsRef
@@ -282,7 +354,8 @@ unionBlockStartConstraints :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch
                            => BlockStartConstraints arch
                            -> BlockStartConstraints arch
                            -> BlockStartConstraints arch
-unionBlockStartConstraints n o = fromMaybe o (runChanged (joinBlockStartConstraints o n))
+unionBlockStartConstraints n o =
+  fromMaybe o (runChanged (joinBlockStartConstraints o n))
 
 -------------------------------------------------------------------------------
 -- StmtIndex
@@ -290,61 +363,105 @@ unionBlockStartConstraints n o = fromMaybe o (runChanged (joinBlockStartConstrai
 -- | Index of a stmt in a block.
 type StmtIndex = Int
 
-------------------------------------------------------------------------
--- StartValueExpr
+-- | This is used to to control which parts of a value we need to read.
+data MemSlice wtp rtp where
 
--- | Information about a Macaw value in the invariant inference monad.
-data InferValue arch ids tp where
+  NoMemSlice :: MemSlice tp tp
+  -- | @MemSlize o w r@ indicates that we read a value of type @r@ @o@ bytes into the write of type @w@.
+
+  MemSlice :: !Integer -- ^ Offset of read relative to write.
+           -> !(MemRepr wtp) -- ^ Write repr
+           -> !(MemRepr rtp) -- ^ Read repr
+           -> MemSlice wtp rtp
+
+deriving instance Show (MemSlice w r)
+
+instance TestEquality (MemSlice wtp) where
+  testEquality NoMemSlice NoMemSlice = Just Refl
+  testEquality (MemSlice xo xw xr) (MemSlice yo yw yr)
+    | xo == yo, Just Refl <- testEquality xw yw = testEquality xr yr
+  testEquality _ _ = Nothing
+
+joinOrdering :: Ordering -> OrderingF a b -> OrderingF a b
+joinOrdering LT _ = LTF
+joinOrdering EQ o = o
+joinOrdering GT _ = GTF
+
+instance OrdF (MemSlice wtp) where
+  compareF NoMemSlice NoMemSlice = EQF
+  compareF NoMemSlice MemSlice{} = LTF
+  compareF MemSlice{} NoMemSlice = GTF
+  compareF (MemSlice xo xw xr) (MemSlice yo yw yr) =
+    joinOrdering (compare xo yo) $
+    joinOrderingF (compareF xw yw) $
+    compareF xr yr
+
+------------------------------------------------------------------------
+-- BlockInferValue
+
+-- | This is an expression that represents a more canonical representation
+-- of a Macaw value inferred by the invariant inference routine.
+--
+-- This difference between `InitInferValue` and `BlockInferValue` is that
+-- `InitInferValue` captures constraints important to capture between blocks
+-- while `BlockInferValue` has a richer constraint language capturing
+-- inferrences within a block.
+data BlockInferValue arch ids tp where
   -- | Value register use domain
-  IVDomain :: !(ValueRegUseDomain arch tp)
-           -> InferValue arch ids tp
+  IVDomain :: !(InitInferValue arch wtp)
+           -> !(MemSlice wtp rtp)
+           -> BlockInferValue arch ids rtp
+
   -- | The value of an assignment.
   IVAssignValue :: !(AssignId ids tp)
-                -> InferValue arch ids tp
+                -> BlockInferValue arch ids tp
   -- | A constant
-  IVCValue :: !(CValue arch tp) -> InferValue arch ids tp
+  IVCValue :: !(CValue arch tp) -> BlockInferValue arch ids tp
   -- | Denotes the value written by a conditional write at the given
   -- index if the condition is true, or the value currently stored in
   -- memory if the condition is false.
   --
   -- The MemRepr is the type of the write, and used for comparison.
-  IVCondWrite :: !StmtIndex -> !(MemRepr tp) -> InferValue arch ids tp
+  IVCondWrite :: !StmtIndex -> !(MemRepr tp) -> BlockInferValue arch ids tp
 
-deriving instance ShowF (ArchReg arch) => Show (InferValue arch ids tp)
+deriving instance ShowF (ArchReg arch) => Show (BlockInferValue arch ids tp)
 
-instance ShowF (ArchReg arch) => ShowF (InferValue arch ids)
+instance ShowF (ArchReg arch) => ShowF (BlockInferValue arch ids)
 
 -- | Pattern for stack offset expressions
 pattern FrameExpr :: ()
                   => (tp ~ BVType (ArchAddrWidth arch))
                   => MemInt (ArchAddrWidth arch)
-                  -> InferValue arch ids tp
-pattern FrameExpr o = IVDomain (ValueRegUseStackOffset o)
+                  -> BlockInferValue arch ids tp
+pattern FrameExpr o = IVDomain (InferredStackOffset o) NoMemSlice
 
 -- This returns @Just Refl@ if the two expressions denote the same
 -- value under the assumptions about the start of the block, and the
 -- assumption that non-stack writes do not affect the curent stack
 -- frame.
-instance TestEquality (ArchReg arch) => TestEquality (InferValue arch ids) where
-  testEquality (IVDomain x) (IVDomain y) = testEquality x y
+instance TestEquality (ArchReg arch) => TestEquality (BlockInferValue arch ids) where
+  testEquality (IVDomain x xs) (IVDomain y ys) = do
+    Refl <- testEquality x y
+    testEquality xs ys
   testEquality (IVAssignValue x) (IVAssignValue y) = testEquality x y
   testEquality (IVCValue x) (IVCValue y) = testEquality x y
   testEquality (IVCondWrite x xtp) (IVCondWrite y ytp) =
-    case x == y of
-      True ->
+    if x == y
+      then
         case testEquality xtp ytp of
           Just Refl -> Just Refl
           Nothing -> error "Equal conditional writes with inequal types."
-      False -> Nothing
+      else Nothing
   testEquality _ _ = Nothing
 
--- Note. The @OrdF@ instance is a total order over @InferValue@.
+-- Note. The @OrdF@ instance is a total order over @BlockInferValue@.
 -- If it returns @EqF@ then it guarantees the two expressions denote
 -- the same value under the assumptions about the start of the block,
--- and the assumption that non-stack writes do not affect the curent
+-- and the assumption that non-stack writes do not affect the current
 -- stack frame.
-instance OrdF (ArchReg arch) => OrdF (InferValue arch ids) where
-  compareF (IVDomain x) (IVDomain y) = compareF x y
+instance OrdF (ArchReg arch) => OrdF (BlockInferValue arch ids) where
+  compareF (IVDomain x xs) (IVDomain y ys) =
+    joinOrderingF (compareF x y) (compareF xs ys)
   compareF IVDomain{} _ = LTF
   compareF _ IVDomain{} = GTF
 
@@ -368,7 +485,7 @@ instance OrdF (ArchReg arch) => OrdF (InferValue arch ids) where
 -- | Information about a stack location used in invariant inference.
 data InferStackValue arch ids tp where
   -- | The stack location had this value in the initial stack.
-  ISVInitValue :: !(ValueRegUseDomain arch tp)
+  ISVInitValue :: !(InitInferValue arch tp)
                -> InferStackValue arch ids tp
   -- | The value was written to the stack by a @WriteMem@ instruction
   -- in the current block at the given index, and the value written
@@ -395,8 +512,9 @@ data InferStackValue arch ids tp where
 -- | Read-only information needed to infer successor start
 -- constraints for a lbok.
 data StartInferContext arch =
-  SIC { sicAddr :: !(MemSegmentOff (ArchAddrWidth arch))
-      , sicRegs :: !(MapF (ArchReg arch) (ValueRegUseDomain arch))
+  SIC { sicAddr :: !(ArchSegmentOff arch)
+        -- ^ Address of block we are inferring state for.
+      , sicRegs :: !(MapF (ArchReg arch) (InitInferValue arch))
         -- ^ Map rep register to rheir initial domain information.
       }
 
@@ -404,30 +522,51 @@ deriving instance (ShowF (ArchReg arch), MemWidth (ArchAddrWidth arch))
       => Show (StartInferContext arch)
 
 
+-- |  Evaluate a value in the context of the start infer state and
+-- initial register assignment.
+valueToStartExpr' :: OrdF (ArchReg arch)
+                 => StartInferContext arch
+                    -- ^ Initial value of registers
+                 -> MapF (AssignId ids) (BlockInferValue arch ids)
+                    -- ^ Map from assignments to value.
+                 -> Value arch ids wtp
+                    -- ^ Value to convert.
+                 -> MemSlice wtp rtp
+                 -> Maybe (BlockInferValue arch ids rtp)
+valueToStartExpr' _ _ (CValue c) NoMemSlice = Just (IVCValue c)
+valueToStartExpr' _ _ (CValue _) MemSlice{} = Nothing
+valueToStartExpr' _ am (AssignedValue (Assignment aid _)) NoMemSlice = Just $
+  MapF.findWithDefault (IVAssignValue aid) aid am
+valueToStartExpr' _ _ (AssignedValue (Assignment _ _)) MemSlice{} = Nothing
+valueToStartExpr' ctx _ (Initial r) ms = Just $
+  IVDomain (MapF.findWithDefault (RegEqualLoc (RegLoc r)) r (sicRegs ctx)) ms
+
+
 -- | Evaluate a value in the context of the start infer state and
 -- initial register assignment.
 valueToStartExpr :: OrdF (ArchReg arch)
                  => StartInferContext arch
                     -- ^ Initial value of registers
-                 -> MapF (AssignId ids) (InferValue arch ids)
+                 -> MapF (AssignId ids) (BlockInferValue arch ids)
                     -- ^ Map from assignments to value.
                  -> Value arch ids tp
-                 -> InferValue arch ids tp
+                 -> BlockInferValue arch ids tp
 valueToStartExpr _ _ (CValue c) = IVCValue c
 valueToStartExpr _ am (AssignedValue (Assignment aid _)) =
   MapF.findWithDefault (IVAssignValue aid) aid am
 valueToStartExpr ctx _ (Initial r) =
   IVDomain (MapF.findWithDefault (RegEqualLoc (RegLoc r)) r (sicRegs ctx))
+           NoMemSlice
 
 inferStackValueToValue :: OrdF (ArchReg arch)
                        => StartInferContext arch
                        -- ^ Initial value of registers
-                       -> MapF (AssignId ids) (InferValue arch ids)
+                       -> MapF (AssignId ids) (BlockInferValue arch ids)
                        -- ^ Map from assignments to value.
                        -> InferStackValue arch ids tp
                        -> MemRepr tp
-                       -> InferValue arch ids tp
-inferStackValueToValue _ _ (ISVInitValue d)   _    = IVDomain d
+                       -> BlockInferValue arch ids tp
+inferStackValueToValue _ _ (ISVInitValue d)   _    = IVDomain d NoMemSlice
 inferStackValueToValue ctx m (ISVWrite _idx v)  _  = valueToStartExpr ctx m v
 inferStackValueToValue _ _ (ISVCondWrite idx _ _ _) repr = IVCondWrite idx repr
 
@@ -436,16 +575,17 @@ data MemAccessInfo arch ids
    = -- | The access was not inferred to affect the current frame
      NotFrameAccess
      -- | The access read a frame offset that has not been written to
-     -- by the current block.  The domain information is for the value read.
+     -- by the current block.  The inferred value describes the value read.
    | forall tp
-     . FrameReadInitAccess !(MemInt (ArchAddrWidth arch)) !(ValueRegUseDomain arch tp)
+     . FrameReadInitAccess !(MemInt (ArchAddrWidth arch)) !(InitInferValue arch tp)
      -- | The access read a frame offset that has been written to by a
      -- previous write or cond-write in this block, and the
      -- instruction had the given index.
-   | FrameReadWriteAccess !(MemInt (ArchAddrWidth arch)) !StmtIndex
+   | FrameReadWriteAccess !StmtIndex
       -- | The access was a memory read that overlapped, but did not
      -- exactly match a previous write.
-   | FrameReadOverlapAccess !(MemInt (ArchAddrWidth arch))
+   | FrameReadOverlapAccess
+        !(MemInt (ArchAddrWidth arch))
      -- | The access was a write to the current frame.
    | FrameWriteAccess !(MemInt (ArchAddrWidth arch))
      -- | The access was a conditional write to the current frame at the
@@ -471,17 +611,17 @@ data InferState arch ids =
         --
         -- If an assignment id @aid@ is not in this map, then we assume it
         -- is equal to @SAVEqualAssign aid@
-      , sisAssignMap :: !(MapF (AssignId ids) (InferValue arch ids))
+      , sisAssignMap :: !(MapF (AssignId ids) (BlockInferValue arch ids))
         -- | Maps apps to the assignment identifier that created it.
-      , sisAppCache :: !(MapF (App (InferValue arch ids)) (AssignId ids))
+      , sisAppCache :: !(MapF (App (BlockInferValue arch ids)) (AssignId ids))
         -- | Offset of current instruction relative to first
         -- instruction in block.
       , sisCurrentInstructionOffset :: !(ArchAddrWord arch)
         -- | Information about memory accesses in reverse order of statement.
         --
-        -- There should be exactly one of these for each @ReadMem@,
+        -- There should be one for each statement that is a @ReadMem@,
         -- @CondReadMem@, @WriteMem@ and @CondWriteMem@.
-      , sisMemAccessStack :: ![MemAccessInfo arch ids]
+      , sisMemAccessStack :: ![(StmtIndex, MemAccessInfo arch ids)]
       }
 
 -- | Current state of stack.
@@ -494,12 +634,12 @@ sisStackLens = lens sisStack (\s v -> s { sisStack = v })
 -- If an assignment id is not in this map, then we assume it could not
 -- be interpreted by the analysis.
 sisAssignMapLens :: Lens' (InferState arch ids)
-                          (MapF (AssignId ids) (InferValue arch ids))
+                          (MapF (AssignId ids) (BlockInferValue arch ids))
 sisAssignMapLens = lens sisAssignMap (\s v -> s { sisAssignMap = v })
 
 -- | Maps apps to the assignment identifier that created it.
 sisAppCacheLens :: Lens' (InferState arch ids)
-                         (MapF (App (InferValue arch ids)) (AssignId ids))
+                         (MapF (App (BlockInferValue arch ids)) (AssignId ids))
 sisAppCacheLens = lens sisAppCache (\s v -> s { sisAppCache = v })
 
 -- | Maps apps to the assignment identifier that created it.
@@ -512,16 +652,22 @@ sisCurrentInstructionOffsetLens =
 -- Note. The process of inferring start constraints intentionally does
 -- not do stack escape analysis or other
 type StartInfer arch ids =
-  ReaderT (StartInferContext arch) (State (InferState arch ids))
+  ReaderT (StartInferContext arch) (StateT (InferState arch ids) (Except (RegisterUseError arch)))
 
--- | Set the value associtated with an assignment
-setAssignVal :: AssignId ids tp -> InferValue arch ids tp -> StartInfer arch ids ()
+-- | Set the value associated with an assignment
+setAssignVal :: AssignId ids tp
+             -> BlockInferValue arch ids tp
+             -> StartInfer arch ids ()
 setAssignVal aid v = sisAssignMapLens %= MapF.insert aid v
 
 -- | Record the mem access information
-addMemAccessInfo :: MemAccessInfo arch ids -> StartInfer arch ids ()
-addMemAccessInfo i = seq i $ modify $ \s -> s { sisMemAccessStack = i : sisMemAccessStack s }
+addMemAccessInfo :: StmtIndex -> MemAccessInfo arch ids -> StartInfer arch ids ()
+addMemAccessInfo idx i = seq idx $ seq i $ do
+  modify $ \s -> s { sisMemAccessStack = (idx,i) : sisMemAccessStack s }
 
+-- | @processApp aid app@ computes the effect of a program assignment @aid <- app@.  When `app` is
+-- a computation over a stack offset expression (a `FrameExpr`), we attempt to simplify it, as we
+-- require a concrete stack offset when computing `postCallConstraints`.
 processApp :: (OrdF (ArchReg arch), MemWidth (ArchAddrWidth arch))
            => AssignId ids tp
            -> App (Value arch ids) tp
@@ -529,6 +675,11 @@ processApp :: (OrdF (ArchReg arch), MemWidth (ArchAddrWidth arch))
 processApp aid app = do
   ctx <- ask
   am <- gets sisAssignMap
+  -- This inspects the `app` term to detect cases where the abstract expression can be simplified
+  -- down to a `FrameExpr` expression.  In such cases, the simplified expression is registered as
+  -- the value for this assignment.  Otherwise, the value for the assignment remains abstract.
+  -- This may not be exhaustive, so if you encounter the `CallStackHeightError` in
+  -- `postCallConstraints`, you may need to extend the patterns recognized here.
   case fmapFC (valueToStartExpr ctx am) app of
     BVAdd _ (FrameExpr o) (IVCValue (BVCValue _ c)) ->
       setAssignVal aid (FrameExpr (o+fromInteger c))
@@ -536,6 +687,10 @@ processApp aid app = do
       setAssignVal aid (FrameExpr (o+fromInteger c))
     BVSub _ (FrameExpr o) (IVCValue (BVCValue _ c)) ->
       setAssignVal aid (FrameExpr (o-fromInteger c))
+    BVAnd _ (FrameExpr o) (IVCValue (BVCValue _ c)) ->
+      setAssignVal aid (FrameExpr (o Bits..&. fromInteger c))
+    BVAnd _ (IVCValue (BVCValue _ c)) (FrameExpr o) ->
+      setAssignVal aid (FrameExpr (o Bits..&. fromInteger c))
     appExpr -> do
       c <- gets sisAppCache
       -- Check to see if we have seen an app equivalent to
@@ -549,72 +704,106 @@ processApp aid app = do
         Just prevId -> do
           setAssignVal aid (IVAssignValue prevId)
 
+-- | @checkReadWithinWrite writeOff writeType readOff readType@ checks that
+-- the read is contained within the write and returns a mem slice if so.
+checkReadWithinWrite :: MemWidth w
+           => MemInt w -- ^ Write offset
+           -> MemRepr wtp -- ^ Write repr
+           -> MemInt w -- ^ Read offset
+           -> MemRepr rtp -- ^ Read repr
+           -> Maybe (MemSlice wtp rtp)
+checkReadWithinWrite wo wr ro rr
+  | wo == ro, Just Refl <- testEquality wr rr =
+      Just NoMemSlice
+  | wo <= ro
+  , d <- toInteger ro - toInteger wo
+  , rEnd <- d + toInteger (memReprBytes rr)
+  , wEnd <- toInteger (memReprBytes wr)
+  , rEnd <= wEnd =
+    Just (MemSlice d wr rr)
+  | otherwise = Nothing
+
+
+throwRegError :: StmtIndex -> RegisterUseErrorTag e -> e -> StartInfer arch ids a
+throwRegError stmtIdx tag v = do
+  blockAddr <- asks sicAddr
+  throwError $
+    RegisterUseError
+      { ruBlock = blockAddr,
+        ruStmt = stmtIdx,
+        ruReason = Reason tag v
+      }
+
+unresolvedStackRead :: StmtIndex -> StartInfer arch ids as
+unresolvedStackRead stmtIdx = do
+  throwRegError stmtIdx UnresolvedStackRead ()
+
 -- | Infer constraints from a memory read
-inferReadMem :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
-               => AssignId ids tp
-               -> Value arch ids (BVType (ArchAddrWidth arch))
-               -> MemRepr tp
-               -> StartInfer arch ids ()
-inferReadMem aid addr repr = do
+inferReadMem ::
+  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch)) =>
+  StmtIndex ->
+  AssignId ids tp ->
+  Value arch ids (BVType (ArchAddrWidth arch)) ->
+  MemRepr tp ->
+  StartInfer arch ids ()
+inferReadMem stmtIdx aid addr repr = do
   ctx <- ask
   am <- gets sisAssignMap
   case valueToStartExpr ctx am addr of
     FrameExpr o -> do
       stk <- gets sisStack
-      case memMapLookup o repr stk of
-        -- Assigned stack read.
-        MMLResult sv -> do
-          case sv of
-            ISVInitValue d -> do
-              setAssignVal aid (IVDomain d)
-              addMemAccessInfo (FrameReadInitAccess o d)
-            ISVWrite writeIdx v -> do
-              setAssignVal aid (valueToStartExpr ctx am v)
-              addMemAccessInfo (FrameReadWriteAccess o writeIdx)
-            ISVCondWrite writeIdx _ _ _ -> do
-              setAssignVal aid (IVCondWrite writeIdx repr)
-              addMemAccessInfo (FrameReadWriteAccess o writeIdx)
-        -- Overlap reads are equal to themselves
-        MMLOverlap{} -> do
-          addMemAccessInfo (FrameReadOverlapAccess o)
-        -- Uninitialized reads are equal to whatever  are equal to themselves.
-        MMLNone -> do
+      case memMapLookup' o repr stk of
+        Just (writeOff, MemVal writeRepr sv) ->
+          case checkReadWithinWrite writeOff writeRepr o repr of
+            -- Overlap reads just get recorded
+            Nothing ->
+              addMemAccessInfo stmtIdx (FrameReadOverlapAccess o)
+            -- Reads within writes get propagated.
+            Just ms -> do
+              (v, memInfo) <-
+                case sv of
+                  ISVInitValue d -> do
+                    pure (IVDomain d ms, FrameReadInitAccess o d)
+                  ISVWrite writeIdx v ->
+                    case valueToStartExpr' ctx am v ms of
+                      Nothing -> do
+                        unresolvedStackRead stmtIdx
+                      Just iv ->
+                        pure (iv, FrameReadWriteAccess writeIdx)
+                  ISVCondWrite writeIdx _ _ _ -> do
+                    case ms of
+                      NoMemSlice ->
+                        pure (IVCondWrite writeIdx repr, FrameReadWriteAccess writeIdx)
+                      MemSlice _ _ _ ->
+                        unresolvedStackRead stmtIdx
+              setAssignVal aid v
+              addMemAccessInfo stmtIdx memInfo
+        -- Uninitialized reads are equal to what came before.
+        Nothing -> do
           let d = RegEqualLoc (StackOffLoc o repr)
-          setAssignVal aid (IVDomain d)
-          addMemAccessInfo (FrameReadInitAccess o d)
+          setAssignVal aid (IVDomain d NoMemSlice)
+          addMemAccessInfo stmtIdx (FrameReadInitAccess o d)
     -- Non-stack reads are just equal to themselves.
-    _ -> addMemAccessInfo NotFrameAccess
+    _ -> addMemAccessInfo stmtIdx NotFrameAccess
 
--- | Infer constraints from a memory read
+-- | Infer constraints from a memory read.
+--
+-- Unlike inferReadMem these are not assigned a value, but we still
+-- track which write was associated if possible.
 inferCondReadMem :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
-                 => Value arch ids (BVType (ArchAddrWidth arch))
+                 => StmtIndex
+                 -> Value arch ids (BVType (ArchAddrWidth arch))
                  -> MemRepr tp
                  -> StartInfer arch ids ()
-inferCondReadMem addr repr = do
+inferCondReadMem stmtIdx addr _repr = do
   ctx <- ask
   s <- gets sisAssignMap
   case valueToStartExpr ctx s addr of
     -- Stack reads need to record the offset.
-    FrameExpr o -> do
-      stk <- gets sisStack
-      case memMapLookup o repr stk of
-        -- Assigned stack read.
-        MMLResult sv ->
-          case sv of
-            ISVInitValue d ->
-              addMemAccessInfo (FrameReadInitAccess o d)
-            ISVWrite writeIdx _v ->
-              addMemAccessInfo (FrameReadWriteAccess o writeIdx)
-            ISVCondWrite writeIdx _ _ _ ->
-              addMemAccessInfo (FrameReadWriteAccess o writeIdx)
-        -- Overlap reads are equal to themselves
-        MMLOverlap{} -> do
-          addMemAccessInfo (FrameReadOverlapAccess o)
-        MMLNone -> do
-          let d = RegEqualLoc (StackOffLoc o repr)
-          addMemAccessInfo (FrameReadInitAccess o d)
+    FrameExpr _o -> do
+      throwRegError stmtIdx UnsupportedCondStackRead ()
     -- Non-stack reads are just equal to themselves.
-    _ -> addMemAccessInfo NotFrameAccess
+    _ -> addMemAccessInfo stmtIdx NotFrameAccess
 
 -- | Update start infer statement to reflect statement.
 processStmt :: (OrdF (ArchReg arch), MemWidth (ArchAddrWidth arch))
@@ -628,8 +817,8 @@ processStmt stmtIdx stmt = do
         EvalApp app -> processApp aid app
         -- Assignment equal to itself.
         SetUndefined _ -> pure ()
-        ReadMem addr repr -> inferReadMem aid addr repr
-        CondReadMem repr _cond addr _falseVal -> inferCondReadMem addr repr
+        ReadMem addr repr -> inferReadMem stmtIdx aid addr repr
+        CondReadMem repr _cond addr _falseVal -> inferCondReadMem stmtIdx addr repr
         -- Architecture-specific functions are just equal to themselves.
         EvalArchFn _afn _repr -> pure ()
     WriteMem addr repr val -> do
@@ -637,7 +826,7 @@ processStmt stmtIdx stmt = do
       s <- gets sisAssignMap
       case valueToStartExpr ctx s addr of
         FrameExpr o -> do
-          addMemAccessInfo (FrameWriteAccess o)
+          addMemAccessInfo stmtIdx (FrameWriteAccess o)
           -- Get value of val under current equality constraints.
           sisStackLens %= memMapOverwrite o repr (ISVWrite stmtIdx val)
         -- Do nothing for things that are not stack expressions.
@@ -652,27 +841,28 @@ processStmt stmtIdx stmt = do
         -- a proof that that the stack could not be overwritten.
         -- However, this will be caught by verification of the
         -- eventual LLVM.
-        _ -> addMemAccessInfo NotFrameAccess
+        _ -> addMemAccessInfo stmtIdx NotFrameAccess
     CondWriteMem cond addr repr val -> do
       ctx <- ask
       s <- gets sisAssignMap
       case valueToStartExpr ctx s addr of
         FrameExpr o -> do
           stk <- gets sisStack
-          sv <- case memMapLookup o repr stk of
-                  MMLResult sv -> do
-                    addMemAccessInfo (FrameCondWriteAccess o repr sv)
-                    pure sv
-                  MMLOverlap{} -> do
-                    addMemAccessInfo (FrameCondWriteOverlapAccess o)
-                    pure $ ISVInitValue (RegEqualLoc (StackOffLoc o repr))
-                  MMLNone -> do
-                    let sv = ISVInitValue (RegEqualLoc (StackOffLoc o repr))
-                    addMemAccessInfo (FrameCondWriteAccess o repr sv)
-                    pure sv
+          sv <-
+            case memMapLookup o repr stk of
+              MMLResult sv -> do
+                addMemAccessInfo stmtIdx (FrameCondWriteAccess o repr sv)
+                pure sv
+              MMLOverlap{} -> do
+                addMemAccessInfo stmtIdx (FrameCondWriteOverlapAccess o)
+                pure $ ISVInitValue (RegEqualLoc (StackOffLoc o repr))
+              MMLNone -> do
+                let sv = ISVInitValue (RegEqualLoc (StackOffLoc o repr))
+                addMemAccessInfo stmtIdx (FrameCondWriteAccess o repr sv)
+                pure sv
           sisStackLens %= memMapOverwrite o repr (ISVCondWrite stmtIdx cond val sv)
         _ -> do
-          addMemAccessInfo NotFrameAccess
+          addMemAccessInfo stmtIdx NotFrameAccess
     -- Do nothing with instruction start/comment/register update
     InstructionStart o _ ->
       sisCurrentInstructionOffsetLens .= o
@@ -684,14 +874,14 @@ processStmt stmtIdx stmt = do
 
 -- | Maps locations to the values to initialize next locations with.
 newtype PostValueMap arch ids =
-  PVM { _pvmMap :: MapF (BoundLoc (ArchReg arch)) (InferValue arch ids) }
+  PVM { _pvmMap :: MapF (BoundLoc (ArchReg arch)) (BlockInferValue arch ids) }
 
 emptyPVM :: PostValueMap arch ids
 emptyPVM = PVM MapF.empty
 
 pvmBind :: OrdF (ArchReg arch)
         => BoundLoc (ArchReg arch) tp
-        -> InferValue arch ids tp
+        -> BlockInferValue arch ids tp
         -> PostValueMap arch ids
         -> PostValueMap arch ids
 pvmBind l v (PVM m) = PVM (MapF.insert l v m)
@@ -699,15 +889,15 @@ pvmBind l v (PVM m) = PVM (MapF.insert l v m)
 pvmFind :: OrdF (ArchReg arch)
         => BoundLoc (ArchReg arch) tp
         -> PostValueMap arch ids
-        -> InferValue arch ids tp
-pvmFind l (PVM m) = MapF.findWithDefault (IVDomain (RegEqualLoc l)) l m
+        -> BlockInferValue arch ids tp
+pvmFind l (PVM m) = MapF.findWithDefault (IVDomain (RegEqualLoc l) NoMemSlice) l m
 
 instance ShowF (ArchReg arch) => Show (PostValueMap arch ids) where
   show (PVM m) = show m
 
 ppPVM :: forall arch ids ann . ShowF (ArchReg arch) => PostValueMap arch ids -> Doc ann
 ppPVM (PVM m) = vcat $ ppVal <$> MapF.toList m
-  where ppVal :: Pair (BoundLoc (ArchReg arch)) (InferValue arch ids) -> Doc ann
+  where ppVal :: Pair (BoundLoc (ArchReg arch)) (BlockInferValue arch ids) -> Doc ann
         ppVal (Pair l v) = pretty l <+> ":=" <+> viaShow v
 
 type StartInferInfo arch ids =
@@ -723,7 +913,7 @@ siiCns (_,cns,_,_) = cns
 type FrontierMap arch = Map (ArchSegmentOff arch) (BlockStartConstraints arch)
 
 data InferNextState arch ids =
-  InferNextState { insSeenValues :: !(MapF (InferValue arch ids) (ValueRegUseDomain arch))
+  InferNextState { insSeenValues :: !(MapF (BlockInferValue arch ids) (InitInferValue arch))
                  , insPVM        :: !(PostValueMap arch ids)
                  }
 
@@ -743,10 +933,11 @@ runInferNextM m =
 -- @Nothing@ if the value is unconstrained.
 memoNextDomain :: OrdF (ArchReg arch)
                => BoundLoc (ArchReg arch) tp
-               -> InferValue arch ids tp
-               -> InferNextM arch ids (Maybe (ValueRegUseDomain arch tp))
-memoNextDomain _ (IVDomain d@ValueRegUseStackOffset{}) = pure (Just d)
-memoNextDomain _ (IVDomain d@FnStartRegister{}) = pure (Just d)
+               -> BlockInferValue arch ids tp
+               -> InferNextM arch ids (Maybe (InitInferValue arch tp))
+memoNextDomain _ (IVDomain d@InferredStackOffset{} NoMemSlice) =
+  pure (Just d)
+memoNextDomain _ (IVDomain d@FnStartRegister{} NoMemSlice) = pure (Just d)
 memoNextDomain loc e = do
   m <- gets insSeenValues
   case MapF.lookup e m of
@@ -799,14 +990,14 @@ intraJumpConstraints :: forall arch ids
 intraJumpConstraints ctx s regs = runInferNextM $ do
   let intraRegFn :: ArchReg arch tp
                  -> Value arch ids tp
-                 -> InferNextM arch ids (Maybe (ValueRegUseDomain arch tp))
+                 -> InferNextM arch ids (Maybe (InitInferValue arch tp))
       intraRegFn r v = memoNextDomain (RegLoc r) (valueToStartExpr ctx (sisAssignMap s) v)
   regs' <- MapF.traverseMaybeWithKey intraRegFn (regStateMap regs)
 
   let stackFn :: MemInt (ArchAddrWidth arch)
               -> MemRepr tp
               -> InferStackValue arch ids tp
-              -> InferNextM arch ids (Maybe (ValueRegUseDomain arch tp))
+              -> InferNextM arch ids (Maybe (InitInferValue arch tp))
       stackFn o repr sv =
         memoNextDomain (StackOffLoc o repr) (inferStackValueToValue ctx (sisAssignMap s) sv repr)
   stk <- memMapTraverseMaybeWithKey stackFn (sisStack s)
@@ -826,15 +1017,17 @@ postCallConstraints :: forall arch ids
                        -- ^ Context for block invariants inference.
                     -> InferState arch ids
                        -- ^ State for start inference
+                    -> Int
+                       -- ^ Index of term statement
                     -> RegState (ArchReg arch) (Value arch ids)
                        -- ^ Registers at time of call.
                     -> Either (RegisterUseError arch)
                               (PostValueMap arch ids, BlockStartConstraints arch)
-postCallConstraints params ctx s regs =
+postCallConstraints params ctx s tidx regs =
   runInferNextM $ do
     case valueToStartExpr ctx (sisAssignMap s) (regs^.boundValue sp_reg) of
       FrameExpr spOff -> do
-        when (not (stackGrowsDown params)) $
+        unless (stackGrowsDown params) $
           error "Do not yet support architectures where stack grows up."
         when (postCallStackDelta params < 0) $
           error "Unexpected post call stack delta."
@@ -845,11 +1038,11 @@ postCallConstraints params ctx s regs =
         -- Function to update register state.
         let intraRegFn :: ArchReg arch tp
                        -> Value arch ids tp
-                       -> InferNextM arch ids (Maybe (ValueRegUseDomain arch tp))
+                       -> InferNextM arch ids (Maybe (InitInferValue arch tp))
             intraRegFn r v
               | Just Refl <- testEquality r sp_reg = do
                   let spOff' = spOff + fromInteger (postCallStackDelta params)
-                  pure (Just (ValueRegUseStackOffset spOff'))
+                  pure (Just (InferredStackOffset spOff'))
               | preserveReg params r =
                 memoNextDomain (RegLoc r) (valueToStartExpr ctx (sisAssignMap s) v)
               | otherwise =
@@ -859,7 +1052,7 @@ postCallConstraints params ctx s regs =
         let stackFn :: MemInt (ArchAddrWidth arch)
                     -> MemRepr tp
                     -> InferStackValue arch ids tp
-                    -> InferNextM arch ids (Maybe (ValueRegUseDomain arch tp))
+                    -> InferNextM arch ids (Maybe (InitInferValue arch tp))
             stackFn o repr sv
               -- Drop the return address pointer
               | l <= toInteger o, toInteger o < h =
@@ -874,8 +1067,13 @@ postCallConstraints params ctx s regs =
         let cns = BSC LocMap { locMapRegs = regs'
                              , locMapStack = stk
                              }
-        pure $ Right $ (postValMap, cns)
-      _ -> pure $ Left (CallStackHeightError (segoffAddr (sicAddr ctx)))
+        pure $ Right (postValMap, cns)
+      _ -> pure $ Left $
+            RegisterUseError
+            { ruBlock = sicAddr ctx,
+              ruStmt = tidx,
+              ruReason = Reason CallStackHeightError ()
+            }
 
 -------------------------------------------------------------------------------
 -- DependencySet
@@ -990,13 +1188,8 @@ data BlockUsageSummary (arch :: Type) ids = BUS
   { blockUsageStartConstraints :: !(BlockStartConstraints arch)
     -- | Offset of start of last instruction processed relative to start of block.
   , blockCurOff :: !(ArchAddrWord arch)
-    -- | Information about memory accesses in order of statement.
-    --
-    -- There should be exactly one of these for each @ReadMem@,
-    -- @CondReadMem@, @WriteMem@ and @CondWriteMem@.
-  , blockMemAccesses :: ![MemAccessInfo arch ids]
-    -- | The contents of the stack at the end of block execution.
-  , blockFinalStack :: !(MemMap (MemInt (ArchAddrWidth arch)) (InferStackValue arch ids))
+    -- | Inferred state computed at beginning
+  , blockInferState :: !(InferState arch ids)
     -- | Dependencies needed to execute statements with side effects.
   ,_blockExecDemands :: !(DependencySet (ArchReg arch) ids)
     -- | Map registers to the dependencies of the values they store.
@@ -1008,7 +1201,7 @@ data BlockUsageSummary (arch :: Type) ids = BUS
     -- | Maps assignments to their dependencies.
   , assignDeps :: !(Map (Some (AssignId ids)) (DependencySet (ArchReg arch) ids))
     -- | Information about next memory reads.
-  , pendingMemAccesses :: ![MemAccessInfo arch ids]
+  , pendingMemAccesses :: ![(StmtIndex, MemAccessInfo arch ids)]
     -- | If this block ends with a call, this has the type of the function called.
     -- Otherwise, the value should be @Nothing@.
   , blockCallFunType :: !(Maybe (ArchFunType arch))
@@ -1021,8 +1214,7 @@ initBlockUsageSummary cns s =
   let a = reverse (sisMemAccessStack s)
    in BUS { blockUsageStartConstraints = cns
           , blockCurOff            = zeroMemWord
-          , blockMemAccesses       = a
-          , blockFinalStack        = sisStack s
+          , blockInferState        = s
           , _blockExecDemands      = emptyDeps
           , blockRegDependencies   = emptyRegDepMap
           , blockWriteDependencies = Map.empty
@@ -1066,12 +1258,13 @@ data CallRegs (arch :: Type) (ids :: Type) =
 type PostTermStmtInvariants arch ids =
   StartInferContext arch
   -> InferState arch ids
-  -> ArchTermStmt arch ids
+  -> Int
+  -> ArchTermStmt arch (Value arch ids)
   -> RegState (ArchReg arch) (Value arch ids)
   -> Either (RegisterUseError arch) (PostValueMap arch ids, BlockStartConstraints arch)
 
 type ArchTermStmtUsageFn arch ids
-  = ArchTermStmt arch ids
+  = ArchTermStmt arch (Value arch ids)
   -> RegState (ArchReg arch) (Value arch ids)
   -> BlockUsageSummary arch ids
   -> Either (RegisterUseError arch) (RegDependencyMap arch ids)
@@ -1103,12 +1296,12 @@ data RegisterUseContext arch
       -- | Callback function for summarizing register usage of terminal
       -- statements.
     , reguseTermFn :: !(forall ids . ArchTermStmtUsageFn arch ids)
-      -- | Given the address of a call instruction and regisdters, this returns the
+      -- | Given the address of a call instruction and registers, this returns the
       -- values read and returned.
     , callDemandFn    :: !(forall ids
                           .  ArchSegmentOff arch
                           -> RegState (ArchReg arch) (Value arch ids)
-                          -> Either (RegisterUseError arch) (CallRegs arch ids))
+                          -> Either RegisterUseErrorReason (CallRegs arch ids))
       -- | Information needed to demands of architecture-specific functions.
     , demandContext :: !(DemandContext arch)
     }
@@ -1142,6 +1335,7 @@ blockStartConstraints :: ArchConstraints arch
                       -> Map (ArchSegmentOff arch) (ParsedBlock arch ids)
                       -- ^ Map from starting addresses to blocks.
                       -> ArchSegmentOff arch
+                         -- ^ Address of start of block.
                       -> BlockStartConstraints arch
                       -> Map (ArchSegmentOff arch) (StartInferInfo arch ids)
                       -- ^ Results from last explore map
@@ -1163,25 +1357,26 @@ blockStartConstraints rctx blockMap addr (BSC cns) lastMap frontierMap = do
                 }
   -- Get statements in block
   let stmts = pblockStmts b
+  let stmtCount = length stmts
   -- Get state from processing all statements
-  let s = execState (runReaderT (zipWithM_ processStmt [0..] stmts) ctx) s0
+  s <- execStateT (runReaderT (zipWithM_ processStmt [0..] stmts) ctx) s0
   let lastFn a = if a == addr then Just (BSC cns) else siiCns <$> Map.lookup a lastMap
   case pblockTermStmt b of
     ParsedJump regs next -> do
       let (pvm,frontierMap') = visitIntraJumpTarget lastFn ctx s regs (Map.empty, frontierMap) next
       let m' = Map.insert addr (b, BSC cns, s, pvm) lastMap
-      pure $ (m', frontierMap')
+      pure (m', frontierMap')
     ParsedBranch regs _cond t f -> do
       let (pvm, frontierMap') = foldl' (visitIntraJumpTarget lastFn ctx s regs) (Map.empty, frontierMap) [t,f]
       let m' = Map.insert addr (b, BSC cns, s, pvm) lastMap
-      pure $ (m', frontierMap')
-    ParsedLookupTable regs _idx lbls -> do
+      pure (m', frontierMap')
+    ParsedLookupTable _layout regs _idx lbls -> do
       let (pvm, frontierMap') = foldl' (visitIntraJumpTarget lastFn ctx s regs) (Map.empty, frontierMap) lbls
       let m' = Map.insert addr (b, BSC cns, s, pvm) lastMap
-      pure $ (m', frontierMap')
+      pure (m', frontierMap')
     ParsedCall regs (Just next) -> do
       (postValCns, nextCns) <-
-        case postCallConstraints (archCallParams rctx) ctx s regs of
+        case postCallConstraints (archCallParams rctx) ctx s stmtCount regs of
           Left e -> throwError e
           Right r -> pure r
       let m' = Map.insert addr (b, BSC cns, s,  Map.singleton next postValCns) lastMap
@@ -1189,16 +1384,16 @@ blockStartConstraints rctx blockMap addr (BSC cns) lastMap frontierMap = do
     -- Tail call
     ParsedCall _ Nothing -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
     ParsedReturn _ -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
     -- Works like a tail call.
     ParsedArchTermStmt _ _ Nothing -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
     ParsedArchTermStmt tstmt regs (Just next) -> do
-      case archPostTermStmtInvariants rctx ctx s tstmt regs of
+      case archPostTermStmtInvariants rctx ctx s stmtCount tstmt regs of
         Left e ->
           throwError e
         Right (postValCns, nextCns) -> do
@@ -1206,15 +1401,15 @@ blockStartConstraints rctx blockMap addr (BSC cns) lastMap frontierMap = do
           pure (m', addNextConstraints lastFn next nextCns frontierMap)
     ParsedTranslateError _ -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
     ClassifyFailure _ _ -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
     -- PLT stubs are essentiually tail calls with a non-standard
     -- calling convention.
     PLTStub{} -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
 
 -- | Infer start constraints by recursively evaluating blocks
 propStartConstraints :: ArchConstraints arch
@@ -1248,9 +1443,9 @@ inferStartConstraints :: forall arch ids
                       -> Except (RegisterUseError arch)
                                 (Map (ArchSegmentOff arch) (StartInferInfo arch ids))
 inferStartConstraints rctx blockMap addr = do
-  let savedRegs :: [Pair (ArchReg arch) (ValueRegUseDomain arch)]
+  let savedRegs :: [Pair (ArchReg arch) (InitInferValue arch)]
       savedRegs
-        =  [ Pair sp_reg (ValueRegUseStackOffset 0) ]
+        =  [ Pair sp_reg (InferredStackOffset 0) ]
         ++ [ Pair r (FnStartRegister r) | Some r <- calleeSavedRegisters rctx ]
   let cns = BSC LocMap { locMapRegs = MapF.fromList savedRegs
                        , locMapStack = emptyMemMap
@@ -1313,8 +1508,8 @@ type RegisterUseM arch ids =
 -- Phase one functions
 -- ----------------------------------------------------------------------------------------
 
-domainDeps :: ValueRegUseDomain arch tp -> DependencySet (ArchReg arch) ids
-domainDeps (ValueRegUseStackOffset _) = emptyDeps
+domainDeps :: InitInferValue arch tp -> DependencySet (ArchReg arch) ids
+domainDeps (InferredStackOffset _) = emptyDeps
 domainDeps (FnStartRegister _)    = emptyDeps
 domainDeps (RegEqualLoc l)        = locDepSet l
 
@@ -1377,22 +1572,28 @@ requiredAssignDeps aid deps = do
   addDeps deps
   assignmentCache %= Map.insert (Some aid) mempty
 
-popAccessInfo :: RegisterUseM arch ids (MemAccessInfo arch ids)
-popAccessInfo = do
+popAccessInfo :: StmtIndex -> RegisterUseM arch ids (MemAccessInfo arch ids)
+popAccessInfo n = do
   s <- get
   case pendingMemAccesses s of
     [] -> error "popAccessInfo invalid"
-    (i:r) -> do
+    ((i,a):r) -> do
       put $! s { pendingMemAccesses = r }
-      pure i
+      if i < n then
+        popAccessInfo n
+       else if i > n then
+        error "popAccessInfo missing index."
+      else
+        pure a
 
 demandReadMem :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
-              => AssignId ids tp
+              => StmtIndex
+              -> AssignId ids tp
               -> Value arch ids (BVType (ArchAddrWidth arch))
               -> MemRepr tp
               -> RegisterUseM arch ids ()
-demandReadMem aid addr _repr = do
-  accessInfo <- popAccessInfo
+demandReadMem stmtIdx aid addr _repr = do
+  accessInfo <- popAccessInfo stmtIdx
   case accessInfo of
     NotFrameAccess -> do
       -- Mark that this value depends on both aid and any
@@ -1404,7 +1605,7 @@ demandReadMem aid addr _repr = do
     FrameReadInitAccess _o d -> do
       let deps = assignSet aid <> domainDeps d
       assignmentCache %= Map.insert (Some aid) deps
-    FrameReadWriteAccess _o writeIdx -> do
+    FrameReadWriteAccess writeIdx -> do
       -- Mark that this value depends on aid and any
       -- dependencies needed to compute the value stored at o.
       m <- gets blockWriteDependencies
@@ -1420,15 +1621,17 @@ demandReadMem aid addr _repr = do
     FrameCondWriteOverlapAccess _ ->
       error "Expected read access."
 
-demandCondReadMem :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
-                  => AssignId ids tp
-                  -> Value arch ids BoolType
-                  -> Value arch ids (BVType (ArchAddrWidth arch))
-                  -> MemRepr tp
-                  -> Value arch ids tp
-                  -> RegisterUseM arch ids ()
-demandCondReadMem aid cond addr _repr val = do
-  accessInfo <- popAccessInfo
+demandCondReadMem ::
+  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch)) =>
+  StmtIndex ->
+  AssignId ids tp ->
+  Value arch ids BoolType ->
+  Value arch ids (BVType (ArchAddrWidth arch)) ->
+  MemRepr tp ->
+  Value arch ids tp ->
+  RegisterUseM arch ids ()
+demandCondReadMem stmtIdx aid cond addr _repr val = do
+  accessInfo <- popAccessInfo stmtIdx
   case accessInfo of
     NotFrameAccess -> do
       cns   <- gets blockUsageStartConstraints
@@ -1451,7 +1654,7 @@ demandCondReadMem aid cond addr _repr val = do
                  , valueDeps cns cache val
                  ]
       assignmentCache %= Map.insert (Some aid) deps
-    FrameReadWriteAccess _o writeIdx -> do
+    FrameReadWriteAccess writeIdx -> do
       cns <- gets blockUsageStartConstraints
       cache <- gets assignDeps
       -- Mark that this value depends on aid and any dependencies
@@ -1489,52 +1692,68 @@ inferStackValueDeps cns amap isv =
               , inferStackValueDeps cns amap prevVal
               ]
 
-demandAssign :: ( MemWidth (ArchAddrWidth arch)
-                , OrdF (ArchReg arch)
-                , FoldableFC (ArchFn arch)
-                )
-             => Assignment arch ids tp
-             -> RegisterUseM arch ids ()
-demandAssign (Assignment aid arhs) =
-  case arhs of
-    EvalApp app -> do
-      cns <- gets blockUsageStartConstraints
-      cache <- gets assignDeps
-      let deps = foldlFC' (\s v -> mappend s (valueDeps cns cache v)) (assignSet aid) app
-      assignmentCache %= Map.insert (Some aid) deps
-    SetUndefined{} -> do
-      assignmentCache %= Map.insert (Some aid) (assignSet aid)
-    ReadMem addr repr -> do
-      demandReadMem aid addr repr
-    CondReadMem repr c addr val -> do
-      demandCondReadMem aid c addr repr val
-    EvalArchFn fn _ -> do
-      ctx <- asks demandContext
-      cns <- gets blockUsageStartConstraints
-      cache <- gets assignDeps
-      let deps = foldlFC' (\s v -> mappend s (valueDeps cns cache v)) (assignSet aid) fn
-      if archFnHasSideEffects ctx fn then do
-        requiredAssignDeps aid deps
-       else
-        assignmentCache %= Map.insert (Some aid) deps
+demandAssign ::
+  ( MemWidth (ArchAddrWidth arch),
+    OrdF (ArchReg arch),
+    FoldableFC (ArchFn arch)
+  ) =>
+  StmtIndex ->
+  Assignment arch ids tp ->
+  RegisterUseM arch ids ()
+demandAssign stmtIdx (Assignment aid arhs) = do
+  sis <- gets blockInferState
+  case MapF.lookup aid (sisAssignMap sis) of
+    Just (IVDomain d _) -> do
+      assignmentCache %= Map.insert (Some aid) (domainDeps d)
+    Just (IVAssignValue a) -> do
+      dm <- gets assignDeps
+      case Map.lookup (Some a) dm of
+        Nothing -> error $ "Assignment " ++ show a ++ " is not defined."
+        Just deps -> assignmentCache .= Map.insert (Some aid) deps dm
+    Just (IVCValue _) -> do
+      assignmentCache %= Map.insert (Some aid) emptyDeps
+    _ -> do
+      case arhs of
+        EvalApp app -> do
+          cns <- gets blockUsageStartConstraints
+          cache <- gets assignDeps
+          let deps = foldlFC' (\s v -> mappend s (valueDeps cns cache v)) (assignSet aid) app
+          assignmentCache %= Map.insert (Some aid) deps
+        SetUndefined{} -> do
+          assignmentCache %= Map.insert (Some aid) (assignSet aid)
+        ReadMem addr repr -> do
+          demandReadMem stmtIdx aid addr repr
+        CondReadMem repr c addr val -> do
+          demandCondReadMem stmtIdx aid c addr repr val
+        EvalArchFn fn _ -> do
+          ctx <- asks demandContext
+          cns <- gets blockUsageStartConstraints
+          cache <- gets assignDeps
+          let deps = foldlFC' (\s v -> mappend s (valueDeps cns cache v)) (assignSet aid) fn
+          if archFnHasSideEffects ctx fn then do
+            requiredAssignDeps aid deps
+           else
+            assignmentCache %= Map.insert (Some aid) deps
 
 -- | Return values that must be evaluated to execute side effects.
-demandStmtValues :: ( HasCallStack
-                    , OrdF (ArchReg arch)
-                    , MemWidth (ArchAddrWidth arch)
-                    , ShowF (ArchReg arch)
-                    , FoldableFC (ArchFn arch)
-                    , FoldableF (ArchStmt arch)
-                    )
-                 => StmtIndex -- ^ Index of statement we are processing.
-                 -> Stmt arch ids
-                    -- ^ Statement we want to demand.
-                 -> RegisterUseM arch ids ()
+demandStmtValues ::
+  ( HasCallStack,
+    OrdF (ArchReg arch),
+    MemWidth (ArchAddrWidth arch),
+    ShowF (ArchReg arch),
+    FoldableFC (ArchFn arch),
+    FoldableF (ArchStmt arch)
+  ) =>
+  -- | Index of statement we are processing.
+  StmtIndex ->
+  -- | Statement we want to demand.
+  Stmt arch ids ->
+  RegisterUseM arch ids ()
 demandStmtValues stmtIdx stmt = do
   case stmt of
-   AssignStmt a -> demandAssign a
+   AssignStmt a -> demandAssign stmtIdx a
    WriteMem addr _repr val -> do
-     accessInfo <- popAccessInfo
+     accessInfo <- popAccessInfo stmtIdx
      case accessInfo of
        NotFrameAccess -> do
          demandValue addr
@@ -1550,7 +1769,7 @@ demandStmtValues stmtIdx stmt = do
        FrameCondWriteAccess{} -> error "Expected write access."
        FrameCondWriteOverlapAccess{} -> error "Expected write access."
    CondWriteMem c addr _repr val -> do
-     accessInfo <- popAccessInfo
+     accessInfo <- popAccessInfo stmtIdx
      case accessInfo of
        NotFrameAccess -> do
          demandValue c
@@ -1601,7 +1820,7 @@ mkBlockUsageSummary :: forall arch ids
                -> BlockStartConstraints arch
                   -- ^ Inferred state at start of block
                -> InferState arch ids
-                  -- ^ Information inferred from executng block.
+                  -- ^ Information inferred from executed block.
                -> ParsedBlock arch ids
                   -- ^ Block
                -> Except (RegisterUseError arch) (BlockUsageSummary arch ids)
@@ -1610,17 +1829,18 @@ mkBlockUsageSummary ctx cns sis blk = do
     let addr = pblockAddr blk
     -- Add demanded values for terminal
     zipWithM_ demandStmtValues [0..] (pblockStmts blk)
+    let tidx = length (pblockStmts blk)
     case pblockTermStmt blk of
       ParsedJump regs _tgt -> do
         recordRegMap (regStateMap regs)
       ParsedBranch regs cond _t _f  -> do
         demandValue cond
         recordRegMap (regStateMap regs)
-      ParsedLookupTable regs idx _tgts -> do
+      ParsedLookupTable _layout regs idx _tgts -> do
         demandValue idx
         recordRegMap (regStateMap regs)
       ParsedCall regs _mret -> do
-        callFn <- asks callDemandFn
+        callFn <- asks $ \x -> callDemandFn x
         -- Get function type associated with function
         off <- gets blockCurOff
         let insnAddr =
@@ -1630,9 +1850,28 @@ mkBlockUsageSummary ctx cns sis blk = do
         ftr <-
           case callFn insnAddr regs of
             Right v -> pure v
-            Left e -> throwError e
+            Left rsn -> do
+              throwError $
+                RegisterUseError
+                  { ruBlock = addr,
+                    ruStmt = tidx,
+                    ruReason = rsn
+                  }
         -- Demand argument registers
-        traverse_ (\(Some v) -> demandValue v) (callArgValues ftr)
+        do
+          forM_ (callArgValues ftr) $ \(Some v) -> do
+            case v of
+              -- No dependencies
+              CValue _ -> do
+                pure ()
+              Initial r -> do
+                addDeps (domainDeps (locDomain cns (RegLoc r)))
+              AssignedValue (Assignment a _) -> do
+                cache <- gets assignDeps
+                case Map.lookup (Some a) cache of
+                  Nothing -> error $ "Assignment " ++ show a ++ " is not defined."
+
+                  Just r -> addDeps r
         -- Store call register type information
         modify $ \s -> s { blockCallFunType = Just (callRegsFnType ftr) }
         -- Get other things
@@ -1648,11 +1887,10 @@ mkBlockUsageSummary ctx cns sis blk = do
         traverseF_ demandValue regs
         MapF.traverseWithKey_ (\r _ -> modify $ clearDependencySet r) regs
       ParsedReturn regs -> do
-        retRegs <- asks $ returnRegisters
+        retRegs <- asks returnRegisters
         traverse_ (\(Some r) -> demandValue (regs^.boundValue r)) retRegs
-
       ParsedArchTermStmt tstmt regs _mnext -> do
-        summaryFn <- asks reguseTermFn
+        summaryFn <- asks $ \x -> reguseTermFn x
         s <- get
         case summaryFn tstmt regs s of
           Left emsg -> throwError emsg
@@ -1730,27 +1968,34 @@ instance Semigroup (LocList r tp) where
 
 -- | This describes information about a block inferred by
 -- register-use.
-data BlockInvariants arch ids =
-  BI { biUsedAssignSet :: !(Set (Some (AssignId ids)))
-       -- | Indices of write and cond-write statements that write to stack
-       -- and whose value is later needed to execute the program.
-     , biUsedWriteSet  :: !(Set StmtIndex)
-       -- | In-order list of memory accesses in block.
-     , biMemAccessList :: ![MemAccessInfo arch ids]
-       -- | Map from locations to the non-representative locations that are
-       -- equal to them.
-     , biLocMap :: !(MapF (BoundLoc (ArchReg arch)) (LocList (ArchReg arch)))
-       -- | Map predecessors for this block along with map from locations
-       -- to phi value
-     , biPredPostValues :: !(Map (ArchSegmentOff arch) (PostValueMap arch ids))
-       -- | Locations from previous block used to initial phi variables.
-     , biPhiLocs :: ![Some (BoundLoc (ArchReg arch))]
-       -- | Start constraints for block
-     , biStartConstraints :: !(BlockStartConstraints arch)
-       -- | If this block ends with a call, this has the type of the function called.
-       -- Otherwise, the value should be @Nothing@.
-     , biCallFunType :: !(Maybe (ArchFunType arch))
-     }
+data BlockInvariants arch ids = BI
+    -- | Subset of assignments that are actually needed to execute the block,
+    -- i.e. **not dead** assignments.
+  { biUsedAssignSet :: !(Set (Some (AssignId ids)))
+    -- | Indices of write and cond-write statements that write to stack
+    -- and whose value is later needed to execute the program.
+  , biUsedWriteSet  :: !(Set StmtIndex)
+    -- | In-order list of memory accesses in block.
+  , biMemAccessList :: ![(StmtIndex, MemAccessInfo arch ids)]
+    -- | Map from locations to the non-representative locations that are
+    -- equal to them.
+  , biLocMap :: !(MapF (BoundLoc (ArchReg arch)) (LocList (ArchReg arch)))
+    -- | Map predecessors for this block along with map from locations
+    -- to phi value
+  , biPredPostValues :: !(Map (ArchSegmentOff arch) (PostValueMap arch ids))
+    -- | Locations from previous block used to initial phi variables.
+  , biPhiLocs :: ![Some (BoundLoc (ArchReg arch))]
+    -- | Start constraints for block
+  , biStartConstraints :: !(BlockStartConstraints arch)
+    -- | If this block ends with a call, this has the type of the function called.
+    -- Otherwise, the value should be @Nothing@.
+  , biCallFunType :: !(Maybe (ArchFunType arch))
+    -- | Maps assignment identifiers to the associated value.
+    --
+    -- If an assignment id @aid@ is not in this map, then we assume it
+    -- is equal to @SAVEqualAssign aid@
+  , biAssignMap :: !(MapF (AssignId ids) (BlockInferValue arch ids))
+  }
 
 -- | Return true if assignment is needed to execute block.
 biAssignIdUsed :: AssignId ids tp -> BlockInvariants arch ids -> Bool
@@ -1791,7 +2036,7 @@ mkDepLocMap :: forall arch
 mkDepLocMap cns =
   let addNonRep :: MapF (BoundLoc (ArchReg arch)) (LocList (ArchReg arch))
                 -> BoundLoc (ArchReg arch) tp
-                -> ValueRegUseDomain arch tp
+                -> InitInferValue arch tp
                 -> MapF (BoundLoc (ArchReg arch)) (LocList (ArchReg arch))
       addNonRep m l (RegEqualLoc r) = MapF.insertWith (<>) r (LL [l]) m
       addNonRep m _ _ = m
@@ -1824,25 +2069,29 @@ mkBlockInvariants predMap valueMap addr summary deps =
       predphilist = predFn <$> preds
    in BI { biUsedAssignSet = dsAssignSet deps
          , biUsedWriteSet  = dsWriteStmtIndexSet deps
-         , biMemAccessList = blockMemAccesses summary
+         , biMemAccessList = reverse (sisMemAccessStack (blockInferState summary))
          , biLocMap = mkDepLocMap cns
          , biPredPostValues = Map.fromList predphilist
          , biPhiLocs = Set.toList (dsLocSet deps)
          , biStartConstraints = cns
          , biCallFunType = blockCallFunType summary
+         , biAssignMap = sisAssignMap (blockInferState summary)
          }
 
--- | This analyzes a function to determine which registers must b available to
+-- | Map from block starting addresses to the invariants inferred for that block.
+type BlockInvariantMap arch ids
+   = Map (ArchSegmentOff arch) (BlockInvariants arch ids)
+
+-- | This analyzes a function to determine which registers must be available to
 -- the highest index above sp0 that is read or written.
 registerUse :: forall arch ids
             .  ArchConstraints arch
             => RegisterUseContext arch
             -> DiscoveryFunInfo arch ids
-            -> FunPredMap (ArchAddrWidth arch)
-               -- ^ Predecessors for each block in function
             -> Except (RegisterUseError arch)
-                      (Map (ArchSegmentOff arch) (BlockInvariants arch ids))
-registerUse rctx fun predMap = do
+                      (BlockInvariantMap arch ids)
+registerUse rctx fun = do
+  let predMap = funBlockPreds fun
   let blockMap = fun^.parsedBlocks
   -- Infer start constraints
   cnsMap <- inferStartConstraints rctx blockMap (discoveredFunAddr fun)
@@ -1854,13 +2103,15 @@ registerUse rctx fun predMap = do
 
   let providePair :: ArchSegmentOff arch -> (ArchSegmentOff arch, LocDependencyMap (ArchReg arch) ids)
       providePair prev = (prev, lm)
-        where Just usage = Map.lookup prev usageMap
+        where usage = case Map.lookup prev usageMap of
+                        Nothing -> error "registerUse: Could not find prev"
+                        Just usage' -> usage'
               cns = blockUsageStartConstraints usage
               cache = assignDeps usage
               lm = LocMap { locMapRegs = rdmMap (blockRegDependencies usage)
                           , locMapStack =
                               fmapF (Const . inferStackValueDeps cns cache)
-                                    (blockFinalStack usage)
+                                    (sisStack (blockInferState usage))
                           }
   let predProvideMap = fmap (fmap providePair) predMap
   let propMap = backPropagate predProvideMap bru (dsLocSet <$> bru)

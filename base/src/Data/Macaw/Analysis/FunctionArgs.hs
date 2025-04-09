@@ -6,30 +6,35 @@ which registers are needed for function arguments.
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.Analysis.FunctionArgs
   ( functionDemands
-  , KnownFunABI(..)
-  , DemandSet(..)
-  , RegSegmentOff
-  , RegisterSet
     -- * Callbacks for architecture-specific information
   , ArchDemandInfo(..)
   , ArchTermStmtRegEffects(..)
   , ComputeArchTermStmtEffects
+  , ResolveCallArgsFn
+    -- * Demands
+  , AddrDemandMap
+  , DemandSet(..)
+    -- * Errors
+  , FunctionSummaryFailureMap
+  , FunctionArgAnalysisFailure(..)
+    -- * Utilities
+  , RegSegmentOff
+  , RegisterSet
   ) where
 
 import           Control.Lens
-import           Control.Monad.Reader
-import           Control.Monad.State.Strict
-import qualified Data.ByteString as BS
+import           Control.Monad (when)
+import           Control.Monad.Except (Except, MonadError(..), runExcept)
+import           Control.Monad.Reader (MonadReader(..), ReaderT(..), asks)
+import           Control.Monad.State.Strict (State, StateT, evalStateT, gets, modify', runState)
 import           Data.Foldable
 import qualified Data.Kind as Kind
 import           Data.Map.Strict (Map)
@@ -37,7 +42,6 @@ import qualified Data.Map.Strict as Map
 import           Data.Maybe
 
 import           Data.Parameterized.Classes
-import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
@@ -96,7 +100,7 @@ predBlockMap finfo =
 --    arguments are required, and what extra result registers are
 --    demanded?
 
--- | A set of registrs
+-- | A set of registers
 type RegisterSet (r :: Type -> Kind.Type) = Set (Some r)
 
 -- | A memory segment offset compatible with the architecture registers.
@@ -280,7 +284,7 @@ data ArchTermStmtRegEffects arch
 --
 -- The second is the state of registers when it is executed.
 type ComputeArchTermStmtEffects arch ids
-   = ArchTermStmt arch ids
+   = ArchTermStmt arch (Value arch ids)
    -> RegState (ArchReg arch) (Value arch ids)
    -> ArchTermStmtRegEffects arch
 
@@ -302,14 +306,14 @@ data ArchDemandInfo arch = ArchDemandInfo
 ------------------------------------------------------------------------
 -- FunArgContext
 
--- | Information about a function whose registers have been resolved.
-data KnownFunABI (r :: Type -> Kind.Type) =
-  KnownFnABI { kfArguments :: ![Some r]
-             -- ^ For each argument, stores the register the argument is
-             -- read from.
-             , kfReturn    :: ![Some r]
-             -- ^ Registers that the function provides for return values.
-             }
+-- | Function for resolving arguments to call.
+--
+-- Takes address of callsite and registers.
+type ResolveCallArgsFn arch
+  = forall ids
+  .  ArchSegmentOff arch
+  -> RegState (ArchReg arch) (Value arch ids)
+  -> Either String [Some (Value arch ids)]
 
 -- | Contextual information to inform argument computation.
 data FunArgContext arch = FAC
@@ -318,14 +322,9 @@ data FunArgContext arch = FAC
     -- ^ State of memory for code analysis
   , computedAddrSet :: !(Set (ArchSegmentOff arch))
     -- ^ Set of addresses that we are current computing addresses for.
-
-  , resolvedAddrs :: !(Map (ArchSegmentOff arch) (KnownFunABI (ArchReg arch)))
-    -- ^ Maps addresses whose type has been resolved to the and result
-    -- registers.
-    --
-    -- The addresses of these should be disjoint from the computedAddrSet
-  , knownSymbolDecls :: !(Map BS.ByteString (KnownFunABI (ArchReg arch)))
-    -- ^ Maps symbol names to the argument/return type info for that register.
+  , resolveCallArgs :: !(ResolveCallArgsFn arch)
+    -- ^ Given a call with the registers, this infers the arguments
+    -- returned by the call or an error message if it cannot be inferred.
   }
 
 -- | This is information needed to compute dependencies for a single function.
@@ -351,13 +350,28 @@ initFunctionArgsState =
       , _assignmentCache   = Map.empty
       }
 
+-- | Describes a reason a function call failed.
+data FunctionArgAnalysisFailure w
+   = CallAnalysisError !(MemSegmentOff w) !String
+     -- ^ Could not determine call arguments.
+   | PLTStubNotSupported
+     -- ^ PLT stub analysis not supported.
+  deriving (Show)
+
 -- | Monad that runs for computing the dependcies of each block.
-type FunctionArgsM arch ids a = StateT (FunctionArgsState arch ids) (Reader (FunArgContext arch)) a
+type FunctionArgsM arch ids =
+  StateT (FunctionArgsState arch ids)
+         (ReaderT (FunArgContext arch) (Except (FunctionArgAnalysisFailure (ArchAddrWidth arch))))
 
 evalFunctionArgsM :: FunArgContext arch
-                  -> FunctionArgsM arch ids a
-                  -> a
-evalFunctionArgsM ctx m = runReader (evalStateT m initFunctionArgsState) ctx
+                  -> FunctionSummaries (ArchReg arch) -- ^ Existing summaries
+                  -> ArchSegmentOff arch -- ^ Address of function we are initializing
+                  -> FunctionArgsM arch ids (FunctionSummaries (ArchReg arch))
+                  -> FunctionSummaries (ArchReg arch)
+evalFunctionArgsM ctx s faddr m =
+  case runExcept (runReaderT (evalStateT m initFunctionArgsState) ctx) of
+    Left e -> s { inferenceFails = Map.insert faddr e (inferenceFails s) }
+    Right r' -> r'
 
 -- ----------------------------------------------------------------------------------------
 -- Phase one functions
@@ -384,7 +398,7 @@ valueUses (AssignedValue (Assignment a rhs)) = do
      Nothing -> do
        rhs' <- foldlMFC (\s v -> seq s $ Set.union s <$> valueUses v) Set.empty rhs
        seq rhs' $ modify' $ Map.insert (Some a) rhs'
-       pure $ rhs'
+       pure rhs'
 valueUses (Initial r) =
   pure $! Set.singleton (Some r)
 valueUses _ =
@@ -543,7 +557,7 @@ summarizeCall :: forall arch ids
               -> Maybe (ArchSegmentOff arch)
                  -- ^ Address to return to or `Nothing` for tail call.
               -> FunctionArgsM arch ids (FinalRegisterDemands (ArchReg arch))
-summarizeCall blockAddr _callOff finalRegs mReturnAddr = do
+summarizeCall blockAddr callOff finalRegs mReturnAddr = do
   ctx <- ask
 
   let ipVal = finalRegs^.boundValue ip_reg
@@ -572,31 +586,28 @@ summarizeCall blockAddr _callOff finalRegs mReturnAddr = do
 
       let ainfo = archDemandInfo ctx
 
-      -- Return what registers are needed for arguments, and what registers
-      -- are saved by the call but not read.
-      let (argRegs, savedRegs)
-            | Just faddr <- valueAsSegmentOff (ctxMemory ctx) ipVal
-            , Just cr <- Map.lookup faddr (resolvedAddrs ctx) =
-                (kfArguments cr, Some sp_reg : Set.toList (calleeSavedRegs ainfo))
-            | SymbolValue _ (SymbolRelocation nm _ver) <- ipVal
-            , Just cr <- Map.lookup nm (knownSymbolDecls ctx) =
-                (kfArguments cr, Some sp_reg : Set.toList (calleeSavedRegs ainfo))
-            | otherwise =
-                (functionArgRegs ainfo, Some sp_reg : Set.toList (calleeSavedRegs ainfo))
-
-      let regUses s (Some r) = addValueUses s (finalRegs^. boundValue r)
-      demands <- withAssignmentCache $ foldlM regUses Set.empty argRegs
+      let callAddr =
+            case incSegmentOff blockAddr (toInteger callOff) of
+              Just a -> a
+              Nothing -> error "Call site is not a valid address."
+      argValues <-
+        case resolveCallArgs ctx callAddr finalRegs of
+          Left e -> throwError (CallAnalysisError callAddr e)
+          Right r -> pure r
+      let regUses s (Some v) = addValueUses s v
+      demands <- withAssignmentCache $ foldlM regUses Set.empty argValues
       addBlockDemands blockAddr $ demandAlways (registerDemandSet demands)
 
       -- Only need registers if this call has a return value.
-      if isJust mReturnAddr then
+      if isJust mReturnAddr then do
         -- Copy callee saved registers and stack pointer across function.
+        let savedRegs = Some sp_reg : Set.toList (calleeSavedRegs ainfo)
         recordBlockTransfer blockAddr finalRegs savedRegs
        else
         pure mempty
 
 recordStmtsDemands :: OrdF (ArchReg arch)
-                   => MemSegmentOff (ArchAddrWidth arch) -- ^ Address of block
+                   => ArchSegmentOff arch -- ^ Address of block
                    -> ArchAddrWord arch -- ^ Offset from start of block of current instruction.
                    -> [Stmt arch ids]
                    -> FunctionArgsM arch ids (ArchAddrWord arch)
@@ -654,26 +665,8 @@ summarizeBlock b = do
       -- this note and next nodes.
       summarizeCall blockAddr finalOff regs mRetAddr
 
-    PLTStub regs _ sym -> do
-      -- Get argument registers if known for symbol.
-      let argRegs
-            | Just kf <- Map.lookup (versymName sym) (knownSymbolDecls ctx) =
-                kfArguments kf
-            | otherwise =
-                functionArgRegs ainfo
-
-      -- Get all registers in arguments that are not defined in regs.
-      demands <- withAssignmentCache $ do
-        let addRegUses :: RegisterSet (ArchReg arch)
-                       -> Some (ArchReg arch)
-                       -> State (AssignmentCache (ArchReg arch) ids) (RegisterSet (ArchReg arch))
-            addRegUses s (Some r) = do
-              case MapF.lookup r regs of
-                Just v -> addValueUses s v
-                Nothing -> pure $! Set.insert (Some r) s
-        foldlM addRegUses Set.empty argRegs
-      addBlockDemands blockAddr $ demandAlways $ registerDemandSet demands
-      pure mempty
+    PLTStub{} -> do
+      throwError PLTStubNotSupported
     ParsedJump regs _tgtAddr -> do
       -- record all propagations
       recordBlockTransfer blockAddr regs archRegs
@@ -683,7 +676,7 @@ summarizeBlock b = do
       -- Compute all transfers
       recordBlockTransfer blockAddr regs archRegs
 
-    ParsedLookupTable regs lookupIdx _vec -> do
+    ParsedLookupTable _layout regs lookupIdx _vec -> do
       demandValue blockAddr lookupIdx
       -- record all propagations
       recordBlockTransfer blockAddr regs archRegs
@@ -804,11 +797,16 @@ calculateLocalFixpoint predMap xferMap new =
        next <- foldlM (calculateOnePred xferMap newDemands) rest (predMap^.ix currAddr)
        calculateLocalFixpoint predMap xferMap next
 
+-- | Map function entry points that fail to reasons why we could not infer arguments.
+type FunctionSummaryFailureMap r = Map (RegSegmentOff r) (FunctionArgAnalysisFailure (RegAddrWidth r))
+
 -- | Intermediate information used to infer global demands.
 data FunctionSummaries r = FunctionSummaries {
     _funArgMap       :: !(ArgDemandsMap r)
   , _funResMap       :: !(Map (RegSegmentOff r) (FinalRegisterDemands r))
   , _alwaysDemandMap :: !(Map (RegSegmentOff r) (DemandSet r))
+    -- | Map from function starting addresses to reason why initial argument analysis failed.
+  , inferenceFails   :: !(FunctionSummaryFailureMap r)
   }
 
 funArgMap :: Simple Lens (FunctionSummaries r) (ArgDemandsMap r)
@@ -876,9 +874,9 @@ summarizeFunction :: forall arch
               -> Some (DiscoveryFunInfo arch)
               -> FunctionSummaries (ArchReg arch)
 summarizeFunction ctx acc (Some finfo) = do
-  evalFunctionArgsM ctx $ do
-    -- Get address of this function
-    let addr = discoveredFunAddr finfo
+  let addr = discoveredFunAddr finfo
+  evalFunctionArgsM ctx acc addr $ do
+    -- Summarize blocks
     xferMap <- traverse summarizeBlock (finfo^.parsedBlocks)
     -- Propagate block demands until we are done.
     new <- use blockDemandMap
@@ -948,38 +946,26 @@ functionDemands :: forall arch
                 .  ArchConstraints arch
                 => ArchDemandInfo arch
                    -- ^ Architecture-specific demand information.
-                -> Map (ArchSegmentOff arch) (KnownFunABI (ArchReg arch))
-                -- ^ Maps addresses whose type has been resolved to the and result
-                -- registers.
-                -> Map BS.ByteString (KnownFunABI (ArchReg arch))
-                   -- ^ Maps function names to know function arguments.
-                   --
-                   -- Used to handle relocations to external functions.
                 -> Memory (ArchAddrWidth arch)
                    -- ^ State of memory for resolving segment offsets.
+                -> ResolveCallArgsFn arch
                 -> [Some (DiscoveryFunInfo arch)]
                    -- ^ List of function to compute demands for.
-                -> AddrDemandMap (ArchReg arch)
-functionDemands archFns addrMap symMap mem entries
-    | common <- Set.intersection compAddrSet (Map.keysSet addrMap)
-    , Set.null common == False =
-        error "functionDemands non-empty"
-    | otherwise =
-      calculateGlobalFixpoint (foldl' (summarizeFunction ctx) m0 entries)
-  where
-
-    m0 :: FunctionSummaries (ArchReg arch)
-    m0 = FunctionSummaries
+                -> (AddrDemandMap (ArchReg arch), FunctionSummaryFailureMap (ArchReg arch))
+functionDemands archFns mem resolveCallFn entries = do
+  let m0 :: FunctionSummaries (ArchReg arch)
+      m0 = FunctionSummaries
            { _funArgMap = Map.empty
            , _funResMap = Map.empty
            , _alwaysDemandMap = Map.empty
+           , inferenceFails = Map.empty
            }
+  let compAddrSet = Set.fromList $ viewSome discoveredFunAddr <$> entries
 
-    compAddrSet = Set.fromList $ viewSome discoveredFunAddr <$> entries
-
-    ctx = FAC { archDemandInfo = archFns
-              , ctxMemory = mem
-              , computedAddrSet = compAddrSet
-              , resolvedAddrs = addrMap
-              , knownSymbolDecls = symMap
-              }
+  let ctx = FAC { archDemandInfo = archFns
+                , ctxMemory = mem
+                , computedAddrSet = compAddrSet
+                , resolveCallArgs = resolveCallFn
+                }
+  let summaries = foldl' (summarizeFunction ctx) m0 entries
+  (calculateGlobalFixpoint summaries, inferenceFails summaries)

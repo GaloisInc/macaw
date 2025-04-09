@@ -68,7 +68,9 @@ emptyCFG func = CFG { cfgFunc = func
                     }
   where
     entryID = FBU.blockID entryBlock
-    Just entryBlock = M.lookup (MDS.discoveredFunAddr func) (func ^. MDS.parsedBlocks)
+    entryBlock = case M.lookup (MDS.discoveredFunAddr func) (func ^. MDS.parsedBlocks) of
+                   Just entryBlock' -> entryBlock'
+                   Nothing -> error "emptyCFG: Cannot find function address"
 
 computeBackEdges :: forall arch ids . (MC.MemWidth (MC.ArchAddrWidth arch)) => CFG arch ids -> CFG arch ids
 computeBackEdges cfg0 =
@@ -95,7 +97,7 @@ computeBackEdges cfg0 =
              addTargetsIfBackedges blockId blockAddr (addVisited acc) [target]
            MDS.ParsedBranch _ _ target1 target2 ->
              addTargetsIfBackedges blockId blockAddr (addVisited acc) [target1, target2]
-           MDS.ParsedLookupTable _ _ targets ->
+           MDS.ParsedLookupTable _layout _ _ targets ->
              addTargetsIfBackedges blockId blockAddr (addVisited acc) targets
            MDS.PLTStub _ retTarget _ ->
              addTargetsIfBackedges blockId blockAddr (addVisited acc) [retTarget]
@@ -122,7 +124,9 @@ computeBackEdges cfg0 =
                           -> (M.Map (MC.ArchSegmentOff arch) (S.Set (MC.ArchSegmentOff arch)), S.Set (MC.ArchSegmentOff arch))
     addTargetsIfBackedges blockId blockAddr acc targets =
       let acc' = F.foldl' (addIfBackedge blockAddr) acc targets
-          Just node = M.lookup blockId (cfgAddrNodes cfg0)
+          node = case M.lookup blockId (cfgAddrNodes cfg0) of
+                   Just node' -> node'
+                   Nothing -> error $ "computeBackEdges: Cannot find block ID: " ++ show blockId
           succNodes = G.successors g node
       in F.foldl' go acc' (map nodeToBlockId succNodes)
     addIfBackedge blockAddr acc@(m, visited) target
@@ -156,12 +160,24 @@ mkPartialCFG fi = computeBackEdges graph
             , cfgAddrNodes = addrNodes'
             }
     addEdge addrNodes srcId g0 tgtAddr =
-      let Just tgtBlock = M.lookup tgtAddr (fi ^. MDS.parsedBlocks)
-          Just tgtId = M.lookup (FBU.blockID tgtBlock) addrNodes
-          Just (_e, g) = G.insertLabeledEdge g0 srcId tgtId ()
+      let tgtBlock = case M.lookup tgtAddr (fi ^. MDS.parsedBlocks) of
+                       Just tgtBlock' -> tgtBlock'
+                       Nothing -> panic $ "Cannot find target block: " ++ show tgtAddr
+          tgtId = case M.lookup (FBU.blockID tgtBlock) addrNodes of
+                    Just tgtId' -> tgtId'
+                    Nothing -> panic $ "Cannot find target ID: " ++ show (FBU.blockID tgtBlock)
+
+          -- Since `tgtId` and `srcId` are confirmed to be valid nodes in the cfg,
+          -- the `Nothing` case implies that the edge already exists, so we don't need to insert it.
+          -- This can occur with jump tables that have common targets (e.g. a `default` case in a switch).
+          g = case G.insertLabeledEdge g0 srcId tgtId () of
+                Just (_e, g') -> g'
+                Nothing -> g0
       in g
     buildCFG gr (_addr, pb) =
-      let Just nodeId = M.lookup (FBU.blockID pb) (cfgAddrNodes gr)
+      let nodeId = case M.lookup (FBU.blockID pb) (cfgAddrNodes gr) of
+                     Just nodeId' -> nodeId'
+                     Nothing -> panic $ "Cannot find block ID: " ++ show (FBU.blockID pb)
       in case MDS.pblockTermStmt pb of
         MDS.ParsedJump _ tgt ->
           let g2 = addEdge (cfgAddrNodes gr) nodeId (cfg gr) tgt
@@ -169,21 +185,27 @@ mkPartialCFG fi = computeBackEdges graph
         MDS.ParsedBranch _ _ tgt1 tgt2 ->
           let g2 = F.foldl' (addEdge (cfgAddrNodes gr) nodeId) (cfg gr) [tgt1, tgt2]
           in gr { cfg = g2 }
-        MDS.ParsedLookupTable _ _ addrs ->
+        MDS.ParsedLookupTable _layout _ _ addrs ->
           let g2 = F.foldl' (addEdge (cfgAddrNodes gr) nodeId) (cfg gr) addrs
           in gr { cfg = g2 }
         MDS.ParsedCall _ (Just retAddr) ->
-          let Just retBlock = FBU.blockInFunction fi retAddr
+          let retBlock = case FBU.blockInFunction fi retAddr of
+                           Just retBlock' -> retBlock'
+                           Nothing -> panic $ "Cannot find function address: " ++ show retAddr
           in gr { cfgVirtualRoots = retBlock : cfgVirtualRoots gr
                 }
         MDS.ParsedCall _ Nothing -> gr
         MDS.PLTStub _ retTgt _ ->
-          let Just retBlock = FBU.blockInFunction fi retTgt
+          let retBlock = case FBU.blockInFunction fi retTgt of
+                           Just retBlock' -> retBlock'
+                           Nothing -> panic $ "Cannot find PLT stub: " ++ show retTgt
           in gr { cfgVirtualRoots = retBlock : cfgVirtualRoots gr
                 }
         MDS.ParsedArchTermStmt _ _ Nothing -> gr
         MDS.ParsedArchTermStmt _ _ (Just tgt) ->
-          let Just retBlock = FBU.blockInFunction fi tgt
+          let retBlock = case FBU.blockInFunction fi tgt of
+                           Just retBlock' -> retBlock'
+                           Nothing -> panic $ "Cannot find target address: " ++ show tgt
           in gr { cfgVirtualRoots = retBlock : cfgVirtualRoots gr
                 }
         MDS.ParsedReturn {} -> gr
@@ -193,6 +215,8 @@ mkPartialCFG fi = computeBackEdges graph
               refinementEdges = fromMaybe [] (lookup (MDS.pblockAddr pb) resolutions)
               g2 = F.foldl' (addEdge (cfgAddrNodes gr) nodeId) (cfg gr) refinementEdges
           in gr { cfg = g2 }
+
+    panic err = error $ "mkPartialCFG: " ++ err
 
 -- | A contiguous slice from a CFG
 --
@@ -241,27 +265,41 @@ cfgPathsTo targetBlockID g0 =
   -- resolve some of them (under a timeout)
   map (breakBackedges g0) $ mapMaybe slice (cfgVirtualRoots g0)
   where
-    Just targetNode = M.lookup targetBlockID (cfgAddrNodes g0)
-    Just targetBlock = FBU.getBlock (cfgFunc g0) targetBlockID
+    targetNode = case M.lookup targetBlockID (cfgAddrNodes g0) of
+                   Just targetNode' -> targetNode'
+                   Nothing -> panic $ "Cannot find target node: " ++ show targetBlockID
+    targetBlock = case FBU.getBlock (cfgFunc g0) targetBlockID of
+                    Just targetBlock' -> targetBlock'
+                    Nothing -> panic $ "Cannot find target block: " ++ show targetBlockID
     backwardReachable = S.fromList (GD.rdfs (cfg g0) [targetNode])
     slice root = do
-      let Just startNode = M.lookup root (cfgAddrNodes g0)
+      let startNode = case M.lookup root (cfgAddrNodes g0) of
+                        Just startNode' -> startNode'
+                        Nothing -> panic $ "Cannot find root node: " ++ show root
       let forwardReachable = S.fromList (GD.dfs (cfg g0) [startNode])
       let common = S.intersection forwardReachable backwardReachable
       case S.null common of
         True -> Nothing
         False -> do
           let common' = S.delete targetNode $ S.delete startNode common
-          let Just startBlock = FBU.getBlock (cfgFunc g0) root
+          let startBlock = case FBU.getBlock (cfgFunc g0) root of
+                             Just startBlock' -> startBlock'
+                             Nothing -> panic $ "Cannot find root block: " ++ show root
           Just $ CFGSlice { sliceCFG = g0
                           , sliceEntry = startBlock
                           , sliceTarget = targetBlock
                           , sliceBody = map nodeToBlock (F.toList common')
                           }
     nodeToBlock n =
-      let Just bid = M.lookup n (cfgNodeAddrs g0)
-          Just pb = FBU.getBlock (cfgFunc g0) bid
+      let bid = case M.lookup n (cfgNodeAddrs g0) of
+                  Just bid' -> bid'
+                  Nothing -> panic $ "Cannot find node: " ++ show n
+          pb = case FBU.getBlock (cfgFunc g0) bid of
+                 Just pb' -> pb'
+                 Nothing -> panic $ "Cannot find block ID: " ++ show bid
       in pb
+
+    panic err = error $ "cfgPathsTo: " ++ err
 
 -- | Traverse a 'CFGSlice' and break any backedges by replacing jump targets
 -- with invalid pointers.  Since there will not be blocks at these invalid
@@ -297,8 +335,8 @@ breakBackedges cfg0 slice =
           MDS.ParsedJump regs (replaceTarget backTargets tgt)
         MDS.ParsedBranch regs cond t1 t2 ->
           MDS.ParsedBranch regs cond (replaceTarget backTargets t1) (replaceTarget backTargets t2)
-        MDS.ParsedLookupTable regs val tgts ->
-          MDS.ParsedLookupTable regs val (fmap (replaceTarget backTargets) tgts)
+        MDS.ParsedLookupTable layout regs val tgts ->
+          MDS.ParsedLookupTable layout regs val (fmap (replaceTarget backTargets) tgts)
         MDS.ParsedReturn {} -> t
         MDS.ParsedArchTermStmt _ _ Nothing -> t
         MDS.ParsedArchTermStmt stmt regs (Just tgt) ->

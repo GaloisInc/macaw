@@ -14,8 +14,8 @@ import           Data.Monoid
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Semigroup
 import qualified Data.Set as S
-import           Data.Text.Prettyprint.Doc as PP
 import           Data.Word ( Word64 )
+import           Prettyprinter as PP
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
@@ -106,5 +106,8 @@ blockAddresses dstate = F.foldl' addFunction M.empty (dstate ^. MD.funInfo . L.t
           addrSet = S.fromList (fmap asWord64 blockAddrs)
       in M.insert (asWord64 funcAddr) addrSet m
     asWord64 addr =
-      let Just mw = MM.segoffAsAbsoluteAddr addr
+      let mw = case MM.segoffAsAbsoluteAddr addr of
+                 Just mw' -> mw'
+                 Nothing  -> error $ "blockAddresses: Could not resolve absolute address for: "
+                                  ++ show addr
       in fromIntegral mw

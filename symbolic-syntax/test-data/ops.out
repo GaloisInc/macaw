@@ -1,0 +1,49 @@
+(defun @ops ((p Pointer) (q Pointer)) Unit
+   (start start:
+      (let b (bv-typed-literal SizeT 42))
+      (let bp (bits-to-pointer b))
+      (let pb (pointer-to-bits bp))
+      (let n (pointer-make-null))
+      (let d (pointer-diff p q))
+      (let r (pointer-add p d))
+      (let s (pointer-sub r d))
+      (let e (pointer-eq s p))
+      (let t (pointer-read Int le s))
+      (pointer-write SizeT le s b)
+      (return ())))
+
+ops
+%0
+  % 4:12
+  $2 = intLit(42)
+  % 4:12
+  $3 = integerToBV(64, $2)
+  % 5:13
+  $4 = extensionApp((bits_to_ptr_64 $3))
+  % 6:13
+  $5 = extensionApp((ptr_to_bits_64 $4))
+  % 7:12
+  $6 = extensionApp(null_ptr)
+  % internal
+  $7 = (ptr_sub $0 $1)
+  % 8:12
+  $8 = extensionApp((ptr_to_bits_64 $7))
+  % internal
+  $9 = extensionApp((bits_to_ptr_64 $8))
+  % 9:12
+  $10 = (ptr_add $0 $9)
+  % 10:16
+  $11 = (ptr_sub $10 $9)
+  % 11:16
+  $12 = (ptr_eq $11 $0)
+  % internal
+  $13 = (macawReadMem bvle4 $11)
+  % 12:12
+  $14 = extensionApp((ptr_to_bits_32 $13))
+  % 13:5
+  $15 = (macawWriteMem bvle8 $11 $4)
+  % 14:13
+  $16 = emptyApp()
+  % 14:5
+  return $16
+  % no postdom

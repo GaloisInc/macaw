@@ -1048,7 +1048,7 @@ bvSplit v =
               let sh = bvLit (typeWidth v) (intValue sz)
                in (bvTrunc sz (v `bvShr` sh), bvTrunc sz v)
 
--- | Vectorization
+-- | Vectorization. This will always return a non-empty list of values.
 bvVectorize :: forall ids k n
                . (1 <= k, 1 <= n)
               => NatRepr k

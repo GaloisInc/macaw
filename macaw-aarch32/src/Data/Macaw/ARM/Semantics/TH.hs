@@ -45,8 +45,8 @@ import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Parameterized.NatRepr
-import           GHC.TypeLits as TL
-import qualified Lang.Crucible.Backend.Simple as CBS
+import qualified GHC.TypeLits as TL
+import qualified What4.Expr.Builder as WEB
 import           Language.Haskell.TH
 import qualified SemMC.Architecture.AArch32 as ARM
 import qualified SemMC.Architecture.ARM.Opcodes as ARM
@@ -55,9 +55,7 @@ import qualified What4.Expr.Builder as WB
 
 import qualified Language.ASL.Globals as ASL
 
-import           Data.Macaw.ARM.Simplify ()
-
-loadSemantics :: CBS.SimpleBackend t fs -> IO (ARM.ASLSemantics (CBS.SimpleBackend t fs))
+loadSemantics :: WEB.ExprBuilder t st fs -> IO (ARM.ASLSemantics (WEB.ExprBuilder t st fs))
 loadSemantics sym = ARM.loadSemantics sym (ARM.ASLSemanticsOpts { ARM.aslOptTrimRegs = True})
 
 -- n.b. although MacawQ is a monad and therefore has a fail
@@ -86,7 +84,7 @@ armNonceAppEval bvi nonceApp =
           -- failure, undefined behavior and unpredictable behavior flags
           -- are not used, and have been wrapped in the following 3 functions.
           -- To save time, for now we can simply avoid translating them.
-          
+
           "uf_update_assert" -> case args of
             Ctx.Empty Ctx.:> _assertVar -> Just $ do
               --assertVarE <- addEltTH M.LittleEndian bvi assertVar
@@ -374,7 +372,7 @@ armNonceAppEval bvi nonceApp =
                 appendStmt $ [| join (execWriteGPRs <$> $(refBinding gprs')) |]
                 setEffectful
                 liftQ [| return $ unitValue |]
-                  
+
           "uf_update_simds"
             | Ctx.Empty Ctx.:> simds <- args -> Just $ do
                 simds' <- addEltTH M.LittleEndian bvi simds
@@ -429,7 +427,7 @@ natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))
 -- address (either a memory address, or a register number) and 'val' is the value
 -- to be written.
 data WriteAction f w where
-  -- | A single write action 
+  -- | A single write action
   WriteAction :: forall f w
                . (1 <= w)
               => M.NatRepr w
@@ -842,7 +840,7 @@ armAppEvaluator endianness interps elt =
                 res <- liftQ $ tupE $ map varE nms
                 return $ EagerBoundExp res
               False -> return bnd
-        
+
         fldBnd <- refField (Ctx.size reprs) idx bnd
         extractBound fldBnd
       WB.StructCtor _ (Ctx.Empty Ctx.:> e) -> Just $ do
@@ -853,8 +851,8 @@ armAppEvaluator endianness interps elt =
         fldEs <- sequence $ FC.toListFC (addEltTH endianness interps) flds
         case all isEager fldEs of
           True -> liftQ $ [| return $(tupE (map refEager fldEs)) |]
-          False -> liftQ $ joinTuple (map refBinding fldEs)            
-            
+          False -> liftQ $ joinTuple (map refBinding fldEs)
+
       WB.BVSdiv w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
@@ -863,7 +861,7 @@ armAppEvaluator endianness interps elt =
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
         liftQ [| G.addExpr =<< $(joinOp2 [| \e1E e2E -> addArchAssignment (URem $(natReprTH w) e1E e2E) |] e1 e2) |]
-               
+
       WB.BVSrem w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2

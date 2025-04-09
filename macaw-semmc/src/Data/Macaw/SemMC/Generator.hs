@@ -1,4 +1,3 @@
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -75,7 +74,7 @@ data Expr arch ids tp where
 
 data PreBlock arch ids =
   PreBlock { pBlockIndex :: !Word64
-           , pBlockAddr :: MM.MemSegmentOff (ArchAddrWidth arch)
+           , pBlockAddr :: ArchSegmentOff arch
            , _pBlockStmts :: !(Seq.Seq (Stmt arch ids))
            , _pBlockState :: !(RegState (ArchReg arch) (Value arch ids))
            }
@@ -91,7 +90,7 @@ pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 data GenState arch ids s =
   GenState { assignIdGen :: NC.NonceGenerator (ST s) ids
            , _blockState :: !(PreBlock arch ids)
-           , genAddr :: MM.MemSegmentOff (ArchAddrWidth arch)
+           , genAddr :: ArchSegmentOff arch
            , genRegUpdates :: MapF.MapF (ArchReg arch) (Value arch ids)
            , _blockStateSnapshot :: !(RegState (ArchReg arch) (Value arch ids))
            , appCache :: !(MapF.MapF (App (Value arch ids)) (Value arch ids))
@@ -103,7 +102,7 @@ data GenState arch ids s =
 
 emptyPreBlock :: RegState (ArchReg arch) (Value arch ids)
               -> Word64
-              -> MM.MemSegmentOff (RegAddrWidth (ArchReg arch))
+              -> MM.MemSegmentOff (ArchAddrWidth arch)
               -> PreBlock arch ids
 emptyPreBlock s0 idx addr =
   PreBlock { pBlockIndex = idx
@@ -113,7 +112,7 @@ emptyPreBlock s0 idx addr =
            }
 
 initGenState :: NC.NonceGenerator (ST s) ids
-             -> MM.MemSegmentOff (ArchAddrWidth arch)
+             -> ArchSegmentOff arch
              -> RegState (ArchReg arch) (Value arch ids)
              -> GenState arch ids s
 initGenState nonceGen addr st =
@@ -127,11 +126,11 @@ initGenState nonceGen addr st =
   where
     s0 = emptyPreBlock st 0 addr
 
-initRegState :: (KnownNat (RegAddrWidth (ArchReg arch)),
-                 1 <= RegAddrWidth (ArchReg arch),
+initRegState :: (KnownNat (ArchAddrWidth arch),
+                 1 <= ArchAddrWidth arch,
                  RegisterInfo (ArchReg arch),
-                 MM.MemWidth (RegAddrWidth (ArchReg arch)))
-             => MM.MemSegmentOff (RegAddrWidth (ArchReg arch))
+                 MM.MemWidth (ArchAddrWidth arch))
+             => MM.MemSegmentOff (ArchAddrWidth arch)
              -> RegState (ArchReg arch) (Value arch ids)
 initRegState startIP =
   mkRegState Initial & curIP .~ RelocatableValue (addrWidthRepr startIP) (MM.segoffAddr startIP)
@@ -197,7 +196,7 @@ getRegSnapshotVal reg = do
 -- the value first, if possible.
 setRegVal :: ( MSS.SimplifierExtension arch
              , OrdF (ArchReg arch)
-             , MM.MemWidth (RegAddrWidth (ArchReg arch))
+             , MM.MemWidth (ArchAddrWidth arch)
              )
           => ArchReg arch tp
           -> Value arch ids tp
@@ -220,7 +219,7 @@ cacheAppValue a v =
 
 addExpr :: ( MSS.SimplifierExtension arch
            , OrdF (ArchReg arch)
-           , MM.MemWidth (RegAddrWidth (ArchReg arch))
+           , MM.MemWidth (ArchAddrWidth arch)
            , ShowF (ArchReg arch)
            )
         => Expr arch ids tp
@@ -289,12 +288,7 @@ newtype Generator arch ids s a =
 -- | The 'Monad' instance is manually-specified so that calls to 'fail' actually
 -- use our 'ET.ExceptT' 'ET.throwError' for nicer error behavior.
 instance Monad (Generator arch ids s) where
-  return v = Generator (return v)
   Generator m >>= h = Generator (m >>= \v -> runG (h v))
-  Generator m >> Generator n = Generator (m >> n)
-#if !(MIN_VERSION_base(4,13,0))
-  fail = MF.fail
-#endif
 
 instance St.MonadState (GenState arch ids s) (Generator arch ids s) where
   get = Generator Rd.ask
@@ -409,4 +403,3 @@ finishBlock' preBlock term =
   Block { blockStmts = F.toList (preBlock ^. pBlockStmts)
         , blockTerm = term (preBlock ^. pBlockState)
         }
-

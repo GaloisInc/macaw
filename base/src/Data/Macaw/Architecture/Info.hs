@@ -2,25 +2,39 @@
 This defines the architecture-specific information needed for code discovery.
 -}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
   , postCallAbsState
-  , ArchBlockPrecond
   , DisassembleFn
-  , IntraJumpTarget
+   -- * Block classification
+  , BlockClassifier
+  , BlockClassifierM
+  , runBlockClassifier
+  , BlockClassifierContext(..)
+  , Classifier(..)
+  , classifierName
+  , liftClassifier
+  , ParseContext(..)
+  , NoReturnFunStatus(..)
     -- * Unclassified blocks
   , module Data.Macaw.CFG.Block
   , rewriteBlock
   ) where
 
-import           Control.Monad.ST
-import qualified Data.Kind as K
+import           Control.Applicative ( Alternative(..), liftA )
+import           Control.Monad ( ap )
+import qualified Control.Monad.Fail as MF
+import qualified Control.Monad.Reader as CMR
+import qualified Control.Monad.Trans as CMT
+import           Control.Monad.ST ( ST )
+import           Data.Map ( Map )
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.TraversableF
 import           Data.Sequence (Seq)
+import qualified Prettyprinter as PP
 
 import           Data.Macaw.AbsDomain.AbsState as AbsState
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
@@ -28,23 +42,173 @@ import           Data.Macaw.CFG.Block
 import           Data.Macaw.CFG.Core
 import           Data.Macaw.CFG.DemandSet
 import           Data.Macaw.CFG.Rewriter
+import qualified Data.Macaw.Discovery.ParsedContents as Parsed
 import           Data.Macaw.Memory
+
+
+------------------------------------------------------------------------
+-- NoReturnFunStatus
+
+-- | Flags whether a function is labeled no return or not.
+data NoReturnFunStatus
+  = NoReturnFun
+    -- ^ Function labeled no return
+  | MayReturnFun
+    -- ^ Function may retun
+  deriving (Show)
+
+instance PP.Pretty NoReturnFunStatus where
+  pretty = PP.viaShow
+
+type ClassificationError = String
+
+-- | The result of block classification, which collects information about all of
+-- the match failures to help diagnose shortcomings in the analysis
+data Classifier o = ClassifyFailed    [ClassificationError]
+                  | ClassifySucceeded [ClassificationError] o
+
+-- | In the given context, set the name of the current classifier
+--
+-- This is used to improve the labels for each classifier failure
+classifierName :: String -> BlockClassifierM arch ids a -> BlockClassifierM arch ids a
+classifierName nm (BlockClassifier (CMR.ReaderT m)) = BlockClassifier $ CMR.ReaderT $ \i ->
+  case m i of
+    ClassifyFailed [] -> ClassifyFailed [nm ++ " classification failed."]
+    ClassifyFailed l  -> ClassifyFailed (fmap ((nm ++ ": ") ++)  l)
+    ClassifySucceeded l a -> ClassifySucceeded (fmap ((nm ++ ": ") ++)  l) a
+
+classifyFail :: Classifier a
+classifyFail = ClassifyFailed []
+
+classifySuccess :: a -> Classifier a
+classifySuccess = \x -> ClassifySucceeded [] x
+
+classifyBind :: Classifier a -> (a -> Classifier b) -> Classifier b
+classifyBind m f =
+  case m of
+    ClassifyFailed e -> ClassifyFailed e
+    ClassifySucceeded [] a -> f a
+    ClassifySucceeded l a ->
+      case f a of
+        ClassifyFailed    e   -> ClassifyFailed    (l++e)
+        ClassifySucceeded e b -> ClassifySucceeded (l++e) b
+
+classifyAppend :: Classifier a -> Classifier a -> Classifier a
+classifyAppend m n =
+  case m of
+    ClassifySucceeded e a -> ClassifySucceeded e a
+    ClassifyFailed [] -> n
+    ClassifyFailed e ->
+      case n of
+        ClassifySucceeded f a -> ClassifySucceeded (e++f) a
+        ClassifyFailed f      -> ClassifyFailed    (e++f)
+
+instance Alternative Classifier where
+  empty = classifyFail
+  (<|>) = classifyAppend
+
+instance Functor Classifier where
+  fmap = liftA
+
+instance Applicative Classifier where
+  pure = classifySuccess
+  (<*>) = ap
+
+instance Monad Classifier where
+  (>>=) = classifyBind
+
+instance MF.MonadFail Classifier where
+  fail = \m -> ClassifyFailed [m]
+
+------------------------------------------------------------------------
+-- ParseContext
+
+-- | Information needed to parse the processor state
+data ParseContext arch ids =
+  ParseContext { pctxMemory         :: !(Memory (ArchAddrWidth arch))
+               , pctxArchInfo       :: !(ArchitectureInfo arch)
+               , pctxKnownFnEntries :: !(Map (ArchSegmentOff arch) NoReturnFunStatus)
+                 -- ^ Entry addresses for known functions (e.g. from
+                 -- symbol information)
+                 --
+                 -- The discovery process will not create
+                 -- intra-procedural jumps to the entry points of new
+                 -- functions.
+               , pctxFunAddr        :: !(ArchSegmentOff arch)
+                 -- ^ Address of function containing this block.
+               , pctxAddr           :: !(ArchSegmentOff arch)
+                 -- ^ Address of the current block
+               , pctxExtResolution :: [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                 -- ^ Externally-provided resolutions for classification
+                 -- failures, which are used in parseFetchAndExecute
+               }
+
+{-| The fields of the 'BlockClassifierContext' are:
+
+  [@ParseContext ...@]: The context for the parse
+
+  [@RegState ...@]: Initial register values
+
+  [@Seq (Stmt ...)@]: The statements in the block
+
+  [@AbsProcessorState ...@]: Abstract state of registers prior to
+                             terminator statement being executed.
+
+  [@Jmp.IntraJumpBounds ...@]: Bounds prior to terminator statement
+                               being executed.
+
+  [@ArchSegmentOff arch@]: Address of all segments written to memory
+
+  [@RegState ...@]: Final register values
+-}
+data BlockClassifierContext arch ids = BlockClassifierContext
+  { classifierParseContext  :: !(ParseContext arch ids)
+  -- ^ Information needed to construct abstract processor states
+  , classifierInitRegState  :: !(RegState (ArchReg arch) (Value arch ids))
+  -- ^ The (concrete) register state at the beginning of the block
+  , classifierStmts         :: !(Seq (Stmt arch ids))
+  -- ^ The statements of the block (without the terminator)
+  , classifierBlockSize     :: !Int
+    -- ^ Size of block being classified.
+  , classifierAbsState      :: !(AbsProcessorState (ArchReg arch) ids)
+  -- ^ The abstract processor state before the terminator is executed
+  , classifierJumpBounds    :: !(Jmp.IntraJumpBounds arch ids)
+  -- ^ The relational abstract processor state before the terminator is executed
+  , classifierWrittenAddrs  :: !([ArchSegmentOff arch])
+  -- ^ The addresses of observed memory writes in the block
+  , classifierFinalRegState :: !(RegState (ArchReg arch) (Value arch ids))
+  -- ^ The final (concrete) register state before the terminator is executed
+  }
+
+type BlockClassifier arch ids = BlockClassifierM arch ids (Parsed.ParsedContents arch ids)
+
+-- | The underlying monad for the 'BlockClassifier', which handles collecting
+-- matching errors
+newtype BlockClassifierM arch ids a =
+  BlockClassifier { unBlockClassifier :: CMR.ReaderT (BlockClassifierContext arch ids)
+                                                     Classifier
+                                                     a
+                  }
+  deriving ( Functor
+           , Applicative
+           , Alternative
+           , Monad
+           , MF.MonadFail
+           , CMR.MonadReader (BlockClassifierContext arch ids)
+           )
+
+-- | Run a classifier in a given block context
+runBlockClassifier
+  :: BlockClassifier arch ids
+  -> BlockClassifierContext arch ids
+  -> Classifier (Parsed.ParsedContents arch ids)
+runBlockClassifier cl = CMR.runReaderT (unBlockClassifier cl)
+
+liftClassifier :: Classifier a -> BlockClassifierM arch ids a
+liftClassifier c = BlockClassifier (CMT.lift c)
 
 ------------------------------------------------------------------------
 -- ArchitectureInfo
-
--- | This family maps architecture parameters to information needed to
--- successfully translate machine code into Macaw CFGs.
---
--- This is currently used for registers values that are required to be
--- known constants at translation time.  For example, on X86_64, due to
--- aliasing between the FPU and MMX registers, we require that the
--- floating point stack value is known at translation time so that
--- we do not need to check which register is modified when pushing or
--- poping from the x86 stack.
---
--- If no preconditions are needed, this can just be set to the unit type.
-type family ArchBlockPrecond (arch :: K.Type) :: K.Type
 
 -- | Function for disassembling a range of code (usually a function in
 -- the target code image) into blocks.
@@ -66,23 +230,13 @@ type DisassembleFn arch
       -- ^ Maximum offset for this to read from.
    -> ST s (Block arch ids, Int)
 
--- | This type is used to represent the location to return to *within a
--- function* after executing an architecture-specific terminator instruction.
---
---  * The 'MemSegmentOff' is the address to jump to next (within the function)
---  * The 'AbsBlockState' is the abstract state to use at the start of the block returned to (reflecting any changes made by the architecture-specific terminator)
---  * The 'Jmp.InitJumpBounds' is a collection of relations between values in registers and on the stack that should hold (see 'Jmp.postCallBounds' for to construct this in the common case)
-type IntraJumpTarget arch =
-  (MemSegmentOff (ArchAddrWidth arch), AbsBlockState (ArchReg arch), Jmp.InitJumpBounds arch)
-
-
 -- | This records architecture specific functions for analysis.
 data ArchitectureInfo arch
    = ArchitectureInfo
      { withArchConstraints :: forall a . (ArchConstraints arch => a) -> a
        -- ^ Provides the architecture constraints to any computation
        -- that needs it.
-     , archAddrWidth :: !(AddrWidthRepr (RegAddrWidth (ArchReg arch)))
+     , archAddrWidth :: !(AddrWidthRepr (ArchAddrWidth arch))
        -- ^ Architecture address width.
      , archEndianness :: !Endianness
        -- ^ The byte order values are stored in.
@@ -98,7 +252,7 @@ data ArchitectureInfo arch
        -- ^ Create initial registers from address and precondition.
      , disassembleFn :: !(DisassembleFn arch)
        -- ^ Function for disassembling a block.
-     , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))
+     , mkInitialAbsState :: !(Memory (ArchAddrWidth arch)
                          -> ArchSegmentOff arch
                          -> AbsBlockState (ArchReg arch))
        -- ^ Creates an abstract block state for representing the beginning of a
@@ -108,7 +262,7 @@ data ArchitectureInfo arch
      , absEvalArchFn :: !(forall ids tp
                           .  AbsProcessorState (ArchReg arch) ids
                           -> ArchFn arch (Value arch ids) tp
-                          -> AbsValue (RegAddrWidth (ArchReg arch)) tp)
+                          -> AbsValue (ArchAddrWidth arch) tp)
        -- ^ Evaluates an architecture-specific function
      , absEvalArchStmt :: !(forall ids
                             .  AbsProcessorState (ArchReg arch) ids
@@ -163,8 +317,8 @@ data ArchitectureInfo arch
                            .  ArchStmt arch (Value arch src)
                            -> Rewriter arch s src tgt ())
        -- ^ This rewrites an architecture specific statement
-     , rewriteArchTermStmt :: (forall s src tgt . ArchTermStmt arch src
-                                             -> Rewriter arch s src tgt (ArchTermStmt arch tgt))
+     , rewriteArchTermStmt :: (forall s src tgt . ArchTermStmt arch (Value arch src)
+                                             -> Rewriter arch s src tgt (ArchTermStmt arch (Value arch tgt)))
        -- ^ This rewrites an architecture specific statement
      , archDemandContext :: !(DemandContext arch)
        -- ^ Provides architecture-specific information for computing which arguments must be
@@ -177,8 +331,8 @@ data ArchitectureInfo arch
                                      -> Jmp.IntraJumpBounds arch ids
                                      -> RegState (ArchReg arch) (Value arch ids)
                                         -- The architecture-specific statement
-                                     -> ArchTermStmt arch ids
-                                     -> Maybe (IntraJumpTarget arch))
+                                     -> ArchTermStmt arch (Value arch ids)
+                                     -> Maybe (Jmp.IntraJumpTarget arch))
        -- ^ This takes an abstract state from before executing an abs
        -- state, and an architecture-specific terminal statement.
        --
@@ -190,6 +344,9 @@ data ArchitectureInfo arch
        -- Note that per their documentation, architecture specific
        -- statements may return to at most one location within a
        -- function.
+     , archClassifier :: !(forall ids . BlockClassifier arch ids)
+     -- ^ The block classifier to use for this architecture, which can be
+     -- customized
      }
 
 postCallAbsState :: ArchitectureInfo arch

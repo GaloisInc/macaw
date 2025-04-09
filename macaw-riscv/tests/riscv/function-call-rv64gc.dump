@@ -1,0 +1,48 @@
+
+function-call-rv64gc.exe:     file format elf64-littleriscv
+
+
+Disassembly of section .text:
+
+000000000001010c <f2>:
+   1010c:	1101                	c.addi	sp,-32
+   1010e:	ec22                	c.sdsp	s0,24(sp)
+   10110:	1000                	c.addi4spn	s0,sp,32
+   10112:	87aa                	c.mv	a5,a0
+   10114:	fef42623          	sw	a5,-20(s0)
+   10118:	fec42783          	lw	a5,-20(s0)
+   1011c:	2785                	c.addiw	a5,1
+   1011e:	2781                	c.addiw	a5,0
+   10120:	853e                	c.mv	a0,a5
+   10122:	6462                	c.ldsp	s0,24(sp)
+   10124:	6105                	c.addi16sp	sp,32
+   10126:	8082                	c.jr	ra
+
+0000000000010128 <f1>:
+   10128:	1101                	c.addi	sp,-32
+   1012a:	ec06                	c.sdsp	ra,24(sp)
+   1012c:	e822                	c.sdsp	s0,16(sp)
+   1012e:	1000                	c.addi4spn	s0,sp,32
+   10130:	478d                	c.li	a5,3
+   10132:	fef42623          	sw	a5,-20(s0)
+   10136:	fec42783          	lw	a5,-20(s0)
+   1013a:	853e                	c.mv	a0,a5
+   1013c:	fd1ff0ef          	jal	ra,1010c <f2>
+   10140:	87aa                	c.mv	a5,a0
+   10142:	853e                	c.mv	a0,a5
+   10144:	60e2                	c.ldsp	ra,24(sp)
+   10146:	6442                	c.ldsp	s0,16(sp)
+   10148:	6105                	c.addi16sp	sp,32
+   1014a:	8082                	c.jr	ra
+
+000000000001014c <_start>:
+   1014c:	1141                	c.addi	sp,-16
+   1014e:	e406                	c.sdsp	ra,8(sp)
+   10150:	e022                	c.sdsp	s0,0(sp)
+   10152:	0800                	c.addi4spn	s0,sp,16
+   10154:	fd5ff0ef          	jal	ra,10128 <f1>
+   10158:	0001                	c.addi	zero,0
+   1015a:	60a2                	c.ldsp	ra,8(sp)
+   1015c:	6402                	c.ldsp	s0,0(sp)
+   1015e:	0141                	c.addi	sp,16
+   10160:	8082                	c.jr	ra

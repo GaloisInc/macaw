@@ -17,7 +17,7 @@ import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
 import           Dismantle.PPC
-import qualified Lang.Crucible.Backend.Simple as CBS
+import qualified What4.Expr.Builder as WEB
 import qualified Language.Haskell.TH as TH
 import qualified SemMC.Architecture.PPC as SP
 import           SemMC.Architecture.PPC32.Opcodes ( allSemantics, allOpcodeInfo, allDefinedFunctions )
@@ -25,7 +25,7 @@ import qualified SemMC.Formula as SF
 import qualified SemMC.Util as SU
 
 import           Data.Macaw.SemMC.Generator ( Generator )
-import           Data.Macaw.SemMC.TH ( MacawTHConfig(..), genExecInstruction )
+import           Data.Macaw.SemMC.TH ( MacawTHConfig(..), genExecInstruction, MacawSemMC(..) )
 import           Data.Macaw.PPC.Arch ( ppcInstructionMatcher )
 import           Data.Macaw.PPC.PPCReg ( locToRegTH )
 import           Data.Macaw.PPC.Semantics.TH ( ppcAppEvaluator, ppcNonceAppEval )
@@ -34,7 +34,7 @@ execInstruction :: MC.Value (SP.AnyPPC SP.V32) ids (MT.BVType 32) -> Instruction
 execInstruction =
   $(do let proxy = Proxy @(SP.AnyPPC SP.V32)
        Some ng <- TH.runIO PN.newIONonceGenerator
-       sym <- TH.runIO (CBS.newSimpleBackend CBS.FloatIEEERepr ng)
+       sym <- TH.runIO (WEB.newExprBuilder WEB.FloatIEEERepr MacawSemMC ng)
 
        logCfg <- TH.runIO SU.mkNonLogCfg
        let ?logCfg = logCfg

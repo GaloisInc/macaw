@@ -12,28 +12,34 @@
 	url = https://github.com/GaloisInc/crucible.git
 [submodule "deps/llvm-pretty"]
 	path = deps/llvm-pretty
-	url = https://github.com/elliottt/llvm-pretty.git
-[submodule "submodules/semmc"]
+	url = https://github.com/GaloisInc/llvm-pretty.git
+[submodule "deps/semmc"]
 	path = deps/semmc
-	url = git@github.com:GaloisInc/semmc.git
-[submodule "submodules/dismantle"]
+	url = https://github.com/GaloisInc/semmc.git
+[submodule "deps/dismantle"]
 	path = deps/dismantle
-	url = git@github.com:travitch/dismantle.git
-[submodule "submodules/macaw-loader"]
-	path = deps/macaw-loader
-	url = git@github.com:GaloisInc/macaw-loader.git
+	url = https://github.com/GaloisInc/dismantle.git
 [submodule "deps/llvm-pretty-bc-parser"]
 	path = deps/llvm-pretty-bc-parser
-	url = https://github.com/GaloisInc/llvm-pretty-bc-parser
+	url = https://github.com/GaloisInc/llvm-pretty-bc-parser.git
 [submodule "deps/asl-translator"]
 	path = deps/asl-translator
 	url = https://github.com/GaloisInc/asl-translator.git
 [submodule "deps/arm-asl-parser"]
 	path = deps/arm-asl-parser
 	url = https://github.com/GaloisInc/arm-asl-parser.git
-[submodule "deps/what4-serialize"]
-	path = deps/what4-serialize
-	url = https://github.com/GaloisInc/what4-serialize.git
 [submodule "deps/what4"]
 	path = deps/what4
-	url = git@github.com:GaloisInc/what4.git
+	url = https://github.com/GaloisInc/what4.git
+[submodule "deps/grift"]
+	path = deps/grift
+	url = https://github.com/GaloisInc/grift.git
+[submodule "deps/bv-sized"]
+	path = deps/bv-sized
+	url = https://github.com/GaloisInc/bv-sized.git
+[submodule "deps/bv-sized-float"]
+	path = deps/bv-sized-float
+	url = https://github.com/GaloisInc/bv-sized-float.git
+[submodule "deps/softfloat-hs"]
+	path = deps/softfloat-hs
+	url = https://github.com/GaloisInc/softfloat-hs.git

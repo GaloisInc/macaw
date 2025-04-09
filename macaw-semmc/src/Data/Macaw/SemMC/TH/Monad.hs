@@ -1,13 +1,16 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeInType #-}
 module Data.Macaw.SemMC.TH.Monad (
   MacawTHConfig(..),
   BoundVarInterpretations(..),
   BoundExp(..),
   MacawQ,
+  MacawSemMC(..),
+  Sym,
   runMacawQ,
   liftQ,
   lookupElt,
@@ -52,18 +55,16 @@ import qualified Data.Sequence as Seq
 import           Language.Haskell.TH
 
 import qualified Data.Macaw.CFG as M
-import qualified Data.Parameterized.Context as Ctx
-import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
-import qualified Lang.Crucible.Backend.Simple as S
 import qualified SemMC.Formula as SF
 import qualified What4.Expr.Builder as S
 import qualified What4.Interface as SI
 
 import qualified SemMC.Architecture.Location as L
 
-type Sym t fs = S.SimpleBackend t fs
+data MacawSemMC t = MacawSemMC
+type Sym t fs = S.ExprBuilder t MacawSemMC fs
 
 data BoundVarInterpretations arch t fs =
   BoundVarInterpretations { locVars :: Map.MapF (SI.BoundVar (Sym t fs)) (L.Location arch)
@@ -207,7 +208,7 @@ liftQ q = MacawQ (lift q)
 
 withLocToReg :: ((L.Location arch tp -> Q Exp) -> MacawQ arch t fs a) -> MacawQ arch t fs a
 withLocToReg k = do
-  f <- St.gets locToReg
+  f <- St.gets $ \x -> locToReg x
   k f
 
 -- | Look up an 'S.Expr' in the cache
@@ -224,14 +225,14 @@ withNonceAppEvaluator :: forall tp arch t fs
                        . ((BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp)) -> MacawQ arch t fs (Maybe (MacawQ arch t fs Exp)))
                       -> MacawQ arch t fs (Maybe (MacawQ arch t fs Exp))
 withNonceAppEvaluator k = do
-  nae <- St.gets nonceAppEvaluator
+  nae <- St.gets $ \x -> nonceAppEvaluator x
   k nae
 
 withAppEvaluator :: forall tp arch t fs
                   . ((BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp)) -> MacawQ arch t fs (Maybe (MacawQ arch t fs Exp)))
                  -> MacawQ arch t fs (Maybe (MacawQ arch t fs Exp))
 withAppEvaluator k = do
-  ae <- St.gets appEvaluator
+  ae <- St.gets $ \x -> appEvaluator x
   k ae
 
 -- | Append a statement that doesn't need to bind a new name

@@ -55,7 +55,6 @@ import           Data.Maybe ( catMaybes )
 import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
-import           Data.Semigroup ( (<>) )
 import qualified Data.Set as Set
 import qualified Data.Tagged as DT
 import qualified Data.Text as T
@@ -82,6 +81,7 @@ import qualified What4.ProgramLoc as WPL
 import qualified What4.BaseTypes as WT
 import qualified What4.FunctionName as WF
 import qualified What4.Interface as WI
+import qualified What4.Expr.Builder as WEB
 
 import           Prelude
 
@@ -159,6 +159,7 @@ main = do
   concreteTestInputs <- getConcreteTestList datadir False
   symbolicTestInputs <- getSymbolicTestList datadir False
   -- let testNames = Set.fromList (map name testInputs)
+  let ?memOpts = CLM.defaultMemOptions
   let tests = concat [ map mkTest concreteTestInputs
                      , map mkSymbolicTest symbolicTestInputs
                      ]
@@ -222,7 +223,7 @@ testOptions verb file = Options { inputFile = file
 -- | Test that macaw-refinement can find all of the expected jump targets
 --
 -- Jump targets are provided in .expected files that are 'read' in.
-mkTest :: TestInput -> TT.TestTree
+mkTest :: (?memOpts :: CLM.MemOptions) => TestInput -> TT.TestTree
 mkTest testinp = do
   TT.askOption $ \(VerboseLogging beVerbose) -> TTH.testCase (binaryFilePath testinp) $ do
     let opts = testOptions beVerbose (binaryFilePath testinp)
@@ -251,6 +252,8 @@ mkTest testinp = do
 posFn :: (MC.MemWidth (MC.ArchAddrWidth arch)) => proxy arch -> MC.MemSegmentOff (MC.ArchAddrWidth arch) -> WPL.Position
 posFn _ = WPL.OtherPos . T.pack . show
 
+data MacawRefinementTestData t = MacawRefinementTestData
+
 -- | This test is similar to 'mkTest', but instead of checking the set of
 -- recovered blocks, it translates the function into Crucible using
 -- macaw-symbolic and symbolically executes it.
@@ -258,23 +261,32 @@ posFn _ = WPL.OtherPos . T.pack . show
 -- This test is fairly simple in that it isn't checking any interesting
 -- property, but only that the simulator does not error out due to unresolved
 -- control flow.
-mkSymbolicTest :: TestInput -> TT.TestTree
+mkSymbolicTest :: (?memOpts :: CLM.MemOptions) => TestInput -> TT.TestTree
 mkSymbolicTest testinp = do
   TT.askOption $ \(VerboseLogging beVerbose) -> TTH.testCase (binaryFilePath testinp) $ do
     let opts = testOptions beVerbose (binaryFilePath testinp)
     halloc <- CFH.newHandleAllocator
     Some gen <- PN.newIONonceGenerator
-    sym <- CBS.newSimpleBackend CBS.FloatRealRepr gen
+    sym <- WEB.newExprBuilder WEB.FloatRealRepr MacawRefinementTestData gen
+    bak <- CBS.newSimpleBackend sym
     expectedInput <- readFile (expectedFilePath testinp)
     let symExecFuncAddrs :: Set.Set Word64
-        Right symExecFuncAddrs = Set.fromList <$> readEither expectedInput
+        symExecFuncAddrs = case readEither expectedInput of
+          Left err -> error $ "mkSymbolicTest: Could not read expected input: "
+                           ++ show err
+          Right addrList -> Set.fromList addrList
     withElf opts $ \proxy archInfo bin _unrefinedDI -> do
       withRefinedDiscovery opts archInfo bin $ \refinedDI _refinedInfo -> do
-        let Just archVals = MS.archVals proxy
+        archVals <- case MS.archVals proxy Nothing of
+                      Just archVals -> pure archVals
+                      Nothing -> error "mkSymbolicTest: Unsupported architecture"
         let archFns = MS.archFunctions archVals
         let mem = MBL.memoryImage bin
         F.forM_ (MD.exploredFunctions refinedDI) $ \(Some dfi) -> do
-          let Just funcAddr = fromIntegral <$> MM.segoffAsAbsoluteAddr (MD.discoveredFunAddr dfi)
+          funcAddr <- case MM.segoffAsAbsoluteAddr (MD.discoveredFunAddr dfi) of
+            Just addr -> pure $ fromIntegral addr
+            Nothing   -> error $ "mkSymbolicTest: Could not resolve absolute address for: "
+                              ++ show (MD.discoveredFunAddr dfi)
           case Set.member funcAddr symExecFuncAddrs of
             False -> return ()
             True -> do
@@ -282,15 +294,19 @@ mkSymbolicTest testinp = do
               printf "External resolutions of %s: %s\n" (show funcName) (show (MD.discoveredClassifyFailureResolutions dfi))
               CCC.SomeCFG cfg <- MS.mkFunCFG archFns halloc funcName (posFn proxy) dfi
               regs <- MS.macawAssignToCrucM (mkReg archFns sym) (MS.crucGenRegAssignment archFns)
-              let ?recordLLVMAnnotation = \_ _ -> pure ()
+              let ?recordLLVMAnnotation = \_ _ _ -> pure ()
               -- FIXME: We probably need to pull endianness from somewhere else
-              (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy sym CLD.LittleEndian MSM.ConcreteMutable mem
-              let globalMap = MSM.mapRegionPointers memPtrTbl
-              let lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs ->
-                    error "Could not find function handle"
+              (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy bak CLD.LittleEndian MSM.ConcreteMutable mem
+              let lookupFn = MS.unsupportedFunctionCalls "macaw-refinement-tests"
+              let lookupSC = MS.unsupportedSyscalls "macaw-refinement-tests"
               let validityCheck _ _ _ _ = return Nothing
+              let mmConf = (MSM.memModelConfig bak memPtrTbl)
+                             { MS.lookupFunctionHandle = lookupFn
+                             , MS.lookupSyscallHandle = lookupSC
+                             , MS.mkGlobalPointerValidityAssertion = validityCheck
+                             }
               MS.withArchEval archVals sym $ \archEvalFns -> do
-                (_, res) <- MS.runCodeBlock sym archFns archEvalFns halloc (initMem, globalMap) lookupFn validityCheck cfg regs
+                (_, res) <- MS.runCodeBlock bak archFns archEvalFns halloc initMem mmConf cfg regs
                 case res of
                   CS.FinishedResult _ (CS.TotalRes _) -> return ()
                   CS.FinishedResult _ (CS.PartialRes {}) -> return ()

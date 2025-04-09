@@ -1,0 +1,4 @@
+R { fileEntryPoint = Nothing
+  , funcs = [(0x1e0, [(0x1e0,26),(0x1fa,12)])]
+  , ignoreBlocks = [0x1d0]
+  }

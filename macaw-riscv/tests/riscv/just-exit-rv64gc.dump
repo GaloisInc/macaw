@@ -1,0 +1,14 @@
+
+just-exit-rv64gc.exe:     file format elf64-littleriscv
+
+
+Disassembly of section .text:
+
+000000000001010c <main>:
+   1010c:	1141                	addi	sp,sp,-16
+   1010e:	e422                	sd	s0,8(sp)
+   10110:	0800                	addi	s0,sp,16
+   10112:	0001                	nop
+   10114:	6422                	ld	s0,8(sp)
+   10116:	0141                	addi	sp,sp,16
+   10118:	8082                	ret

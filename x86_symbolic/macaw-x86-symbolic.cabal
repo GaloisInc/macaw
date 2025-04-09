@@ -8,7 +8,8 @@ license:       BSD3
 license-file:  LICENSE
 
 library
-  build-depends: base >= 4,
+  build-depends: base >= 4.13,
+                 containers,
                  bv-sized >= 1.0.0,
                  crucible >= 0.4,
                  crucible-llvm,
@@ -18,6 +19,7 @@ library
                  macaw-symbolic,
                  macaw-x86 >= 0.3.1,
                  mtl,
+                 panic,
                  parameterized-utils,
                  prettyprinter >= 1.7.0,
                  vector,
@@ -28,11 +30,28 @@ library
   exposed-modules:
     Data.Macaw.X86.Symbolic
     Data.Macaw.X86.Crucible
+    Data.Macaw.X86.Symbolic.ABI.SysV
+    Data.Macaw.X86.Symbolic.Regs
+  other-modules:
+    Data.Macaw.X86.Symbolic.Panic
 
   ghc-options: -Wall -Wcompat
   ghc-prof-options: -O2 -fprof-auto-top
-  if impl(ghc >= 8.6)
-     default-extensions: NoStarIsType
+  default-extensions: NoStarIsType
+
+executable macaw-x86-dump
+  hs-source-dirs: tools
+  main-is: Dump.hs
+  default-language: Haskell2010
+  ghc-options: -Wall -Wcompat
+  build-depends:
+    base,
+    containers,
+    macaw-x86,
+    macaw-loader-x86,
+    macaw-x86-symbolic,
+    macaw-dump,
+    macaw-symbolic
 
 test-suite macaw-x86-symbolic-tests
   type: exitcode-stdio-1.0
@@ -42,16 +61,23 @@ test-suite macaw-x86-symbolic-tests
   hs-source-dirs: tests
   build-depends:
     base >= 4,
+    bv-sized,
     bytestring,
     containers,
     crucible,
     crucible-llvm,
     elf-edit,
+    filepath,
+    Glob >= 0.9 && < 0.11,
+    lens,
     macaw-base,
     macaw-symbolic,
     macaw-x86,
     macaw-x86-symbolic,
     parameterized-utils,
+    prettyprinter,
+    tasty,
+    tasty-hunit,
     text,
     what4,
     vector

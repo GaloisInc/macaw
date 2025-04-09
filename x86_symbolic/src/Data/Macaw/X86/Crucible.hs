@@ -13,11 +13,13 @@
 {-# Language PatternSynonyms #-}
 {-# Language RecordWildCards #-}
 {-# Language FlexibleContexts #-}
+{-# Language ImplicitParams #-}
 module Data.Macaw.X86.Crucible
   ( -- * Uninterpreted functions
     SymFuns(..), newSymFuns
 
     -- * Instruction interpretation
+  , MissingSemantics(..)
   , funcSemantics
   , stmtSemantics
   , termSemantics
@@ -29,18 +31,18 @@ module Data.Macaw.X86.Crucible
   , liftAtomIn
   ) where
 
--- type SymInterpretedFloat sym fi = SymExpr sym (SymInterpretedFloatType sym fi)
+import           Control.Exception (Exception, throw)
 import           Control.Lens ((^.))
 import           Control.Monad
 import           Data.Bits hiding (xor)
-import           Data.Kind ( Type )
 import qualified Data.BitVector.Sized as BV
+import qualified Data.Functor.Identity as I
+import           Data.Kind ( Type )
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Context.Unsafe (empty,extend)
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Utils.Endian (Endian(..))
 import qualified Data.Parameterized.Vector as PV
-import           Data.Semigroup
 import qualified Data.Vector as DV
 import           Data.Word (Word8)
 import           GHC.TypeLits (KnownNat)
@@ -50,7 +52,7 @@ import           What4.Concrete
 import           What4.Interface hiding (IsExpr)
 import           What4.InterpretedFloatingPoint
 
-import           Lang.Crucible.Backend (IsSymInterface, assert)
+import           Lang.Crucible.Backend (IsSymInterface, assert, IsSymBackend, HasSymInterface(..))
 import           Lang.Crucible.CFG.Expr
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.Evaluation as C
@@ -64,18 +66,20 @@ import qualified Lang.Crucible.Vector as V
 import           Lang.Crucible.LLVM.MemModel
                    ( LLVMPointerType
                    , Mem
+                   , MemOptions
                    , HasLLVMAnn
                    , ptrAdd
                    , projectLLVM_bv
                    , pattern LLVMPointerRepr
                    , llvmPointer_bv
                    )
+import qualified Lang.Crucible.LLVM.MemModel.Pointer as Pointer
 
 import qualified Data.Macaw.CFG.Core as M
 import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.Memory as M
 import           Data.Macaw.Symbolic
-import           Data.Macaw.Symbolic.Backend
+import           Data.Macaw.Symbolic.Backend hiding (bvLit)
 import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.ArchTypes as M
@@ -83,35 +87,40 @@ import qualified Data.Macaw.X86.ArchTypes as M
 import           Prelude
 
 
-type S sym rtp bs r ctx =
-  CrucibleState (MacawSimulatorState sym) sym (MacawExt M.X86_64) rtp bs r ctx
+type S p sym rtp bs r ctx =
+  CrucibleState p sym (MacawExt M.X86_64) rtp bs r ctx
 
 funcSemantics
   :: (IsSymInterface sym, ToCrucibleType mt ~ t)
   => SymFuns sym
   -> M.X86PrimFn (AtomWrapper (RegEntry sym)) mt
-  -> S sym rtp bs r ctx
-  -> IO (RegValue sym t, S sym rtp bs r ctx)
-funcSemantics fs x s = do let sym = Sym { symIface = s^.stateSymInterface
-                                        , symTys   = s^.stateIntrinsicTypes
-                                        , symFuns  = fs
-                                        }
-                          v <- pureSem sym x
-                          return (v,s)
+  -> S p sym rtp bs r ctx
+  -> IO (RegValue sym t, S p sym rtp bs r ctx)
+funcSemantics fs x s =
+  withBackend (s^.stateContext) $ \bak ->
+    do let sym = Sym
+                 { symBackend = bak
+                 , symIface = backendGetSym bak
+                 , symTys   = s^.stateIntrinsicTypes
+                 , symFuns  = fs
+                 }
+       v <- pureSem sym x
+       return (v,s)
 
 withConcreteCountAndDir
   :: (IsSymInterface sym, 1 <= w)
-  => S sym rtp bs r ctx
+  => S p sym rtp bs r ctx
   -> M.RepValSize w
   -> (AtomWrapper (RegEntry sym) (M.BVType 64))
   -> (AtomWrapper (RegEntry sym) M.BoolType)
-  -> (S sym rtp bs r ctx -> (SymBV sym 64) -> IO (S sym rtp bs r ctx))
-  -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
-withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func = do
-  let sym = state^.stateSymInterface
+  -> (S p sym rtp bs r ctx -> (SymBV sym 64) -> IO (S p sym rtp bs r ctx))
+  -> IO (RegValue sym UnitType, S p sym rtp bs r ctx)
+withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func =
+  withBackend (state^.stateContext) $ \bak -> do
+  let sym = backendGetSym bak
   let val_byte_size :: Integer
       val_byte_size = fromIntegral $ M.repValSizeByteCount val_size
-  bv_count <- toValBV sym wrapped_count
+  bv_count <- toValBV bak wrapped_count
   case asConcrete bv_count of
     Just (ConcreteBV _ count) -> do
       res_crux_state <- foldM func state
@@ -121,16 +130,45 @@ withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func = do
       return ((), res_crux_state)
     Nothing -> error $ "Unsupported symbolic count in rep stmt: "
 
+-- | An 'Exception' thrown when Crucible attempts to execute an instruction for
+-- which we have no semantics. The 'String' fields are human-readable messages.
+data MissingSemantics where
+  MissingPrimFnSemantics :: forall sym mt. M.X86PrimFn (AtomWrapper (RegEntry sym)) mt -> MissingSemantics
+  MissingStmtSemantics :: forall sym. M.X86Stmt (AtomWrapper (RegEntry sym)) -> MissingSemantics
+  MissingTermSemantics :: forall sym. M.X86TermStmt (AtomWrapper (RegEntry sym)) -> MissingSemantics
+
+instance Show MissingSemantics where
+  show = show . pretty
+
+instance Exception MissingSemantics
+
+instance Pretty MissingSemantics where
+  pretty =
+    \case
+      MissingPrimFnSemantics fn ->
+        pretty "Symbolic execution semantics for x86 primitive function are not implemented yet:"
+          <+> I.runIdentity (MC.ppArchFn (I.Identity . liftAtomIn (pretty . regType)) fn)
+      MissingStmtSemantics stmt ->
+        pretty "Symbolic execution semantics for x86 statement are not implemented yet:"
+          <+> MC.ppArchStmt (liftAtomIn (pretty . regType)) stmt
+      MissingTermSemantics term ->
+        pretty "Symbolic execution semantics for x86 terminators are not implemented yet:"
+          -- We can't print out sub-terms that are RegEntry; however, since
+          -- none of the x86 terminators contain nested dynamic values, we
+          -- don't need to.
+          <+> MC.ppArchTermStmt (error "Can't print RegEntry") term
+
 stmtSemantics
-  :: (IsSymInterface sym, HasLLVMAnn sym)
+  :: (IsSymInterface sym, HasLLVMAnn sym, ?memOpts :: MemOptions)
   => SymFuns sym
   -> C.GlobalVar Mem
   -> GlobalMap sym Mem (M.ArchAddrWidth M.X86_64)
   -> M.X86Stmt (AtomWrapper (RegEntry sym))
-  -> S sym rtp bs r ctx
-  -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
-stmtSemantics _sym_funs global_var_mem globals stmt state = do
-  let sym = state^.stateSymInterface
+  -> S p sym rtp bs r ctx
+  -> IO (RegValue sym UnitType, S p sym rtp bs r ctx)
+stmtSemantics _sym_funs global_var_mem globals stmt state =
+  withBackend (state^.stateContext) $ \bak ->
+  let sym = backendGetSym bak in
   case stmt of
     M.RepMovs val_size (AtomWrapper dest) (AtomWrapper src) count dir ->
       withConcreteCountAndDir state val_size count dir $ \acc_state offset -> do
@@ -140,12 +178,12 @@ stmtSemantics _sym_funs global_var_mem globals stmt state = do
         -- Get simulator and memory
         mem <- getMem acc_state global_var_mem
         -- Resolve source pointer
-        resolvedSrcPtr <- tryGlobPtr sym mem globals curr_src_ptr
+        resolvedSrcPtr <- tryGlobPtr bak mem globals curr_src_ptr
         -- Read resolvePtr
-        val <- doReadMem sym mem M.Addr64 mem_repr resolvedSrcPtr
+        val <- doReadMem bak mem M.Addr64 mem_repr resolvedSrcPtr
         -- Resolve destination pointer
-        resolvedDestPtr <- tryGlobPtr sym mem globals curr_dest_ptr
-        afterWriteMem <- doWriteMem sym mem M.Addr64 mem_repr resolvedDestPtr val
+        resolvedDestPtr <- tryGlobPtr bak mem globals curr_dest_ptr
+        afterWriteMem <- doWriteMem bak mem M.Addr64 mem_repr resolvedDestPtr val
         -- Update the final state
         pure $! setMem acc_state global_var_mem afterWriteMem
     M.RepStos val_size (AtomWrapper dest) (AtomWrapper val) count dir ->
@@ -155,27 +193,27 @@ stmtSemantics _sym_funs global_var_mem globals stmt state = do
         mem <- getMem acc_state global_var_mem
         -- Resolve address to write to.
         curr_dest_ptr <- ptrAdd sym knownNat (regValue dest) offset
-        resolvedDestPtr <- tryGlobPtr sym mem globals curr_dest_ptr
+        resolvedDestPtr <- tryGlobPtr bak mem globals curr_dest_ptr
         -- Perform write
-        afterWriteMem <- doWriteMem sym mem M.Addr64 mem_repr resolvedDestPtr (regValue val)
+        afterWriteMem <- doWriteMem bak mem M.Addr64 mem_repr resolvedDestPtr (regValue val)
         -- Update the final state
         pure $! setMem acc_state global_var_mem afterWriteMem
-    _ -> error $
-      "Symbolic execution semantics for x86 statement are not implemented yet: "
-      <> (show $ MC.ppArchStmt (liftAtomIn (pretty . regType)) stmt)
+    _ -> throw (MissingStmtSemantics stmt)
 
+-- | Dynamic semantics for x86-specific arch terminators
 termSemantics :: (IsSymInterface sym)
               => SymFuns sym
-              -> M.X86TermStmt ids
-              -> S sym rtp bs r ctx
-              -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
-termSemantics _fs x _s = error ("Symbolic execution semantics for x86 terminators are not implemented yet: " <>
-                               (show $ MC.prettyF x))
+              -> M.X86TermStmt (AtomWrapper (RegEntry sym))
+              -> S p sym rtp bs r ctx
+              -> IO (RegValue sym UnitType, S p sym rtp bs r ctx)
+termSemantics _fs term _s = throw (MissingTermSemantics term)
 
-data Sym s = Sym { symIface :: s
-                 , symTys   :: IntrinsicTypes s
-                 , symFuns  :: SymFuns s
-                 }
+data Sym s bak =
+  Sym { symBackend :: bak
+      , symIface :: s
+      , symTys   :: IntrinsicTypes s
+      , symFuns  :: SymFuns s
+      }
 
 data SymFuns s = SymFuns
   { fnAesEnc ::
@@ -198,97 +236,174 @@ data SymFuns s = SymFuns
       SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 8) (BaseBVType 128)
     -- ^ Assist in expanding AES cipher key
 
+  , fnAesIMC ::
+      SymFn s (EmptyCtx ::> BaseBVType 128) (BaseBVType 128)
+    -- ^ Perform the AES InvMixColumn transformation
+
   , fnClMul ::
       SymFn s (EmptyCtx ::> BaseBVType 64 ::> BaseBVType 64) (BaseBVType 128)
     -- ^ Carryless multiplication
+
+  , fnShasigma0 ::
+      SymFn s (EmptyCtx ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 sigma0
+
+  , fnShasigma1 ::
+      SymFn s (EmptyCtx ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 sigma1
+
+  , fnShaSigma0 ::
+      SymFn s (EmptyCtx ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 Sigma0
+
+  , fnShaSigma1 ::
+      SymFn s (EmptyCtx ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 Sigma1
+
+  , fnShaCh ::
+      SymFn s (EmptyCtx ::> BaseBVType 32 ::> BaseBVType 32 ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 Ch
+
+  , fnShaMaj ::
+      SymFn s (EmptyCtx ::> BaseBVType 32 ::> BaseBVType 32 ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 Maj
   }
 
 
 -- | Generate uninterpreted functions for some of the more complex instructions.
 newSymFuns :: forall sym. IsSymInterface sym => sym -> IO (SymFuns sym)
 newSymFuns s =
-  do fnAesEnc     <- bin "aesEnc"
+  do fnAesEnc <- bin "aesEnc"
      fnAesEncLast <- bin "aesEncLast"
      fnAesDec <- bin "aesDecLast"
      fnAesDecLast <- bin "aesDecLast"
      fnAesKeyGenAssist <- bin "aesKeyGenAssist"
-     fnClMul      <- bin "clMul"
+     fnClMul <- bin "clMul"
+     fnAesIMC <- un "aesIMC"
+     fnShasigma0 <- un "sigma0"
+     fnShasigma1 <- un "sigma1"
+     fnShaSigma0 <- un "Sigma0"
+     fnShaSigma1 <- un "Sigma1"
+     fnShaCh <- tern "Ch"
+     fnShaMaj <- tern "Maj"
      return SymFuns { .. }
 
   where
+  un :: ( KnownRepr BaseTypeRepr a
+        , KnownRepr BaseTypeRepr b
+        ) =>
+        String -> IO (SymFn sym (EmptyCtx ::> a) b)
+  un name = freshTotalUninterpFn s (safeSymbol name) (extend empty knownRepr) knownRepr
   bin :: ( KnownRepr BaseTypeRepr a
          , KnownRepr BaseTypeRepr b
          , KnownRepr BaseTypeRepr c
          ) =>
          String -> IO (SymFn sym (EmptyCtx ::> a ::> b) c)
-  bin name = case userSymbol name of
-               Right a -> freshTotalUninterpFn s a
-                              (extend (extend empty knownRepr) knownRepr)
-                              knownRepr
-               Left _ -> fail "Invalid symbol name"
+  bin name = freshTotalUninterpFn s (safeSymbol name) (extend (extend empty knownRepr) knownRepr) knownRepr
+  tern :: ( KnownRepr BaseTypeRepr a
+          , KnownRepr BaseTypeRepr b
+          , KnownRepr BaseTypeRepr c
+          , KnownRepr BaseTypeRepr d
+          ) =>
+         String -> IO (SymFn sym (EmptyCtx ::> a ::> b ::> c) d)
+  tern name = freshTotalUninterpFn s (safeSymbol name) (extend (extend (extend empty knownRepr) knownRepr) knownRepr) knownRepr
 
 -- | Use @Sym sym@ to to evaluate an app.
-evalApp' :: forall sym f t .
-  IsSymInterface sym =>
-  Sym sym ->
+evalApp' :: forall sym bak f t .
+  (IsSymBackend sym bak) =>
+  Sym sym bak ->
   (forall utp . f utp -> IO (RegValue sym utp)) ->
   App () f t ->
   IO (RegValue sym t)
-evalApp' sym ev = C.evalApp (symIface sym) (symTys sym) logger evalExt ev
+evalApp' sym ev = C.evalApp (symBackend sym) (symTys sym) logger evalExt ev
   where
   logger _ _ = return ()
 
-  evalExt :: fun -> EmptyExprExtension g a -> IO (RegValue sym a)
+  evalExt :: (forall a. g a -> IO (RegValue sym a))
+          -> (forall a. EmptyExprExtension g a -> IO (RegValue sym a))
   evalExt _ y  = case y of {}
 
-pureSemAESNI
-  :: forall sym. IsSymInterface sym
-  => Sym sym
-  -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128))
-  -> (AtomWrapper (RegEntry sym) (M.BVType 128))
-  -> (AtomWrapper (RegEntry sym) (M.BVType 128))
-  -> IO (RegValue sym (ToCrucibleType (M.BVType 128)))
-pureSemAESNI sym proj x y =
+pureSemSymUn
+  :: forall sym bak n. (IsSymBackend sym bak)
+  => Sym sym bak
+  -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType n) (BaseBVType n))
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
+  -> IO (RegValue sym (ToCrucibleType (M.BVType n)))
+pureSemSymUn sym proj x =
   do let f = proj (symFuns sym)
          s = symIface sym
-     state <- toValBV s x
-     key <- toValBV s y
-     let ps = extend (extend empty state) key
+     src1 <- toValBV (symBackend sym) x
+     let ps = extend empty src1
+     llvmPointer_bv s =<< applySymFn s f ps
+
+pureSemSymBin
+  :: forall sym bak n. (IsSymBackend sym bak)
+  => Sym sym bak
+  -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType n ::> BaseBVType n) (BaseBVType n))
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
+  -> IO (RegValue sym (ToCrucibleType (M.BVType n)))
+pureSemSymBin sym proj x y =
+  do let f = proj (symFuns sym)
+         s = symIface sym
+     src1 <- toValBV (symBackend sym) x
+     src2 <- toValBV (symBackend sym) y
+     let ps = extend (extend empty src1) src2
+     llvmPointer_bv s =<< applySymFn s f ps
+
+pureSemSymTern
+  :: forall sym bak n. (IsSymBackend sym bak)
+  => Sym sym bak
+  -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType n ::> BaseBVType n ::> BaseBVType n) (BaseBVType n))
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
+  -> IO (RegValue sym (ToCrucibleType (M.BVType n)))
+pureSemSymTern sym proj x y z =
+  do let f = proj (symFuns sym)
+         s = symIface sym
+     src1 <- toValBV (symBackend sym) x
+     src2 <- toValBV (symBackend sym) y
+     src3 <- toValBV (symBackend sym) z
+     let ps = extend (extend (extend empty src1) src2) src3
      llvmPointer_bv s =<< applySymFn s f ps
 
 -- | Semantics for operations that do not affect Crucible's state directly.
-pureSem :: forall sym mt
-        .  IsSymInterface sym
-        => Sym sym   {- ^ Handle to the simulator -}
+pureSem :: forall sym bak mt
+        .  (IsSymBackend sym bak)
+        => Sym sym bak  {- ^ Handle to the simulator -}
         -> M.X86PrimFn (AtomWrapper (RegEntry sym)) mt {- ^ Instruction -}
         -> IO (RegValue sym (ToCrucibleType mt)) -- ^ Resulting value
 pureSem sym fn = do
-  let symi = (symIface sym)
+  let symi = symIface sym
+  let bak = symBackend sym
   case fn of
     M.EvenParity x0 ->
-      do x <- getBitVal (symIface sym) x0
+      -- See Note [EvenParity Semantics] for why this uses getPointerOffset
+      -- (rather than getBitVal)
+      do x <- getPointerOffset x0
          evalE sym $ app $ Not $ foldr1 xor [ bvTestBit x i | i <- [ 0 .. 7 ] ]
       where xor a b = app (BoolXor a b)
-    M.ReadFSBase    -> error " ReadFSBase"
-    M.ReadGSBase    -> error "ReadGSBase"
-    M.GetSegmentSelector _ -> error "GetSegmentSelector"
-    M.CPUID{}       -> error "CPUID"
-    M.CMPXCHG8B{} -> error "CMPXCHG8B"
-    M.RDTSC{}       -> error "RDTSC"
-    M.XGetBV {} -> error "XGetBV"
+    M.ReadFSBase    -> throw (MissingPrimFnSemantics fn)
+    M.ReadGSBase    -> throw (MissingPrimFnSemantics fn)
+    M.GetSegmentSelector _ -> throw (MissingPrimFnSemantics fn)
+    M.CPUID{}       -> throw (MissingPrimFnSemantics fn)
+    M.CMPXCHG8B{} -> throw (MissingPrimFnSemantics fn)
+    M.RDTSC{}       -> throw (MissingPrimFnSemantics fn)
+    M.XGetBV {} -> throw (MissingPrimFnSemantics fn)
     M.PShufb sw (AtomWrapper vxs) (AtomWrapper vys) ->
       case sw of
         M.SIMDByteCount_XMM
           | Just pxs <- V.fromList n16 $ DV.toList $ regValue vxs
           , Just pys <- V.fromList n16 $ DV.toList $ regValue vys -> do
-              xs <- mapM (pure . ValBV n8 <=< projectLLVM_bv (symIface sym)) pxs
-              ys <- mapM (pure . ValBV n8 <=< projectLLVM_bv (symIface sym)) pys
+              xs <- mapM (pure . ValBV n8 <=< projectLLVM_bv bak) pxs
+              ys <- mapM (pure . ValBV n8 <=< projectLLVM_bv bak) pys
               let res = DV.fromList $ V.toList $ shuffleB xs ys
               mapM (llvmPointer_bv (symIface sym) <=< evalE sym) res
         _ -> error "PShufb is not implemented for 64-bit operands"
-    M.MemCmp{}      -> error "MemCmp"
-    M.RepnzScas{}   -> error "RepnzScas"
-    M.MMXExtend {} -> error "MMXExtend"
+    M.MemCmp{}      -> throw (MissingPrimFnSemantics fn)
+    M.RepnzScas{}   -> throw (MissingPrimFnSemantics fn)
+    M.MMXExtend {} -> throw (MissingPrimFnSemantics fn)
     M.X86IDivRem w num1 num2 d -> do
       sDivRem sym w num1 num2 d
     M.X86DivRem  w num1 num2 d -> do
@@ -359,13 +474,13 @@ pureSem sym fn = do
         =<< iFloatToSBV @_ @_ @(ToCrucibleFloatInfo ftp) symi w RTZ (regValue x)
     M.SSE_CVTSI2SX tp _ x ->
      iSBVToFloat symi (floatInfoFromSSEType tp) RNE
-        =<< toValBV symi x
+        =<< toValBV bak x
 
-    M.X87_Extend{} ->  error "X87_Extend"
-    M.X87_FAdd{} -> error "X87_FAdd"
-    M.X87_FSub{} -> error "X87_FSub"
-    M.X87_FMul{} -> error "X87_FMul"
-    M.X87_FST {} -> error "X87_FST"
+    M.X87_Extend{} ->  throw (MissingPrimFnSemantics fn)
+    M.X87_FAdd{} -> throw (MissingPrimFnSemantics fn)
+    M.X87_FSub{} -> throw (MissingPrimFnSemantics fn)
+    M.X87_FMul{} -> throw (MissingPrimFnSemantics fn)
+    M.X87_FST {} -> throw (MissingPrimFnSemantics fn)
 
     M.VOp1 w op1 x ->
       case op1 of
@@ -398,7 +513,7 @@ pureSem sym fn = do
                                    (V.split i n16 xs)
                                    (V.split i n16 ys)
 
-        M.VPCLMULQDQ i -> unpack2 (symIface sym) LittleEndian w n64 x y $
+        M.VPCLMULQDQ i -> unpack2 (symBackend sym) LittleEndian w n64 x y $
           \xs ys ->
           case testEquality (V.length xs) n2 of
             Just Refl ->
@@ -430,8 +545,8 @@ pureSem sym fn = do
           | Just Refl <- testEquality w n128 ->
             do let f = fnAesEnc (symFuns sym)
                    s = symIface sym
-               state <- toValBV s x
-               key   <- toValBV s y
+               state <- toValBV bak x
+               key   <- toValBV bak y
                let ps = extend (extend empty state) key
                llvmPointer_bv s =<< applySymFn s f ps
           | otherwise -> fail "Unexpecte size for AESEnc"
@@ -440,25 +555,25 @@ pureSem sym fn = do
           | Just Refl <- testEquality w n128 ->
             do let f = fnAesEncLast (symFuns sym)
                    s = symIface sym
-               state <- toValBV s x
-               key   <- toValBV s y
+               state <- toValBV bak x
+               key   <- toValBV bak y
                let ps     = extend (extend empty state) key
                llvmPointer_bv s =<< applySymFn s f ps
           | otherwise -> fail "Unexpecte size for AESEncLast"
 
     M.VInsert elNum elSz vec el i ->
-      do e <- getBitVal (symIface sym) el
+      do e <- getBitVal (symBackend sym) el
          vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz vec $ \xs ->
            case mulCancelR elNum (V.length xs) elSz of
              Refl -> V.insertAt i e xs
 
     M.PointwiseShiftL elNum elSz shSz bits amt ->
-      do amt' <- getBitVal (symIface sym) amt
+      do amt' <- getBitVal (symBackend sym) amt
          vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz bits $ \xs ->
               fmap (\x -> bvShiftL elSz shSz x amt') xs
 
     M.PointwiseLogicalShiftR elNum elSz shSz bits amt ->
-      do amt' <- getBitVal (symIface sym) amt
+      do amt' <- getBitVal (symBackend sym) amt
          vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz bits $ \xs ->
               fmap (\x -> bvLogicalShiftR elSz shSz x amt') xs
 
@@ -466,27 +581,41 @@ pureSem sym fn = do
       vecOp2 sym LittleEndian (natMultiply elNum elSz) elSz v1 v2 $ \xs ys ->
         V.zipWith (semPointwise op elSz) xs ys
 
-    M.VExtractF128 {} -> error "VExtractF128"
+    M.VExtractF128 {} -> throw (MissingPrimFnSemantics fn)
 
     M.CLMul x y ->
       do let f = fnClMul (symFuns sym)
              s = symIface sym
-         src1 <- toValBV s x
-         src2 <- toValBV s y
+         src1 <- toValBV bak x
+         src2 <- toValBV bak y
          let ps = extend (extend empty src1) src2
          llvmPointer_bv s =<< applySymFn s f ps
 
-    M.AESNI_AESEnc x y -> pureSemAESNI sym fnAesEnc x y
-    M.AESNI_AESEncLast x y -> pureSemAESNI sym fnAesEncLast x y
-    M.AESNI_AESDec x y -> pureSemAESNI sym fnAesDec x y
-    M.AESNI_AESDecLast x y -> pureSemAESNI sym fnAesDecLast x y
+    M.AESNI_AESEnc x y -> pureSemSymBin sym fnAesEnc x y
+    M.AESNI_AESEncLast x y -> pureSemSymBin sym fnAesEncLast x y
+    M.AESNI_AESDec x y -> pureSemSymBin sym fnAesDec x y
+    M.AESNI_AESDecLast x y -> pureSemSymBin sym fnAesDecLast x y
     M.AESNI_AESKeyGenAssist x i ->
       do let f = fnAesKeyGenAssist (symFuns sym)
              s = symIface sym
-         src <- toValBV s x
+         src <- toValBV bak x
          roundConst <- bvLit s knownNat $ BV.mkBV knownNat $ fromIntegral i
          let ps = extend (extend empty src) roundConst
          llvmPointer_bv s =<< applySymFn s f ps
+    M.AESNI_AESIMC x ->
+      do let f = fnAesIMC (symFuns sym)
+             s = symIface sym
+         src <- toValBV bak x
+         let ps = extend empty src
+         llvmPointer_bv s =<< applySymFn s f ps
+
+    M.SHA_sigma0 x -> pureSemSymUn sym fnShasigma0 x
+    M.SHA_sigma1 x -> pureSemSymUn sym fnShasigma1 x
+    M.SHA_Sigma0 x -> pureSemSymUn sym fnShaSigma0 x
+    M.SHA_Sigma1 x -> pureSemSymUn sym fnShaSigma1 x
+    M.SHA_Ch x y z -> pureSemSymTern sym fnShaCh x y z
+    M.SHA_Maj x y z -> pureSemSymTern sym fnShaMaj x y z
+    M.X86Syscall {} -> error "X86Syscall should be eliminated and replaced by X86PrimSyscall to look up a function handle"
 
 semPointwise :: (1 <= w) =>
   M.AVXPointWiseOp2 -> NatRepr w ->
@@ -545,64 +674,68 @@ divNatReprClasses r x =
     M.DWordRepVal -> x
     M.QWordRepVal -> x
 
-mkPair :: forall sym x y
-       .  (IsSymInterface sym, KnownRepr TypeRepr x, KnownRepr TypeRepr y)
-       => Sym sym
+-- | Construct a symbolic Macaw pair. Note that @'mkPair' sym x y@ returns the
+-- pair @(y, x)@ and /not/ @(x, y)@. This is because Macaw tuples have the order
+-- of their fields reversed when converted to a Crucible value (see
+-- 'macawListToCrucible' in "Data.Macaw.Symbolic.PersistentState" in
+-- @macaw-symbolic@), so we also reverse the order here to be consistent with
+-- this convention. (Not doing this can cause serious bugs, such as
+-- <https://github.com/GaloisInc/macaw/issues/393>).
+mkPair :: forall sym bak x y
+       .  (IsSymBackend sym bak, KnownRepr TypeRepr x, KnownRepr TypeRepr y)
+       => Sym sym bak
        -> RegValue sym x
        -> RegValue sym y
-       -> IO (RegValue sym (StructType (EmptyCtx ::> x ::> y)))
+       -> IO (RegValue sym (StructType (EmptyCtx ::> y ::> x)))
 mkPair sym q r = do
-  let pairType :: Ctx.Assignment TypeRepr (EmptyCtx ::> x ::> y)
+  let pairType :: Ctx.Assignment TypeRepr (EmptyCtx ::> y ::> x)
       pairType = Ctx.empty Ctx.:> knownRepr Ctx.:> knownRepr
-  let pairRes :: Ctx.Assignment (RegValue' sym) (EmptyCtx ::> x ::> y)
-      pairRes = Ctx.empty Ctx.:> RV q Ctx.:> RV r
+  let pairRes :: Ctx.Assignment (RegValue' sym) (EmptyCtx ::> y ::> x)
+      pairRes = Ctx.empty Ctx.:> RV r Ctx.:> RV q
   evalApp' sym (\v -> pure (unRV v)) $ MkStruct pairType pairRes
 
 
 -- | Get numerator from pair of Macaw terms
-getNumerator :: IsSymInterface sym
+getNumerator :: (IsSymBackend sym bak)
                     => (1 <= w, w+1 <= w+w, 1 <= w+w)
                     => NatRepr w
-                    -> Sym sym
+                    -> Sym sym bak
                     -> AtomWrapper (RegEntry sym) (M.BVType w)
                     -> AtomWrapper (RegEntry sym) (M.BVType w)
                     -> IO (RegValue sym (BVType (w+w)))
 getNumerator dw sym macawNum1 macawNum2 = do
-  let symi = symIface sym
+  let bak = symBackend sym
   -- Get top half of numerator
-  num1 <- getBitVal symi macawNum1
+  num1 <- getBitVal bak macawNum1
   -- Get bottom half of numerator
-  num2 <- getBitVal symi macawNum2
+  num2 <- getBitVal bak macawNum2
   -- Get bottom half of numerator
   evalApp sym $ BVConcat dw dw num1 num2
 
 -- | Get extended denominator and assert it is not zero.
-getDenominator :: IsSymInterface sym
+getDenominator :: (IsSymBackend sym bak)
                     => 1 <= w
                     => NatRepr w
-                    -> Sym sym
+                    -> Sym sym bak
+                    -> String -- ^ What operation was this?
                     -> AtomWrapper (RegEntry sym) (M.BVType w)
                     -> IO (E sym (BVType w))
-getDenominator dw sym macawDenom = do
-  let symi = symIface sym
-  den <- getBitVal symi macawDenom
+getDenominator dw sym op macawDenom = do
+  let bak = symBackend sym
+  den <- getBitVal bak macawDenom
   -- Check denominator is not 0
   do let bvZ = app (BVLit dw (BV.zero dw))
      denNotZero <- evalApp sym $ Not (app (BVEq dw den bvZ))
-     let errMsg = "denominator not zero"
-     assert symi denNotZero (C.AssertFailureSimError errMsg (errMsg ++ " in Data.Macaw.X86.Crucible.getDenominator"))
+     let errMsg = op ++ ": denominator was zero"
+     assert bak denNotZero (C.AssertFailureSimError errMsg "")
   pure den
 
--- | Performs a simple unsigned division operation.
+-- | Performs unsigned division, i.e., the @div@ instruction.
 --
--- The x86 numerator is twice the size as the denominator.
---
--- This function is only reponsible for the dividend (not any
--- remainder--see uRem for that), and any divide-by-zero exception was
--- already handled via an Assert.
-uDivRem :: forall sym w
-        .  IsSymInterface sym
-        => Sym sym
+-- Asserts that the denominator is not zero and the quotient doesn't overflow.
+uDivRem :: forall sym bak w
+        .  (IsSymBackend sym bak)
+        => Sym sym bak
         -> M.RepValSize w
         -> AtomWrapper (RegEntry sym) (M.BVType w)
         -> AtomWrapper (RegEntry sym) (M.BVType w)
@@ -615,10 +748,11 @@ uDivRem sym repsz macawNum1 macawNum2 macawDenom =
     -- Get natwidth of w+w
     let nw = addNat dw dw
     let symi = symIface sym
+    let bak = symBackend sym
     -- Get numerator
     numExt <- getNumerator dw sym macawNum1 macawNum2
     -- Get denominator
-    den <- getDenominator dw sym macawDenom
+    den <- getDenominator dw sym "div" macawDenom
     -- Get extended denominator
     denExt <- evalApp sym $ BVZext nw dw den
     -- Get extended quotient
@@ -628,8 +762,8 @@ uDivRem sym repsz macawNum1 macawNum2 macawDenom =
     -- Check quotient did not overflow.
     do let qExt' = app (BVZext nw dw (ValBV dw qBV))
        qNoOverflow <- evalApp sym $ BVEq nw (ValBV nw qExt) qExt'
-       let errMsg = "quotient no overflow"
-       assert symi qNoOverflow (C.AssertFailureSimError errMsg (errMsg ++ " in Data.Macaw.X86.Crucible.uDivRem"))
+       let errMsg = "div: quotient overflowed"
+       assert bak qNoOverflow (C.AssertFailureSimError errMsg "")
     -- Get quotient
     q <- llvmPointer_bv symi qBV
     -- Get remainder
@@ -639,9 +773,12 @@ uDivRem sym repsz macawNum1 macawNum2 macawDenom =
       llvmPointer_bv symi (rv :: RegValue sym (BVType w))
     mkPair sym q r
 
-sDivRem :: forall sym w
-        .  IsSymInterface sym
-        => Sym sym
+-- | Performs signed division, i.e., the @idiv@ instruction.
+--
+-- Asserts that the denominator is not zero and the quotient doesn't overflow.
+sDivRem :: forall sym bak w
+        .  (IsSymBackend sym bak)
+        => Sym sym bak
         -> M.RepValSize w
         -> AtomWrapper (RegEntry sym) (M.BVType w)
         -> AtomWrapper (RegEntry sym) (M.BVType w)
@@ -653,11 +790,12 @@ sDivRem sym repsz macawNum1 macawNum2 macawDenom =
     let dw = M.typeWidth (M.repValSizeMemRepr repsz)
     -- Get natwidth of w+w
     let nw = addNat dw dw
+    let bak = symBackend sym
     let symi = symIface sym
     -- Get numerator
     numExt <- getNumerator dw sym macawNum1 macawNum2
     -- Get denominator
-    den <- getDenominator dw sym macawDenom
+    den <- getDenominator dw sym "idiv" macawDenom
     -- Get extended denominator
     denExt <- evalApp sym $ BVSext nw dw den
     -- Get extended quotient
@@ -667,8 +805,8 @@ sDivRem sym repsz macawNum1 macawNum2 macawDenom =
     -- Check quotient did not overflow.
     do let qExt' = app (BVSext nw dw (ValBV dw qBV))
        qNoOverflow <- evalApp sym $ BVEq nw (ValBV nw qExt) qExt'
-       let errMsg = "quotient no overflow"
-       assert symi qNoOverflow (C.AssertFailureSimError errMsg (errMsg ++ " in Data.Macaw.X86.Crucible.sDivRem"))
+       let errMsg = "idiv: quotient overflowed"
+       assert bak qNoOverflow (C.AssertFailureSimError errMsg "")
     -- Get quotient
     q <- llvmPointer_bv symi qBV
     -- Get remainder
@@ -693,8 +831,8 @@ divExact n x k = withDivModNat n x $ \i r ->
     Nothing -> error "divExact: not a multiple of 16"
 
 
-vecOp1 :: (IsSymInterface sym, 1 <= c) =>
-  Sym sym     {- ^ Simulator -} ->
+vecOp1 :: (IsSymBackend sym bak, 1 <= c) =>
+  Sym sym bak {- ^ Simulator -} ->
   Endian      {- ^ How to split-up the bit-vector -} ->
   NatRepr w   {- ^ Total width of the bit-vector -} ->
   NatRepr c   {- ^ Width of individual elements -} ->
@@ -704,12 +842,12 @@ vecOp1 :: (IsSymInterface sym, 1 <= c) =>
   {- ^ Definition of operation -} ->
   IO (RegValue sym (LLVMPointerType w)) -- ^ The final result.
 vecOp1 sym endian totLen elLen x f =
-  unpack (symIface sym) endian totLen elLen x $ \v ->
+  unpack (symBackend sym) endian totLen elLen x $ \v ->
   llvmPointer_bv (symIface sym) =<< evalE sym (V.toBV endian elLen (f v))
 
 
-vecOp2 :: (IsSymInterface sym, 1 <= c) =>
-  Sym sym     {- ^ Simulator -} ->
+vecOp2 :: (IsSymBackend sym bak, 1 <= c) =>
+  Sym sym bak {- ^ Simulator -} ->
   Endian      {- ^ How to split-up the bit-vector -} ->
   NatRepr w   {- ^ Total width of the bit-vector -} ->
   NatRepr c   {- ^ Width of individual elements -} ->
@@ -721,21 +859,21 @@ vecOp2 :: (IsSymInterface sym, 1 <= c) =>
      V.Vector n (E sym (BVType c))) {- ^ Definition of operation -} ->
   IO (RegValue sym (LLVMPointerType w)) -- ^ The final result.
 vecOp2 sym endian totLen elLen x y f =
-  unpack2 (symIface sym) endian totLen elLen x y $ \u v ->
+  unpack2 (symBackend sym) endian totLen elLen x y $ \u v ->
   llvmPointer_bv (symIface sym) =<< evalE sym (V.toBV endian elLen (f u v))
 
-bitOp2 :: (IsSymInterface sym) =>
-  Sym sym                                 {- ^ The simulator -} ->
+bitOp2 :: (IsSymBackend sym bak) =>
+  Sym sym bak                             {- ^ The simulator -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input 1 -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input 2 -} ->
   (E sym (BVType w) -> E sym (BVType w) -> App () (E sym) (BVType w))
                                           {- ^ The definition of the operation -} ->
   IO (RegValue sym (LLVMPointerType w))   {- ^ The result -}
 bitOp2 sym x y f =
-  do let s = symIface sym
-     x' <- getBitVal s x
-     y' <- getBitVal s y
-     llvmPointer_bv s =<< evalE sym (app (f x' y'))
+  do let bak = symBackend sym
+     x' <- getBitVal bak x
+     y' <- getBitVal bak y
+     llvmPointer_bv (symIface sym) =<< evalE sym (app (f x' y'))
 
 
 -- | Split up a bit-vector into a vector.
@@ -743,22 +881,22 @@ bitOp2 sym x y f =
 -- is parameterized by endianness, as some instructions are more naturally
 -- expressed by splitting big-endian-wise (e.g., shifts)
 unpack ::
-  (1 <= c, IsSymInterface sym) =>
-  sym ->
+  (1 <= c, IsSymBackend sym bak) =>
+  bak ->
   Endian ->
   NatRepr w                               {- ^ Original length -} ->
   NatRepr c                               {- ^ Size of each chunk -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input value -} ->
   (forall n. (1 <= n, (n * c) ~ w) => V.Vector n (E sym (BVType c)) -> IO a) ->
   IO a
-unpack sym e w c v k = divExact w c $ \n ->
-  do b <- getBitVal sym v
+unpack bak e w c v k = divExact w c $ \n ->
+  do b <- getBitVal bak v
      k (V.fromBV e n c b)
 
 -- | Split up two bit-vectors into sub-chunks.
 unpack2 ::
-  (1 <= c, IsSymInterface sym) =>
-  sym ->
+  (1 <= c, IsSymBackend sym bak) =>
+  bak ->
   Endian ->
   NatRepr w ->
   NatRepr c ->
@@ -769,35 +907,47 @@ unpack2 ::
       V.Vector n (E sym (BVType c)) ->
       IO a) ->
   IO a
-unpack2 sym e w c v1 v2 k =
+unpack2 bak e w c v1 v2 k =
   divExact w c $ \n ->
-    do v1' <- getBitVal sym v1
-       v2' <- getBitVal sym v2
+    do v1' <- getBitVal bak v1
+       v2' <- getBitVal bak v2
        k (V.fromBV e n c v1') (V.fromBV e n c v2')
 
+-- | Extract the offset from an LLVMPointer
+--
+-- Note that this version generates an /assertion/ that the block number is
+-- zero, and should be used carefully. See 'getPointerOffset' for a variant that
+-- does not generate proof obligations.
+--
 -- XXX: Do we want to be strict here (i.e., asserting that the thing is
 -- not a pointer, or should be lenent, i.e., return an undefined value?)
 getBitVal ::
-  IsSymInterface sym =>
-  sym ->
+  (IsSymBackend sym bak) =>
+  bak ->
   AtomWrapper (RegEntry sym) (M.BVType w) ->
   IO (E sym (BVType w))
-getBitVal sym (AtomWrapper x) =
-  do v <- projectLLVM_bv sym (regValue x)
+getBitVal bak (AtomWrapper x) =
+  do v <- projectLLVM_bv bak (regValue x)
      case regType x of
        LLVMPointerRepr w -> return (ValBV w v)
        _ -> error "getBitVal: impossible"
 
+-- | Extract the offset from an LLVMPointer without checking whether or not the
+-- block number is zero
+getPointerOffset ::
+  AtomWrapper (RegEntry sym) (M.BVType w) ->
+  IO (E sym (BVType w))
+getPointerOffset (AtomWrapper x) =
+  case regType x of
+    LLVMPointerRepr w -> return (ValBV w (Pointer.llvmPointerOffset (regValue x)))
+    tp -> error ("getPointerOffset: unexpected type repr " ++ show tp)
+
 toValBV ::
-  IsSymInterface sym =>
-  sym ->
+  (IsSymBackend sym bak) =>
+  bak ->
   AtomWrapper (RegEntry sym) (M.BVType w) ->
   IO (RegValue sym (BVType w))
-toValBV sym (AtomWrapper x) = projectLLVM_bv sym (regValue x)
-
-type family FloatInfoFromSSEType (tp :: M.Type) :: FloatInfo where
-  FloatInfoFromSSEType (M.BVType 32) = SingleFloat
-  FloatInfoFromSSEType (M.BVType 64) = DoubleFloat
+toValBV bak (AtomWrapper x) = projectLLVM_bv bak (regValue x)
 
 floatInfoFromSSEType
   :: M.SSE_FloatType tp -> FloatInfoRepr (ToCrucibleFloatInfo tp)
@@ -824,14 +974,15 @@ instance IsExpr (E sym) where
                 ValBool _  -> knownRepr
                 ValBV n _  -> BVRepr n
 
-evalE :: IsSymInterface sym => Sym sym -> E sym t -> IO (RegValue sym t)
+evalE :: (IsSymBackend sym bak) =>
+  Sym sym bak -> E sym t -> IO (RegValue sym t)
 evalE sym e = case e of
                 ValBool x -> return x
                 ValBV _ x -> return x
                 Expr a    -> evalApp sym a
 
-evalApp :: forall sym t.  IsSymInterface sym =>
-         Sym sym -> App () (E sym) t -> IO (RegValue sym t)
+evalApp :: forall sym bak t. (IsSymBackend sym bak) =>
+         Sym sym bak -> App () (E sym) t -> IO (RegValue sym t)
 evalApp sym = evalApp' sym (evalE sym)
 
 bv :: (KnownNat w, 1 <= w) => Int -> E sym (BVType w)
@@ -918,3 +1069,41 @@ liftAtomTrav f (AtomWrapper x) = AtomWrapper <$> f x
 
 liftAtomIn :: (forall s. f s -> a) -> AtomWrapper f t -> a
 liftAtomIn f (AtomWrapper x) = f x
+
+{- Note [EvenParity Semantics]
+
+Originally, the implementation of the semantics of 'EvenParity' used
+'getBitVal'. This worked up until 'PtrAdd' was generalized to not be restricted
+to pointer-width operands. In turn, that change was motivated by some
+architectures extending pointers for certain operations. The previous
+implementation meant that extending pointers threw away their block number and
+treated them as bitvectors forever after.
+
+With that change, the pattern around 'EvenParity' in x86 broke:
+
+> %1 = trunc ptr 8
+> %2 = even_parity %1
+
+Note that in the original semantics, the truncation drops the block number
+unconditionally, which meant that applying llvmPointer_bv (in 'getBitVal') was
+fine: it produced a trivial proof obligation that the block number was zero
+(assert 0 == 0).
+
+However, after the generalization, the block number was preserved (and
+concretely not zero), so the generated proof obligation now failed.  The new
+implementation uses 'getPointerOffset', which extracts the offset without
+generating any side conditions.
+
+Is this safe? The original implementation implied that testing the parity of a
+pointer is unsafe because we don't formally know what the address is, so the
+question doesn't really make sense. We also don't know the alignment of the
+underlying allocation (if we did, we could compute the parity given the
+offset). Technically that is true, but even if we wanted to enforce that, the
+original implementation was not correct: the truncation unconditionally
+discarded the block number. The current implementation (using
+'getPointerOffset') is as safe as the original. In both cases, we essentially
+require that all allocations are aligned to at least a two byte boundary.
+
+See macaw#260 for the relevant discussion (summarized here).
+
+-}

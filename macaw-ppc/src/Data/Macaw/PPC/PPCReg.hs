@@ -15,6 +15,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 -- | Defines the register types for PowerPC, along with some helpers
 module Data.Macaw.PPC.PPCReg (
   PPCReg(..),
