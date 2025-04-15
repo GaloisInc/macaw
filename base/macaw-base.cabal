@@ -38,7 +38,7 @@ library
     exceptions,
     filepath,
     galois-dwarf >= 0.2.2,
-    IntervalMap >= 0.5,
+    IntervalMap >= 0.6.2.0,
     lens >= 4.7,
     mtl,
     panic,
