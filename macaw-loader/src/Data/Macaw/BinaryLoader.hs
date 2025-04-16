@@ -85,7 +85,7 @@ class (MM.MemWidth (MR.ArchAddrWidth arch)) =>
   -- the data returned by this function.
   entryPoints :: (X.MonadThrow m) =>
                  LoadedBinary arch binFmt
-              -> m (NEL.NonEmpty (MM.MemSegmentOff (MM.ArchAddrWidth arch)))
+              -> m (NEL.NonEmpty (MM.ArchSegmentOff arch))
 
   -- | Look up the symbol for the function or global at the given address, if any
   --
