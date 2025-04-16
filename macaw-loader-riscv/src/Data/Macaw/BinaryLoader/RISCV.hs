@@ -16,14 +16,13 @@ import qualified Control.Monad.Catch as X
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as EE
 import qualified Data.Foldable as F
-import qualified Data.List.NonEmpty as DLN
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.BinaryLoader.ELF as BLE
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Map.Strict as Map
-import           Data.Maybe ( fromMaybe, mapMaybe )
+import           Data.Maybe ( catMaybes, fromMaybe )
 import qualified GRIFT.Types as G
 
 import qualified Data.Macaw.RISCV as MR
@@ -55,7 +54,7 @@ riscvLookupSymbol loadedBinary addr =
 riscvEntryPoints :: forall m rv
                   . (X.MonadThrow m, MR.RISCVConstraints rv)
                  => MBL.LoadedBinary (MR.RISCV rv) (EE.ElfHeaderInfo (G.RVWidth rv))
-                 -> m (DLN.NonEmpty (MM.MemSegmentOff (G.RVWidth rv)))
+                 -> m [MM.MemSegmentOff (G.RVWidth rv)]
 riscvEntryPoints loadedBinary =
   EE.elfClassInstances elfClass $
   let addr = MM.memWord (offset + fromIntegral (EE.headerEntry (EE.header (elf (MBL.binaryFormatData loadedBinary))))) in
@@ -63,10 +62,11 @@ riscvEntryPoints loadedBinary =
                 | entry <- staticSyms ++ dynSyms
                 , EE.steType entry == EE.STT_FUNC
                 ] in
-  case BLE.resolveAbsoluteAddress mem addr of
-    Nothing -> X.throwM (InvalidEntryPoint addr)
-    Just entryPoint ->
-      return (entryPoint DLN.:| mapMaybe (BLE.resolveAbsoluteAddress mem) symbols)
+  let headerEntryPoint = BLE.resolveAbsoluteAddress mem addr in
+  let symbolEntryPoints = map (BLE.resolveAbsoluteAddress mem) symbols in
+  -- n.b. no guarantee of uniqueness, and in particular, `headerEntryPoint` is
+  -- probably in `symbolEntryPoints` somewhere
+  return $ catMaybes $ headerEntryPoint : symbolEntryPoints
   where
     offset = fromMaybe 0 (LC.loadOffset (MBL.loadOptions loadedBinary))
     mem = MBL.memoryImage loadedBinary
@@ -117,7 +117,6 @@ indexSymbols = F.foldl' doIndex Map.empty
       Map.insert (MM.segoffAddr (EL.memSymbolStart memSym)) (EL.memSymbolName memSym) m
 
 data RISCVLoadException = RISCVElfLoadError String
-                        | forall w. InvalidEntryPoint (MM.MemWord w)
                         | forall w. MissingSymbolFor (MM.MemAddr w)
 
 deriving instance Show RISCVLoadException

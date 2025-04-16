@@ -16,7 +16,6 @@ import qualified Control.Monad.Catch as X
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as E
 import           Data.Kind ( Type )
-import qualified Data.List.NonEmpty as NEL
 import qualified Data.Macaw.CFG as MM
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Macaw.CFG.AssignRhs as MR
@@ -85,7 +84,7 @@ class (MM.MemWidth (MR.ArchAddrWidth arch)) =>
   -- the data returned by this function.
   entryPoints :: (X.MonadThrow m) =>
                  LoadedBinary arch binFmt
-              -> m (NEL.NonEmpty (MM.ArchSegmentOff arch))
+              -> m [MM.ArchSegmentOff arch]
 
   -- | Look up the symbol for the function or global at the given address, if any
   --

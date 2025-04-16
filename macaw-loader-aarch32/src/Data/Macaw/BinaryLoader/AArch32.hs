@@ -14,14 +14,13 @@ import qualified Control.Monad.Catch as X
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as EE
 import qualified Data.Foldable as F
-import qualified Data.List.NonEmpty as DLN
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.BinaryLoader.ELF as BLE
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Map.Strict as Map
-import           Data.Maybe ( fromMaybe, mapMaybe )
+import           Data.Maybe ( catMaybes, fromMaybe )
 import           Data.Word ( Word32 )
 
 import qualified Data.Macaw.ARM as MA
@@ -51,13 +50,15 @@ aarch32LookupSymbol loadedBinary addr =
 
 aarch32EntryPoints :: (X.MonadThrow m)
                    => MBL.LoadedBinary MA.ARM (EE.ElfHeaderInfo 32)
-                   -> m (DLN.NonEmpty (MM.MemSegmentOff 32))
+                   -> m [MM.MemSegmentOff 32]
 aarch32EntryPoints loadedBinary =
-  case BLE.resolveAbsoluteAddress mem addr of
-    Nothing -> X.throwM (InvalidEntryPoint addr)
-    Just entryPoint ->
-      return (entryPoint DLN.:| mapMaybe (BLE.resolveAbsoluteAddress mem) symbols)
+  -- n.b. no guarantee of uniqueness, and in particular, `headerEntryPoint` is
+  -- probably in `symbolEntryPoints` somewhere
+  return $ catMaybes $ headerEntryPoint : symbolEntryPoints
   where
+    headerEntryPoint = BLE.resolveAbsoluteAddress mem addr
+    symbolEntryPoints = map (BLE.resolveAbsoluteAddress mem) symbols
+
     offset = fromMaybe 0 (LC.loadOffset (MBL.loadOptions loadedBinary))
     mem = MBL.memoryImage loadedBinary
     addr = MM.memWord (offset + fromIntegral (EE.headerEntry (EE.header (elf (MBL.binaryFormatData loadedBinary)))))
@@ -106,7 +107,6 @@ indexSymbols = F.foldl' doIndex Map.empty
       Map.insert (MM.segoffAddr (EL.memSymbolStart memSym)) (EL.memSymbolName memSym) m
 
 data AArch32LoadException = AArch32ElfLoadError String
-                          | InvalidEntryPoint (MM.MemWord 32)
                           | MissingSymbolFor (MM.MemAddr 32)
 
 deriving instance Show AArch32LoadException

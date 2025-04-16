@@ -18,7 +18,6 @@ import qualified Control.Monad.Catch as X
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as E
 import qualified Data.Foldable as F
-import qualified Data.List.NonEmpty as NEL
 import qualified Data.Macaw.BinaryLoader as BL
 import qualified Data.Macaw.BinaryLoader.ELF as BLE
 import qualified Data.Macaw.BinaryLoader.PPC.ELF as BE
@@ -28,7 +27,7 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Map.Strict as Map
-import           Data.Maybe ( fromMaybe, mapMaybe )
+import           Data.Maybe ( catMaybes, fromMaybe, mapMaybe )
 import           Data.Word ( Word32 )
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
@@ -76,13 +75,13 @@ ppcLookupSymbol loadedBinary funcAddr =
 
 ppc64EntryPoints :: (X.MonadThrow m, MC.ArchAddrWidth PPC64.PPC ~ 64)
                  => BL.LoadedBinary PPC64.PPC (E.ElfHeaderInfo 64)
-                 -> m (NEL.NonEmpty (MC.MemSegmentOff 64))
+                 -> m [MC.MemSegmentOff 64]
 ppc64EntryPoints loadedBinary = do
   entryAddr <- liftMemErr PPCElfMemoryError
                (MC.readAddr mem (BL.memoryEndianness loadedBinary) tocEntryAbsAddr)
   absEntryAddr <- liftMaybe (PPCInvalidAbsoluteAddress entryAddr) (MC.asSegmentOff mem (MC.incAddr (fromIntegral offset) entryAddr))
   let otherEntries = mapMaybe (MC.asSegmentOff mem . MM.incAddr (fromIntegral offset)) (TOC.entryPoints toc)
-  return (absEntryAddr NEL.:| otherEntries)
+  return $ absEntryAddr : otherEntries
   where
     offset = fromMaybe 0 (LC.loadOffset (BL.loadOptions loadedBinary))
     tocEntryAddr = E.headerEntry $ E.header (elf (BL.binaryFormatData loadedBinary))
@@ -106,12 +105,15 @@ liftMemErr exn a =
 ppc32EntryPoints
   :: (X.MonadThrow m, MC.ArchAddrWidth PPC32.PPC ~ 32)
   => BL.LoadedBinary PPC32.PPC (E.ElfHeaderInfo 32)
-  -> m (NEL.NonEmpty (MC.MemSegmentOff 32))
+  -> m [MC.MemSegmentOff 32]
 ppc32EntryPoints loadedBinary =
-  case BLE.resolveAbsoluteAddress mem entryAddr of
-    Nothing -> X.throwM (InvalidEntryPoint entryAddr)
-    Just entryPoint -> return (entryPoint NEL.:| mapMaybe (BLE.resolveAbsoluteAddress mem) symbols)
+  -- n.b. no guarantee of uniqueness, and in particular, `headerEntryPoint` is
+  -- probably in `symbolEntryPoints` somewhere
+  return $ catMaybes $ headerEntryPoint : symbolEntryPoints
   where
+    headerEntryPoint = BLE.resolveAbsoluteAddress mem entryAddr
+    symbolEntryPoints = map (BLE.resolveAbsoluteAddress mem) symbols
+
     offset = fromMaybe 0 (LC.loadOffset (BL.loadOptions loadedBinary))
     mem = BL.memoryImage loadedBinary
     entryAddr = MM.memWord (offset + fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary)))))
@@ -199,7 +201,6 @@ data PPCLoadException = PPCElfLoadError String
                       | forall w . (MC.MemWidth w) => PPCElfMemoryError (MC.MemoryError w)
                       | forall w . (MC.MemWidth w) => PPCInvalidAbsoluteAddress (MC.MemAddr w)
                       | forall w . (MC.MemWidth w) => PPCNoFunctionAddressForTOCEntry (MC.MemAddr w)
-                      | forall w . InvalidEntryPoint (MM.MemWord w)
 
 deriving instance Show PPCLoadException
 
