@@ -31,16 +31,6 @@ data MemoryConfig
     , memBinPath :: FilePath
     }
 
-loadOffsetOpt :: Opt.Parser Word64
-loadOffsetOpt = Opt.option Opt.auto opts
-  where
-  opts =
-    mconcat
-    [ Opt.long "offset"
-    , Opt.help "base offset at which to load the file"
-    , Opt.showDefault
-    ]
-
 printContentsOpt :: Opt.Parser Bool
 printContentsOpt = Opt.switch opts
   where
@@ -53,7 +43,7 @@ printContentsOpt = Opt.switch opts
 memoryConfig :: Opt.Parser MemoryConfig
 memoryConfig =
   MemoryConfig
-  <$> Opt.optional loadOffsetOpt
+  <$> Opt.optional MDCU.loadOffsetOpt
   <*> printContentsOpt
   <*> MDCU.binOpt
 

@@ -3,6 +3,7 @@
 
 module Data.Macaw.Dump.CLIUtils
   ( binOpt
+  , loadOffsetOpt
   , die
   , loadElf
   ) where
@@ -12,12 +13,23 @@ import Data.ElfEdit qualified as EE
 import Data.Macaw.Architecture.Info qualified as MAI
 import Data.Macaw.CFG qualified as MC
 import Data.Macaw.Memory qualified as MM
+import Data.Word (Word64)
 import Options.Applicative qualified as Opt
 import System.Exit qualified as Exit
 import System.IO qualified as IO
 
 binOpt :: Opt.Parser FilePath
 binOpt = Opt.strArgument (Opt.help "filename of binary" <> Opt.metavar "FILENAME" )
+
+loadOffsetOpt :: Opt.Parser Word64
+loadOffsetOpt = Opt.option Opt.auto opts
+  where
+  opts =
+    mconcat
+    [ Opt.long "offset"
+    , Opt.help "base offset at which to load the file"
+    , Opt.showDefault
+    ]
 
 die :: String -> IO a
 die msg = do
