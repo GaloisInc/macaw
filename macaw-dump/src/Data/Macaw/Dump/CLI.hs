@@ -10,12 +10,14 @@ module Data.Macaw.Dump.CLI
 
 import Control.Applicative ((<**>))
 import Data.Macaw.Dump.Discover qualified as MDD
+import Data.Macaw.Dump.EntryPoints qualified as MDE
 import Data.Macaw.Dump.Memory qualified as MDM
 import Data.Macaw.Dump.Plt qualified as MDP
 import Options.Applicative qualified as Opt
 
 data Command
   = CommandDiscover MDD.DiscoverConfig
+  | CommandEntryPoints MDE.EntryPointsConfig
   | CommandMemory MDM.MemoryConfig
   | CommandPlt MDP.PltConfig
 
@@ -24,6 +26,7 @@ command =
   Opt.subparser $
     mconcat
     [ cmdDiscover
+    , cmdEntryPoints
     , cmdMemory
     , cmdPlt
     ]
@@ -33,6 +36,12 @@ command =
     Opt.command
       "discover"
       (Opt.info (CommandDiscover <$> MDD.discoverConfig) (Opt.progDesc "Perform code discovery and print CFGs"))
+
+  cmdEntryPoints :: Opt.Mod Opt.CommandFields Command
+  cmdEntryPoints = do
+    Opt.command
+      "entry-points"
+      (Opt.info (CommandEntryPoints <$> MDE.entryPointsConfig) (Opt.progDesc "Print entry points"))
 
   cmdMemory :: Opt.Mod Opt.CommandFields Command
   cmdMemory = do

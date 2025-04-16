@@ -104,5 +104,6 @@ library
     Data.Macaw.Dump.CLI
     Data.Macaw.Dump.CLIUtils
     Data.Macaw.Dump.Discover
+    Data.Macaw.Dump.EntryPoints
     Data.Macaw.Dump.Memory
     Data.Macaw.Dump.Plt
