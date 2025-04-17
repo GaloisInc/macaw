@@ -195,6 +195,8 @@ data MemLoadWarning
     -- ^ Multiple relocations at the given offset
   | IgnoreRelocation !RelocationError
     -- ^ @IgnoreRelocation err@ warns we ignored a relocation.
+  | ShdrPhdrOverlap
+    -- ^ A section header overlaps with a program header.
 
 ppSymbol :: SymbolName -> String
 ppSymbol "" = "unnamed symbol"
@@ -250,6 +252,8 @@ instance Show MemLoadWarning where
     "Multiple relocations modify " ++ showHex addr "."
   show (IgnoreRelocation err) =
     show err
+  show ShdrPhdrOverlap =
+    "Found section header that overlaps with program header."
 
 data MemLoaderState w = MLS { _mlsMemory :: !(Memory w)
                             , mlsEndianness :: !Endianness
@@ -1449,16 +1453,17 @@ insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
     let l = IMap.toList $ IMap.intersecting shdrMap (IntervalCO phdrOffset phdrEnd)
     forM_ l $ \(i, elfIdx) -> do
       case i of
-        IntervalCO shdr_start _ -> do
-          when (phdrOffset > shdr_start) $ do
-            error "Found section header that overlaps with program header."
-          let sec_offset = fromIntegral $ shdr_start - phdrOffset
-          addr <- case resolveSegmentOff seg sec_offset of
-                    Just addr -> pure addr
-                    Nothing -> error $ "insertElfSegment: Failed to resolve segment offset at "
-                                    ++ show sec_offset
-          mlsMemory   %= memBindSectionIndex elfIdx addr
-          mlsIndexMap %= Map.insert elfIdx addr
+        IntervalCO shdr_start _
+          | phdrOffset > shdr_start ->
+              addWarning ShdrPhdrOverlap
+          | otherwise -> do
+              let sec_offset = fromIntegral $ shdr_start - phdrOffset
+              addr <- case resolveSegmentOff seg sec_offset of
+                        Just addr -> pure addr
+                        Nothing -> error $ "insertElfSegment: Failed to resolve segment offset at "
+                                        ++ show sec_offset
+              mlsMemory   %= memBindSectionIndex elfIdx addr
+              mlsIndexMap %= Map.insert elfIdx addr
         _ -> error "Unexpected shdr interval"
 
 -- | Load an elf file into memory by parsing segments.
