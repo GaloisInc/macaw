@@ -21,7 +21,6 @@ import qualified Control.Monad.Reader as MR
 import qualified Control.Monad.IO.Unlift as MU
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as EE
-import qualified Data.Foldable as F
 import qualified Data.Map as M
 import           Data.Proxy ( Proxy(..) )
 import qualified Lang.Crucible.LLVM.MemModel as LLVM
@@ -89,7 +88,7 @@ withLoadedBinary :: forall arch binFmt m a
                  -> MBL.LoadedBinary arch binFmt
                  -> m a
 withLoadedBinary k archInfo bin = do
-  entries <- F.toList <$> MBL.entryPoints bin
+  entries <- MBL.entryPoints bin
   let dstate0 = MD.cfgFromAddrs archInfo (MBL.memoryImage bin) M.empty entries []
   k (Proxy @arch) archInfo bin dstate0
 
@@ -137,6 +136,6 @@ withRefinedDiscovery opts archInfo bin k = do
                                             , MR.timeoutSeconds = max 1 (timeoutSeconds opts)
                                             }
     ctx <- MR.defaultRefinementContext config bin
-    entries <- F.toList <$> MBL.entryPoints bin
+    entries <- MBL.entryPoints bin
     (dstate, info) <- runRefine @arch $ MR.cfgFromAddrsWith ctx archInfo (MBL.memoryImage bin) M.empty entries []
     k dstate info

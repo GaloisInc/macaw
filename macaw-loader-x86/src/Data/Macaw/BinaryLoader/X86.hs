@@ -14,14 +14,13 @@ import qualified Control.Monad.Catch as X
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as E
 import qualified Data.Foldable as F
-import qualified Data.List.NonEmpty as NEL
 import qualified Data.Macaw.BinaryLoader as BL
 import qualified Data.Macaw.BinaryLoader.ELF as BLE
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Map.Strict as Map
-import           Data.Maybe ( fromMaybe, mapMaybe )
+import           Data.Maybe ( catMaybes, fromMaybe )
 import           Data.Word ( Word64 )
 
 import qualified Data.Macaw.X86 as MX
@@ -50,13 +49,15 @@ x86LookupSymbol loadedBinary addr =
 
 x86EntryPoints :: (X.MonadThrow m)
                => BL.LoadedBinary MX.X86_64 (E.ElfHeaderInfo 64)
-               -> m (NEL.NonEmpty (MM.MemSegmentOff 64))
-x86EntryPoints loadedBinary = do
-  case BLE.resolveAbsoluteAddress mem addrWord of
-    -- n.b. no guarantee of uniqueness, and in particular, entryPoint is probably in symbols somewhere
-    Just entryPoint -> return (entryPoint NEL.:| mapMaybe (BLE.resolveAbsoluteAddress mem) symbolWords)
-    Nothing -> X.throwM (InvalidEntryPoint addrWord)
+               -> m [MM.MemSegmentOff 64]
+x86EntryPoints loadedBinary =
+  -- n.b. no guarantee of uniqueness, and in particular, `headerEntryPoint` is
+  -- probably in `symbolEntryPoints` somewhere
+  return $ catMaybes $ headerEntryPoint : symbolEntryPoints
   where
+    headerEntryPoint = BLE.resolveAbsoluteAddress mem addrWord
+    symbolEntryPoints = map (BLE.resolveAbsoluteAddress mem) symbolWords
+
     offset = fromMaybe 0 (LC.loadOffset (BL.loadOptions loadedBinary))
     mem = BL.memoryImage loadedBinary
     addrWord = MM.memWord (offset + (fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary))))))
@@ -105,7 +106,6 @@ indexSymbols = F.foldl' doIndex Map.empty
       Map.insert (MM.segoffAddr (EL.memSymbolStart memSym)) (EL.memSymbolName memSym) m
 
 data X86LoadException = X86ElfLoadError String
-                      | InvalidEntryPoint (MM.MemWord 64)
                       | MissingSymbolFor (MM.MemAddr 64)
 
 deriving instance Show X86LoadException
