@@ -618,6 +618,10 @@ instance Show (Relocation w) where
 -- | A memory chunk describes a contiguous sequence of bytes within a segment.
 --
 -- The parameter denotes the width of a memory address.
+--
+-- Note that the term "region" in this type is not related to the notion of
+-- "region" described in the module-level documentation (i.e., the @Region@
+-- in 'RegionIndex').
 data MemChunk (w :: Nat)
    = ByteRegion !BS.ByteString
      -- ^ A region with specific bytes
