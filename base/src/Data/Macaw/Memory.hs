@@ -4,11 +4,11 @@ Maintainer  : Ryan Scott <rscott@galois.com>, Langston Barrett <langston@galois.
 
 Declares 'Memory', a type for representing pre-loader memory with permissions.
 This datatype provides an abstraction that is intended to support different
-architectures and executable and object file formats. Crucially, 'Memory' is
+architectures, executable formats, and object file formats. Crucially, 'Memory' is
 capable of representing relocatable (i.e., position-independent) code and data.
 
 A 'Memory' defines a collection of abstract /regions/ of memory. A region is
-identified by a 'RegionIndex', and represents some an address that would be
+identified by a 'RegionIndex' and represents some address that would be
 chosen at runtime by the loader (e.g., the virtual address of an ELF segment
 containing position-independent code). Thus, in this module, an address
 ('MemAddr') consists of a pair of a 'RegionIndex' and an offset into that
@@ -17,7 +17,7 @@ region. A 'MemAddr' with a 'RegionIndex' of 0 represents an /absolute/ address.
 'Memory' is essentially a collection of segments. A segment ('MemSegment')
 is a continguous sequence of bytes that will be loaded into runtime memory.
 Segments do not necessarily have a known runtime address. Instead, they use some
-'RegionIndex' as a "base" address, and are located at some fixed offset from
+'RegionIndex' as a "base" address and are located at some fixed offset from
 that base. Multiple segments can have the same 'RegionIndex' as their base; this
 indicates that they will have a fixed offset relative to one another at runtime.
 This notion of segment is similar to an ELF segment. It is unrelated to the x86
@@ -619,8 +619,8 @@ instance Show (Relocation w) where
 --
 -- The parameter denotes the width of a memory address.
 --
--- Note that the term "region" in this type is not related to the notion of
--- "region" described in the module-level documentation (i.e., the @Region@
+-- Note that the term \"region\" in this type is not related to the notion of
+-- \"region\" described in the module-level documentation (i.e., the @Region@
 -- in 'RegionIndex').
 data MemChunk (w :: Nat)
    = ByteRegion !BS.ByteString
@@ -851,7 +851,7 @@ applyRelocsToBytes baseAddr _ pre ioff _ buffer =
 --
 -- The region index 0 indicates an absolute address:
 --
--- * A 'MemAddr' with a 'addrBase' of 0 is an absolute address.
+-- * A 'MemAddr' with an 'addrBase' of 0 is an absolute address.
 -- * A 'MemSegment' with a 'segmentBase' of 0 has an absolute address in its
 --   'segmentOffset'.
 type RegionIndex = Int
