@@ -1,8 +1,46 @@
 {-|
 Copyright   : (c) Galois Inc, 2015-2018
-Maintainer  : jhendrix@galois.com
+Maintainer  : Ryan Scott <rscott@galois.com>, Langston Barrett <langston@galois.com>
 
-Declares 'Memory', a type for representing segmented memory with permissions.
+Declares 'Memory', a type for representing pre-loader memory with permissions.
+This datatype provides an abstraction that is intended to support different
+architectures and executable and object file formats. Crucially, 'Memory' is
+capable of representing relocatable (i.e., position-independent) code and data.
+
+A 'Memory' defines a collection of abstract /regions/ of memory. A region is
+identified by a 'RegionIndex', and represents some an address that would be
+chosen at runtime by the loader (e.g., the virtual address of an ELF segment
+containing position-independent code). Thus, in this module, an address
+('MemAddr') consists of a pair of a 'RegionIndex' and an offset into that
+region. A 'MemAddr' with a 'RegionIndex' of 0 represents an /absolute/ address.
+
+'Memory' is essentially a collection of segments. A segment ('MemSegment')
+is a continguous sequence of bytes that will be loaded into runtime memory.
+Segments do not necessarily have a known runtime address. Instead, they use some
+'RegionIndex' as a "base" address, and are located at some fixed offset from
+that base. Multiple segments can have the same 'RegionIndex' as their base; this
+indicates that they will have a fixed offset relative to one another at runtime.
+This notion of segment is similar to an ELF segment. It is unrelated to the x86
+notion of memory segmentation.
+
+= Addresses and related types
+
+As described above, an address ('MemAddr') consists of a base ('RegionIndex')
+and an offset. This section describes a few types that are adjacent to this one,
+along with their intended use-cases.
+
+A @'MemWord' w@ is a @w@-bit machine word. This may be treated as an absolute
+address when @w@ is the width of a pointer ('absoluteAddr').
+
+A 'MemSegmentOff' is notionally a pair @('MemSegment', offset)@, where @offset@
+is an offset into the 'MemSegment'. The 'MemSegmentOff's produced by this module
+are guaranteed to be valid, making it possible to look up the contents of the
+memory they point to.
+
+Each of the above types is parameterized by the number of bits in an address.
+Each type has an alias prefixed with @Arch@ that is instead parameterized by
+architecture, with the width parameter filled in according to the declared width
+of the architecture (e.g., 'Data.Macaw.CFG.AssignRhs.ArchMemAddr').
 -}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveLift #-}
@@ -799,22 +837,32 @@ applyRelocsToBytes baseAddr _ pre ioff _ buffer =
 ------------------------------------------------------------------------
 -- MemSegment
 
--- | This is an identifier used to support relocatable code.
+-- | An identifier used to support relocatable (i.e., position-independent) code.
 --
--- Memory segments with absolute addresses should use a region index
--- of `0`.  Non-zero region indices Absolute segments have a base index of zero, and non-zero values correspond
+-- See the module-level documentation for an overview.
+--
+-- Non-zero region indices represent addresses that would be chosen at runtime
+-- by the loader (e.g., the virtual address of an ELF segment containing
+-- position-independent code).
+--
+-- The region index 0 indicates an absolute address:
+--
+-- * A 'MemAddr' with a 'addrBase' of 0 is an absolute address.
+-- * A 'MemSegment' with a 'segmentBase' of 0 has an absolute address in its
+--   'segmentOffset'.
 type RegionIndex = Int
 
 -- | Information about a contiguous sequence of bytes in memory.
 --
--- Our memory model supports relocatable code, and so segments may
--- have either fixed or floating addresses.  Floating addresses are
--- themselves represented as the offset of a base address which is
--- identified by the `segmentBase` which is `0` for segments with
--- absolute addresses and non-zero oitherwise.  Binaries may have
--- floating segments that are fixed relative to each other, and this
--- can be modeled by creating different segments with the same
--- non-zero `segmentBase` identifier.
+-- See the module-level documentation for an overview.
+--
+-- Our memory model supports relocatable code, and so segments may have either
+-- fixed (absolute) or floating addresses. Floating addresses are represented as
+-- an offset from an abstract base address ('segmentBase'). When 'segmentBase'
+-- is 0, 'segmentOffset' is the absolute address of the segment. Binaries may
+-- have floating segments that are fixed relative to each other, and this can be
+-- modeled by creating different segments with the same non-zero `segmentBase`
+-- identifier.
 data MemSegment w
    = MemSegment { segmentBase  :: !RegionIndex
                   -- ^ Base for this segment
@@ -914,38 +962,21 @@ data MemSegmentOff w = MemSegmentOff { segoffSegment :: !(MemSegment w)
 -- Memory
 
 -- | Map from region index to map of offset to segment.
+--
+-- See the module-level documentation.
 type SegmentOffsetMap w = Map.Map RegionIndex (Map.Map (MemWord w) (MemSegment w))
 
--- | A datatype for describing the potential memory layout of binaries
--- during execution.
+-- | A datatype for describing the memory layout of binaries.
 --
--- This datatype abstracts aways the details of the executable file
--- format to provide an abstraction that is intended to support
--- different architectures and executable/object file formats.
+-- See the module-level documentation for an overview.
 --
--- This does not represent memory once loading is complete, but rather
--- provide a pre-loader perspective.  As such, it supports a more
--- complex notion of addresses to accomodate relocatable binaries
--- where the precise location of code or data is not known, but one
--- may have relative offsets for the information.
---
--- The memory model assumes that the set of legal addresses are sparse,
--- and have read/write/executable bit permissions associated with them.
--- Different contiguous regions may not have known fixed addresses, but
--- may have fixed relative offsets.
---
--- To support this, the memory representation supports relocatable
--- regions.  Each region is defined by an index, and multiple segments
--- may be relative to the same index.  The index `0` is reserved to
--- denote absolute addresses, while the other regions may have other
--- addresses.
---
--- Region indices may not correspond precisely with segments or
--- section indices within the binary, and so our memory model also
--- maintains mappings so that one can map both sections and segments
--- in the binary to the address it is loaded at.
+-- Region indices ('RegionIndex') may not correspond precisely with segments
+-- or section indices ('SectionIndex', 'SegmentIndex') within the binary,
+-- and so we also maintain mappings so that one can map both sections and
+-- segments in the binary to the address it is loaded at ('memSectionIndexMap',
+-- 'memSegmentIndexMap').
 data Memory w = Memory { memAddrWidth :: !(AddrWidthRepr w)
-                         -- ^ Return the address width of the memory
+                         -- ^ Address width of the memory
                        , memSegmentMap :: !(SegmentOffsetMap w)
                          -- ^ Segment map
                        , memSectionIndexMap :: !(Map SectionIndex (MemSegmentOff w))
@@ -1034,18 +1065,17 @@ insertMemSegment seg mem = addrWidthClass (memAddrWidth mem) $ do
 ------------------------------------------------------------------------
 -- MemAddr
 
--- | An address in memory.  Due to our use of relocatable "regions",
--- this internally represented by a region index for the base, and an
--- offset.
+-- | An address in memory, represented by a base ('RegionIndex') and an offset.
 --
--- This representation does not require that the address is mapped to
--- actual memory (see `MemSegmentOff` for an address representation
--- that ensures the reference points to allocated memory).
+-- See the module-level documentation for an overview.
+--
+-- This representation does not require that the address is mapped to actual
+-- memory (see `MemSegmentOff` for an address representation that ensures the
+-- reference points to allocated memory).
 data MemAddr w
    = MemAddr { addrBase :: {-# UNPACK #-} !RegionIndex
              , addrOffset :: {-# UNPACK #-} !(MemWord w)
              }
-     -- ^ An address formed from a specific value.
   deriving (Eq, Ord)
 
 instance Hashable (MemAddr w) where
@@ -1063,11 +1093,11 @@ instance Show (MemAddr w) where
 instance Pretty (MemAddr w) where
   pretty = viaShow
 
--- | Given an absolute address, this returns a segment and offset into the segment.
+-- | Treat a machine word as an absolute address (with a 'addrBase' of 0).
 absoluteAddr :: MemWord w -> MemAddr w
 absoluteAddr o = MemAddr { addrBase = 0, addrOffset = o }
 
--- | Construct an address from the offset of a memory segment.
+-- | Construct an address from an offset from a memory segment.
 segmentOffAddr :: MemWidth w => MemSegment w -> MemWord w -> MemAddr w
 segmentOffAddr seg off = MemAddr { addrBase = segmentBase seg, addrOffset = segmentOffset seg + off }
 
@@ -1076,7 +1106,7 @@ relativeAddr :: MemWidth w => MemSegment w -> MemWord w -> MemAddr w
 relativeAddr = segmentOffAddr
 {-# DEPRECATED relativeAddr "Use segmentOffAddr" #-}
 
--- | Return an absolute address if the region of the memAddr is 0.
+-- | Return an absolute address if the region of the 'MemAddr' is 0.
 asAbsoluteAddr :: MemWidth w => MemAddr w -> Maybe (MemWord w)
 asAbsoluteAddr (MemAddr i w) = if i == 0 then Just w else Nothing
 
@@ -1130,7 +1160,6 @@ resolveAddr = resolveRegionOff
 segoffAddr :: MemSegmentOff w -> MemAddr w
 segoffAddr (MemSegmentOff seg off) =
   MemAddr { addrBase = segmentBase seg
-            -- Segment off
           , addrOffset = MemWord $ memWordValue (segmentOffset seg) + memWordValue off
           }
 
