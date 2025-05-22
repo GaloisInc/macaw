@@ -147,7 +147,7 @@ Notes:
 
 ## Address Representations
 
-There are four different representations of addresses in Macaw, which often leads to confusion. `MemAddr`, `MemWord`, and `MemSegmentOff` are used in conjunction with the *pre-loader* view of memory. They are disambiguated in the module-level documentation for `Data.Macaw.Memory`.
+There are several different representations of addresses in Macaw, which often leads to confusion. `MemAddr`, `MemWord`, and `MemSegmentOff` are used in conjunction with the *pre-loader* view of memory. They are disambiguated in the module-level documentation for `Data.Macaw.Memory`.
 
 The notion of pointer used during symbolic execution is called `LLVMPointer`. These consist of a pair of a *block number* and an *offset*, see [the Crucible-LLVM docs].
 

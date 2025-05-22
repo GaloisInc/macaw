@@ -15,7 +15,7 @@ containing position-independent code). Thus, in this module, an address
 region. A 'MemAddr' with a 'RegionIndex' of 0 represents an /absolute/ address.
 
 'Memory' is essentially a collection of segments. A segment ('MemSegment')
-is a continguous sequence of bytes that will be loaded into runtime memory.
+is a contiguous sequence of bytes that will be loaded into runtime memory.
 Segments do not necessarily have a known runtime address. Instead, they use some
 'RegionIndex' as a "base" address and are located at some fixed offset from
 that base. Multiple segments can have the same 'RegionIndex' as their base; this
@@ -38,7 +38,7 @@ are guaranteed to be valid, making it possible to look up the contents of the
 memory they point to.
 
 Each of the above types is parameterized by the number of bits in an address.
-Each type has an alias prefixed with @Arch@ that is instead parameterized by
+Most have an alias prefixed with @Arch@ that is instead parameterized by
 architecture, with the width parameter filled in according to the declared width
 of the architecture (e.g., 'Data.Macaw.CFG.AssignRhs.ArchMemAddr').
 -}
