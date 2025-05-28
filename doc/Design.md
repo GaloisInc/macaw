@@ -147,19 +147,11 @@ Notes:
 
 ## Address Representations
 
-There are three different representations of addresses in Macaw, which often leads to confusion.  This section will attempt to describe them and their intended use cases. The address types are parameterized by the number of bits in the address. Each address type has a type alias prefixed with `Arch` that is instead parameterized by architecture, with the width parameter filled in according to the declared width of the architecture.
+There are several different representations of addresses in Macaw, which often leads to confusion. `MemAddr`, `MemWord`, and `MemSegmentOff` are used in conjunction with the *pre-loader* view of memory. They are disambiguated in the module-level documentation for `Data.Macaw.Memory`.
 
-First, `MemWord` is a machine word (bitvector) of size `w` bits.  This type is usually not an address, but can sometimes be converted into (or from) and address if the width is equal to the pointer width.
+The notion of pointer used during symbolic execution is called `LLVMPointer`. These consist of a pair of a *block number* and an *offset*, see [the Crucible-LLVM docs].
 
-Next, `MemSegmentOff` is notionally a pair `(segment, offset)` where the `segment` contains the contiguous bytes of memory and the `offset` is the offset into the segment pointed to by the address.  These addresses have a few important properties:
-- It is always guaranteed to be statically-valid (i.e., an address mapped into the initial address space based on the binary layout)
-- Given a `MemSegmentOff`, it is always possible to look up the contents of memory (at least read-only memory)
-- Given a `MemSegmentOff`, it is always possible to retrieve the entire memory segment it is associated with *without* having to carry the `Memory` object
-Despite the name, these addresses are not related to the notion of memory segmentation on <64 bit x86.
-
-Finally, `MemAddr` is another `(base, offset)` address form, but where the base is an abstract integer denoting a region of memory. Unlike `MemSegmentOff`, these are not required to be valid or map to known static memory (although they mostly do). The region number `0` is treated specially and is considered to be an absolute address.
-
-The `Memory` is effectively a collection of memory segments. It represents all of the statically-known contents of memory. Read-only memory can be reliably interpreted. Reads from mutable memory are not validated (i.e., the program could have changed those values compared to the initial values observed in the binary).
+[the Crucible-LLVM docs]: https://github.com/GaloisInc/crucible/blob/master/crucible-llvm/doc/memory-model.md
 
 Note that Macaw currently assumes that addresses can either be 32 or 64 bits, and that the address size is uniform for a given architecture. In principle, supporting 16 or 128 bit addresses is possible, but doing so would require a careful audit.
 
