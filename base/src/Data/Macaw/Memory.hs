@@ -20,8 +20,10 @@ into runtime memory. Segments do not necessarily have a known runtime address.
 Instead, they use some 'RegionIndex' as a "base" address and are located at some
 fixed offset from that base. Multiple segments can have the same 'RegionIndex'
 as their base; this indicates that they will have a fixed offset relative to one
-another at runtime. This notion of segment is similar to an ELF segment. It is
-unrelated to the x86 notion of memory segmentation.
+another at runtime. A 'MemSegment' with a 'RegionIndex' of 0 has a statically
+known address, which is exactly its 'segmentOffset'. This notion of segment
+is similar to an ELF segment. It is unrelated to the x86 notion of memory
+segmentation.
 
 = Addresses and related types
 
