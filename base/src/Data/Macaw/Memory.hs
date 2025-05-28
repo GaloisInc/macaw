@@ -7,21 +7,21 @@ This datatype provides an abstraction that is intended to support different
 architectures, executable formats, and object file formats. Crucially, 'Memory' is
 capable of representing relocatable (i.e., position-independent) code and data.
 
-A 'Memory' defines a collection of abstract /regions/ of memory. A region is
-identified by a 'RegionIndex' and represents some address that would be
-chosen at runtime by the loader (e.g., the virtual address of an ELF segment
-containing position-independent code). Thus, in this module, an address
-('MemAddr') consists of a pair of a 'RegionIndex' and an offset into that
-region. A 'MemAddr' with a 'RegionIndex' of 0 represents an /absolute/ address.
+A 'Memory' is essentially a collection of /segments/, each of which belongs
+to one /region/. A region is identified by a 'RegionIndex' and represents some
+address that would be chosen at runtime by the loader (e.g., the virtual address
+of an ELF segment containing position-independent code). Thus, in this module,
+an address ('MemAddr') consists of a pair of a 'RegionIndex' and an offset into
+that region. A 'MemAddr' with a 'RegionIndex' of 0 represents an /absolute/
+address.
 
-'Memory' is essentially a collection of segments. A segment ('MemSegment')
-is a contiguous sequence of bytes that will be loaded into runtime memory.
-Segments do not necessarily have a known runtime address. Instead, they use some
-'RegionIndex' as a "base" address and are located at some fixed offset from
-that base. Multiple segments can have the same 'RegionIndex' as their base; this
-indicates that they will have a fixed offset relative to one another at runtime.
-This notion of segment is similar to an ELF segment. It is unrelated to the x86
-notion of memory segmentation.
+A segment ('MemSegment') is a contiguous sequence of bytes that will be loaded
+into runtime memory. Segments do not necessarily have a known runtime address.
+Instead, they use some 'RegionIndex' as a "base" address and are located at some
+fixed offset from that base. Multiple segments can have the same 'RegionIndex'
+as their base; this indicates that they will have a fixed offset relative to one
+another at runtime. This notion of segment is similar to an ELF segment. It is
+unrelated to the x86 notion of memory segmentation.
 
 = Addresses and related types
 
