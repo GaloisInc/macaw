@@ -48,6 +48,11 @@ jobs:
           ${{ env.key }}-${{ github.ref }}
         restore-keys: |
           ${{ env.key }}-
+    - name: Copy cabal project files
+      run: |
+        cp cabal.project.dist cabal.project
+        cp cabal.project.werror cabal.project.local
+        cp cabal.project.freeze.ghc-${{ matrix.ghc }} cabal.project.freeze
     - name: Build haddocks
       run: >
         cabal
