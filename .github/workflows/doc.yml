@@ -32,6 +32,27 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: true
+    - name: System Dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y software-properties-common apt-transport-https ca-certificates wget
+        sudo apt install -y curl zlibc zlib1g zlib1g-dev git zip \
+          libgmp3-dev build-essential libtinfo-dev autoconf automake gperf cmake locales \
+          python3-distutils python-setuptools antlr3 libantlr3c-dev libtool libtool-bin libboost-all-dev python3-pip libfftw3-dev \
+          language-pack-en-base language-pack-en
+        sudo locale-gen en_US.UTF-8
+        sudo update-locale LANG=$LANG LANGUAGE=$LANGUAGE
+        # Softfloat repo needs to be recursively cloned
+        cd deps/softfloat-hs
+        git submodule update --init --recursive
+        cd ../..
+    - name: Copy cabal project files
+      run: |
+        cp cabal.project.dist cabal.project
+        cp cabal.project.werror cabal.project.local
+        cp cabal.project.freeze.ghc-${{ matrix.ghc }} cabal.project.freeze
     - uses: haskell-actions/setup@v2
       id: setup-haskell
       with:
@@ -48,11 +69,6 @@ jobs:
           ${{ env.key }}-${{ github.ref }}
         restore-keys: |
           ${{ env.key }}-
-    - name: Copy cabal project files
-      run: |
-        cp cabal.project.dist cabal.project
-        cp cabal.project.werror cabal.project.local
-        cp cabal.project.freeze.ghc-${{ matrix.ghc }} cabal.project.freeze
     - name: Build haddocks
       run: >
         cabal
