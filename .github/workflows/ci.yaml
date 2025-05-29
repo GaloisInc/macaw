@@ -25,6 +25,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        # Remember to update the GHC version in the documentation workflow as well
         ghc-ver: ["9.4.8", "9.6.6", "9.8.2"]
         cabal: [ '3.10.3.0' ]
         os: [self-hosted]
