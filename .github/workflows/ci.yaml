@@ -55,12 +55,12 @@ jobs:
       name: Restore cabal store cache
       with:
         path: |
-          /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+          ${{ steps.setup-haskell.outputs.cabal-store }}
           dist-newstyle
         # Prefer previous SHA hash if it is still cached
-        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
+        key: ${{ env.CACHE_VERSION }}-${{ matrix.os }}-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
         # otherwise just use most recent build.
-        restore-keys: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
+        restore-keys: ${{ env.CACHE_VERSION }}-${{ matrix.os }}-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
 
     - name: Cabal update
       run: cabal update
@@ -170,7 +170,6 @@ jobs:
       if: always()
       with:
         path: |
-          /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+          ${{ steps.setup-haskell.outputs.cabal-store }}
           dist-newstyle
-        # Prefer previous SHA hash if it is still cached
-        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
+        key: ${{ steps.cache.outputs.cache-primary-key }}
