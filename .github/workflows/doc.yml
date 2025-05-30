@@ -69,10 +69,13 @@ jobs:
           ${{ env.key }}-${{ github.ref }}
         restore-keys: |
           ${{ env.key }}-
+    # `--disable-documentation` disables Haddocks for dependencies. Work-around
+    # for #497, wherein the documentation for `prettyprinter` failed to build.
     - name: Build haddocks
       run: >
         cabal
         haddock
+        --disable-documentation
         --haddock-html-location='https://hackage.haskell.org/package/$pkg-$version/docs'
         --haddock-hyperlink-source
         --haddock-output-dir=doc
