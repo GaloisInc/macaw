@@ -15,20 +15,13 @@ env:
 
 jobs:
   build-linux:
-
-    env:
-      LANG: en_US.UTF-8
-      LC_ALL: en_US.UTF-8
-      TZ: America/Los_Angeles
-      CI_TEST_LEVEL: "2"
-
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         # Remember to update the GHC version in the documentation workflow as well
         ghc-ver: ["9.4.8", "9.6.6", "9.8.2"]
         cabal: [ '3.10.3.0' ]
-        os: [self-hosted]
+        os: [ubuntu-latest]
       # complete all jobs
       fail-fast: false
     name: Macaw - GHC v${{ matrix.ghc-ver }}
@@ -45,20 +38,10 @@ jobs:
         ghc-version: ${{ matrix.ghc-ver }}
         cabal-version: ${{ matrix.cabal }}
 
-    - name: System Dependencies
+    - name: Submodules
       run: |
-        sudo apt update
-        sudo apt install -y software-properties-common apt-transport-https ca-certificates wget
-        sudo apt install -y curl zlibc zlib1g zlib1g-dev git zip \
-          libgmp3-dev build-essential libtinfo-dev autoconf automake gperf cmake locales \
-          python3-distutils python-setuptools antlr3 libantlr3c-dev libtool libtool-bin libboost-all-dev python3-pip libfftw3-dev \
-          language-pack-en-base language-pack-en
-        sudo locale-gen en_US.UTF-8
-        sudo update-locale LANG=$LANG LANGUAGE=$LANGUAGE
-        # Softfloat repo needs to be recursively cloned
         cd deps/softfloat-hs
         git submodule update --init --recursive
-        cd ../..
 
     - name: Copy cabal project files
       run: |
@@ -72,12 +55,12 @@ jobs:
       name: Restore cabal store cache
       with:
         path: |
-          /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+          ${{ steps.setup-haskell.outputs.cabal-store }}
           dist-newstyle
         # Prefer previous SHA hash if it is still cached
-        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
+        key: ${{ env.CACHE_VERSION }}-${{ matrix.os }}-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
         # otherwise just use most recent build.
-        restore-keys: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
+        restore-keys: ${{ env.CACHE_VERSION }}-${{ matrix.os }}-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
 
     - name: Cabal update
       run: cabal update
@@ -187,7 +170,6 @@ jobs:
       if: always()
       with:
         path: |
-          /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+          ${{ steps.setup-haskell.outputs.cabal-store }}
           dist-newstyle
-        # Prefer previous SHA hash if it is still cached
-        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
+        key: ${{ steps.cache.outputs.cache-primary-key }}
