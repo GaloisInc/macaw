@@ -60,6 +60,7 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.Backend.Online as CBO
+import qualified Lang.Crucible.Backend.ProofGoals as CBP
 import qualified Lang.Crucible.LLVM.DataLayout as CLD
 import qualified Lang.Crucible.LLVM.MemModel as CL
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as CLP
@@ -658,9 +659,11 @@ concreteImmutableGlobalRead sym mpt memRep ptr
 -- | Prior to accessing global memory, initialize the region of memory in the
 -- SMT array that backs global memory. See @Note [Lazy memory model]@.
 lazilyPopulateGlobalMemArr ::
-  forall sym bak w t st fs p ext.
+  forall sym bak w solver t st fs p ext.
   ( CB.IsSymBackend sym bak
   , sym ~ WEB.ExprBuilder t st fs
+  , bak ~ CBO.OnlineBackend solver t st fs
+  , WPO.OnlineSolver solver
   , MS.HasMacawLazySimulatorState p sym w
   , MC.MemWidth w
   ) =>
@@ -685,7 +688,15 @@ lazilyPopulateGlobalMemArr bak mpt memRep ptr state
            then do bytesAssmp <-
                      MSMC.memArrEqualityAssumption sym (memPtrArray mpt)
                        (IMI.lowerBound addr) (smcBytes smc)
-                   CB.addAssumption bak bytesAssmp
+                   frames <- CBO.allAssumptionFrames bak
+                   let frames' =
+                         frames
+                           { CBP.baseFrame =
+                               CB.singleAssumption bytesAssmp <>
+                               CBP.baseFrame frames
+                           }
+                   CBO.withSolverProcess bak (error "TODO RGS: Wat") $ \proc ->
+                     CBO.restoreAssumptionFrames bak proc frames'
                    pure $ L.over chunksL (IS.insert addr) st
            else pure st
 
