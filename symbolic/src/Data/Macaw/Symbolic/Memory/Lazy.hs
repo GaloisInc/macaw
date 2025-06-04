@@ -60,6 +60,7 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.Backend.Online as CBO
+import qualified Lang.Crucible.Backend.ProofGoals as CBP
 import qualified Lang.Crucible.LLVM.DataLayout as CLD
 import qualified Lang.Crucible.LLVM.MemModel as CL
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as CLP
@@ -685,7 +686,10 @@ lazilyPopulateGlobalMemArr bak mpt memRep ptr state
            then do bytesAssmp <-
                      MSMC.memArrEqualityAssumption sym (memPtrArray mpt)
                        (IMI.lowerBound addr) (smcBytes smc)
-                   CB.addAssumption bak bytesAssmp
+                   -- See @Note [Top-level assumptions]@.
+                   gc <- CB.saveAssumptionState bak
+                   let gc' = CBP.gcAddTopLevelAssume (CB.singleAssumption bytesAssmp) gc
+                   CB.restoreAssumptionState bak gc'
                    pure $ L.over chunksL (IS.insert addr) st
            else pure st
 
@@ -717,6 +721,26 @@ lazilyPopulateGlobalMemArr bak mpt memRep ptr state
                L.Lens' (CS.SimState p sym ext rtp f args)
                        (IS.IntervalSet (IMI.Interval (MC.MemWord w)))
     chunksL = CS.stateContext . CS.cruciblePersonality . MS.populatedMemChunks
+
+{-
+Note [Top-level assumptions]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When the lazy memory model loads from a chunk of global memory for the first
+time, it creates an assumption that the memory in question holds its initial
+value (see Note [Lazy memory model]). Unlike the non-lazy memory model,
+this assumption can't simply be added to the Crucible symbolic backend using
+`addAssumption`, as that method adds an assumption *along the current path*. In
+other words, the assumption would only be in scope for proof obligations arising
+along the current path. Instead, the assumption that the memory is initialized
+should be in scope for *all* goals.
+
+How can we achieve this? We ask the backend to export the state of
+its assumptions (`saveAssumptionState`), add a "top-level" assumption
+(`gcAddTopLevelAssume`), and restore the state (`restoreAssumptionState`).
+For online backends, this will result in resetting the solver process and
+re-asserting all of the in-scope assumptions.
+-}
 
 -- | Return an 'IMI.Interval' representing the possible range of addresses that
 -- a 'WI.SymBV' can lie between. If this is a concrete bitvector, the interval
