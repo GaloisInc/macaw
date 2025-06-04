@@ -389,6 +389,7 @@ populateSegmentChunk :: ( 16 <= w
                         , IM.IntervalMap (MC.MemWord w) CL.Mutability
                         )
 populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
+  let sym = CB.backendGetSym bak
   let ?ptrWidth = MC.memWidth mem
   let abs_addr = toAbsoluteAddr addr
   let size = length bytes
@@ -451,7 +452,9 @@ populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
       symArray2 <- liftIO $ WI.arrayUpdateAtIdxLits sym updates symArray
 -}
 
-      MSMC.assumeMemArr bak symArray (toAbsoluteAddr addr) bytes
+      bytesAssmp <-
+        MSMC.memArrEqualityAssumption sym symArray (toAbsoluteAddr addr) bytes
+      liftIO $ CB.addAssumption bak bytesAssmp
       let symArray2 = symArray
 
       return (symArray2, IM.insert interval mut_flag ptrtable)
