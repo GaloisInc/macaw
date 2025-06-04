@@ -682,8 +682,10 @@ lazilyPopulateGlobalMemArr bak mpt memRep ptr state
                 -- memory region completely symbolic.
                 not (smcMutability smc == CL.Mutable &&
                      memModelContents mpt == MSMC.SymbolicMutable)
-           then do MSMC.assumeMemArr bak (memPtrArray mpt)
-                     (IMI.lowerBound addr) (smcBytes smc)
+           then do bytesAssmp <-
+                     MSMC.memArrEqualityAssumption sym (memPtrArray mpt)
+                       (IMI.lowerBound addr) (smcBytes smc)
+                   CB.addAssumption bak bytesAssmp
                    pure $ L.over chunksL (IS.insert addr) st
            else pure st
 
