@@ -18,7 +18,7 @@ module Data.Macaw.Symbolic.Memory.Common
   , mkGlobalPointerValidityPredCommon
   , mapRegionPointersCommon
   , populateMemChunkBytes
-  , assumeMemArr
+  , memArrEqualityAssumption
   , pleatM
   , ipleatM
   ) where
@@ -259,22 +259,23 @@ populateMemChunkBytes bak hooks mem seg addr memChunk =
     sym = CB.backendGetSym bak
     w8 = WI.knownNat @8
 
--- | Populate the memory backing global memory by assuming that the elements
--- of the array are equal to the appropriate bytes.
-assumeMemArr ::
-     forall sym bak w t st fs m f
-   . ( CB.IsSymBackend sym bak
-     , sym ~ WEB.ExprBuilder t st fs
+-- | Generate an 'AB.Assumption' that particular elements of the array backing
+-- global memory are equal to the appropriate bytes. This function does not add
+-- the 'AB.Assumption' to the backend, so it is the responsibility of the caller
+-- to decide how to assume it.
+memArrEqualityAssumption ::
+     forall sym w t st fs m f
+   . ( sym ~ WEB.ExprBuilder t st fs
      , MC.MemWidth w
      , MonadIO m
      , FWI.FoldableWithIndex Int f
      )
-  => bak
+  => sym
   -> WI.SymArray sym (Ctx.SingleCtx (WI.BaseBVType w)) (WI.BaseBVType 8)
   -> MC.MemWord w
   -> f (WI.SymBV sym 8)
-  -> m ()
-assumeMemArr bak symArray absAddr bytes = do
+  -> m (CB.Assumption sym)
+memArrEqualityAssumption sym symArray absAddr bytes = do
     -- We used to assert the equality of each byte separately.  This ended up
     -- being very slow for large binaries, as it synchronizes the pipe to the
     -- solver after each assertion. Instead, we now encode all of the initial
@@ -297,9 +298,8 @@ assumeMemArr bak symArray absAddr bytes = do
     prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
     let conj = WEA.ConjPred (BoolMap.ConjMap (BoolMap.fromVars [(e, BoolMap.Positive) | e <- initVals]))
     byteEqualityAssertion <- liftIO $ WEB.sbMakeExpr sym conj
-    liftIO $ CB.addAssumption bak (CB.GenericAssumption prog_loc desc byteEqualityAssertion)
+    pure $ CB.GenericAssumption prog_loc desc byteEqualityAssertion
   where
-    sym = CB.backendGetSym bak
     w = MC.memWidthNatRepr @w
 
 -- | The 'pleatM' function is 'foldM' with the arguments switched so
