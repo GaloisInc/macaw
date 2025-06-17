@@ -10,7 +10,6 @@ Category:      Language
 Synopsis:      CLI for running macaw-x86-symbolic control-flow graphs
 -- Description:
 
-extra-doc-files: README.md
 extra-source-files:
   test-data/*.cbl
   test-data/*.out.good
