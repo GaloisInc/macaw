@@ -22,7 +22,7 @@ module Data.Macaw.Dwarf
     Dwarf.nextCUContext,
     getCompileUnit,
     dwarfCompileUnits,
-    CompileUnit,
+    CompileUnit(cuRanges),
     cuSubprograms,
     lookupSubprogram,
     dwarfGlobals,
