@@ -23,6 +23,7 @@ module Data.Macaw.Dwarf
     getCompileUnit,
     dwarfCompileUnits,
     CompileUnit,
+    cuRanges,
     cuSubprograms,
     lookupSubprogram,
     dwarfGlobals,
