@@ -163,6 +163,10 @@ newtype Parser r = Parser {unParser :: ReaderT ParserState (WarnT String Identit
       WarnMonad String
     )
 
+instance MonadFail Parser where
+  fail = throwError
+
+
 runParser :: Dwarf.Reader -> Parser r -> (Either String r, [String])
 runParser dr p = runIdentity (runWarnT (runReaderT (unParser p) s))
   where
@@ -1312,7 +1316,7 @@ parseCompileUnit (ctx, d) =
         case mStmtOffset of
           Nothing -> pure (V.empty, [])
           Just offset -> do
-            let lines_bs = dsLineSection contents
+            lines_bs <- dsLineSection contents
             when (fromIntegral offset > BS.length lines_bs) $ do
               throwError "Illegal compile unit debug_line offset"
             let bs = BS.drop (fromIntegral offset) lines_bs
@@ -1331,9 +1335,10 @@ parseCompileUnit (ctx, d) =
                 pure $! [Range lowPC (lowPC + highPC)]
               else do
                 range_offset <- getSingleAttribute DW_AT_ranges attributeAsUInt
+                ranges <- dsRangesSection contents
                 lift $
                   getAddressRangeTable end (drEncoding dr) $
-                    BS.drop (fromIntegral range_offset) $ dsRangesSection contents
+                    BS.drop (fromIntegral range_offset) $ ranges
           else do
             when (hasAttribute DW_AT_high_pc d) $ do
               throwError $ "Unexpected high_pc\n" ++ show d
@@ -1414,17 +1419,11 @@ dwarfCompileUnits end sections = do
 -- dwarfInfoFromElf
 
 -- | Elf informaton
-tryGetElfSection :: Elf.Elf v -> BS.ByteString -> State [String] BS.ByteString
+tryGetElfSection :: Elf.Elf v -> BS.ByteString -> Maybe BS.ByteString
 tryGetElfSection e nm =
   case Elf.findSectionByName nm e of
-    [] -> do
-      let msg = "Could not find " ++ show nm ++ " section."
-      modify $ (:) msg
-      pure $ BS.empty
-    s : r -> do
-      when (not (null r)) $ do
-        let msg = "Found multiple " ++ show nm ++ " sections."
-        modify $ (:) msg
+    [] -> Nothing
+    s : _ -> do
       pure $ Elf.elfSectionData s
 
 -- | Return dwarf information out of an Elf file.
@@ -1437,9 +1436,9 @@ dwarfInfoFromElf e = do
             case Elf.elfData e of
               Elf.ELFDATA2LSB -> LittleEndian
               Elf.ELFDATA2MSB -> BigEndian
-          (sections, bufWarn) = runState (mkSections (tryGetElfSection e)) []
+          sections = mkSections (tryGetElfSection e)
           (cuWarn, cu) = dwarfCompileUnits end sections
-       in (reverse bufWarn ++ cuWarn, cu)
+       in (reverse cuWarn, cu)
 
 -- | This returns all the variables in the given compile units.
 dwarfGlobals :: [CompileUnit] -> [Variable]
