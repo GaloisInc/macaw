@@ -1346,7 +1346,9 @@ parseCompileUnit secs (ctx, d) =
             when (hasAttribute DW_AT_ranges d) $ do
               throwError $ "Unexpected ranges\n" ++ show d
             pure []
-
+      -- The compile unit context already gets updated to use these during a parse
+      ignoreAttribute DW_AT_str_offsets_base
+      ignoreAttribute DW_AT_addr_base
       gnuMacros <- getMaybeAttribute DW_AT_GNU_macros attributeAsUInt
       -- Type map for children
       typeMap <- parseTypeMap Map.empty fileVec
