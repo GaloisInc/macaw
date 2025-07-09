@@ -1296,9 +1296,10 @@ getAddressRangeTable end enc bs = parseGet bs (go [])
         else pure $! reverse prev
 
 parseCompileUnit ::
+  Dwarf.Sections ->
   (CUContext, DIE) ->
   (Either String CompileUnit, [String])
-parseCompileUnit (ctx, d) =
+parseCompileUnit secs (ctx, d) =
   runParser (cuReader ctx) $
     runDIEParser "parseCompileUnit" d $ do
       let contents = cuSections ctx
@@ -1320,7 +1321,7 @@ parseCompileUnit (ctx, d) =
             when (fromIntegral offset > BS.length lines_bs) $ do
               throwError "Illegal compile unit debug_line offset"
             let bs = BS.drop (fromIntegral offset) lines_bs
-            (fileList, lne) <- lift $ parseGet bs (getLNE end tgt)
+            (fileList, lne) <- lift $ parseGet bs (getLNE secs end tgt)
             pure (fmap DwarfFilePath (V.fromList fileList), lne)
 
       ranges <-
@@ -1379,11 +1380,11 @@ parseCompileUnit (ctx, d) =
 ------------------------------------------------------------------------
 -- dwarfCompileUnits
 
-getCompileUnit :: CUContext -> (Either String CompileUnit, [String])
-getCompileUnit ctx =
+getCompileUnit :: Dwarf.Sections -> CUContext -> (Either String CompileUnit, [String])
+getCompileUnit secs ctx =
   case cuFirstDie ctx of
     Left e -> (Left e, [])
-    Right d -> parseCompileUnit (ctx, d)
+    Right d -> parseCompileUnit secs (ctx, d)
 
 firstCUContext :: Endianness -> Dwarf.Sections -> Maybe (Either String CUContext)
 firstCUContext end sections = do
@@ -1408,7 +1409,7 @@ dwarfCompileUnits end sections = do
       go prevWarn cus Nothing = (reverse prevWarn, reverse cus)
       go prevWarn cus (Just (Left e)) = (reverse (e : prevWarn), reverse cus)
       go prevWarn cus (Just (Right ctx)) =
-        case getCompileUnit ctx of
+        case getCompileUnit sections ctx of
           (Left msg, warnings) ->
             go (warnings ++ msg : prevWarn) cus (nextCUContext ctx)
           (Right cu, warnings) ->
