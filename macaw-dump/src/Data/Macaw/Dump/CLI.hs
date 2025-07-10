@@ -35,25 +35,25 @@ command =
   cmdDiscover = do
     Opt.command
       "discover"
-      (Opt.info (CommandDiscover <$> MDD.discoverConfig) (Opt.progDesc "Perform code discovery and print CFGs"))
+      (helperInfo (CommandDiscover <$> MDD.discoverConfig) (Opt.progDesc "Perform code discovery and print CFGs"))
 
   cmdEntryPoints :: Opt.Mod Opt.CommandFields Command
   cmdEntryPoints = do
     Opt.command
       "entry-points"
-      (Opt.info (CommandEntryPoints <$> MDE.entryPointsConfig) (Opt.progDesc "Print entry points"))
+      (helperInfo (CommandEntryPoints <$> MDE.entryPointsConfig) (Opt.progDesc "Print entry points"))
 
   cmdMemory :: Opt.Mod Opt.CommandFields Command
   cmdMemory = do
     Opt.command
       "memory"
-      (Opt.info (CommandMemory <$> MDM.memoryConfig) (Opt.progDesc "Print program memory"))
+      (helperInfo (CommandMemory <$> MDM.memoryConfig) (Opt.progDesc "Print program memory"))
 
   cmdPlt :: Opt.Mod Opt.CommandFields Command
   cmdPlt = do
     Opt.command
       "plt"
-      (Opt.info (CommandPlt <$> MDP.pltConfig) (Opt.progDesc "Display PLT stubs"))
+      (helperInfo (CommandPlt <$> MDP.pltConfig) (Opt.progDesc "Display PLT stubs"))
 
 data Cli = Cli
   { cliCommand :: Command
@@ -66,8 +66,8 @@ cli = do
 
 cliInfo :: Opt.ParserInfo Cli
 cliInfo =
-  Opt.info
-    (cli <**> Opt.helper)
+  helperInfo
+    cli
     (  Opt.fullDesc
     <> Opt.header
          "A tool to display internal Macaw data structures"
@@ -75,3 +75,9 @@ cliInfo =
 
 parseCli :: IO Cli
 parseCli = Opt.execParser cliInfo
+
+-- | Helper, not exported
+--
+-- Create a 'Opt.ParserInfo' with a @--help@ option.
+helperInfo :: Opt.Parser a -> Opt.InfoMod a -> Opt.ParserInfo a
+helperInfo parser = Opt.info (parser <**> Opt.helper)
