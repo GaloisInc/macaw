@@ -34,6 +34,33 @@ import What4.Expr.Builder qualified as WEB
 import What4.Interface qualified as WI
 import What4.Protocol.Online qualified as WPO
 
+-- Helper, not exported
+loadString ::
+  ( LCB.IsSymBackend sym bak
+  , LCLM.HasPtrWidth (MC.ArchAddrWidth arch)
+  , LCLM.HasLLVMAnn sym
+  , MC.MemWidth (MC.ArchAddrWidth arch)
+  , ?memOpts :: LCLM.MemOptions
+  ) =>
+  bak ->
+  C.GlobalVar LCLM.Mem ->
+  DMS.MemModelConfig p sym arch LCLM.Mem ->
+  C.SimState p sym (MacawExt arch) rtp f args ->
+  LCLM.LLVMPtr sym (MC.ArchAddrWidth arch) ->
+  -- | Maximum number of characters to read
+  Maybe Int ->
+  LCLMS.ByteChecker (State.StateT (C.SimState p sym (MacawExt arch) rtp f args) IO) sym bak ([a] -> [a]) [a] ->
+  IO ([a], C.SimState p sym (MacawExt arch) rtp f args)
+loadString bak memVar mmConf st0 ptr limit checker = do
+  let loader = macawLoader memVar mmConf
+  mem <- getMem st0 memVar
+  flip State.runStateT st0 $
+    case limit of
+      Nothing -> LCLMS.loadBytes bak mem id ptr loader checker
+      Just l ->
+        let byteChecker = LCLMS.withMaxChars l (\f -> pure (f [])) checker in
+        LCLMS.loadBytes bak mem (id, 0) ptr loader byteChecker
+
 -- | Load a concrete null-terminated string from memory.
 --
 -- The string must be fully concrete. If a maximum number of characters is
@@ -56,15 +83,8 @@ loadConcreteString ::
   Maybe Int ->
   IO ([Word8], C.SimState p sym (MacawExt arch) rtp f args)
 loadConcreteString memVar mmConf st0 ptr limit =
-  C.withBackend (st0 ^. C.stateContext) $ \bak -> do
-    let loader = macawLoader memVar mmConf
-    mem <- getMem st0 memVar
-    flip State.runStateT st0 $
-      case limit of
-        Nothing -> LCLMS.loadBytes bak mem id ptr loader LCLMS.fullyConcreteNullTerminatedString
-        Just l ->
-          let byteChecker = LCLMS.withMaxChars l (\f -> pure (f [])) LCLMS.fullyConcreteNullTerminatedString in
-          LCLMS.loadBytes bak mem (id, 0) ptr loader byteChecker
+  C.withBackend (st0 ^. C.stateContext) $ \bak ->
+    loadString bak memVar mmConf st0 ptr limit LCLMS.fullyConcreteNullTerminatedString
 
 -- | Load a null-terminated string (with a concrete null terminator) from memory.
 --
@@ -92,15 +112,8 @@ loadConcretelyNullTerminatedString ::
   Maybe Int ->
   IO ([WI.SymBV sym 8], C.SimState p sym (MacawExt arch) rtp f args)
 loadConcretelyNullTerminatedString memVar mmConf st0 ptr limit =
-  C.withBackend (st0 ^. C.stateContext) $ \bak -> do
-    let loader = macawLoader memVar mmConf
-    mem <- getMem st0 memVar
-    flip State.runStateT st0 $
-      case limit of
-        Nothing -> LCLMS.loadBytes bak mem id ptr loader LCLMS.concretelyNullTerminatedString
-        Just l ->
-          let byteChecker = LCLMS.withMaxChars l (\f -> pure (f [])) LCLMS.concretelyNullTerminatedString in
-          LCLMS.loadBytes bak mem (id, 0) ptr loader byteChecker
+  C.withBackend (st0 ^. C.stateContext) $ \bak ->
+    loadString bak memVar mmConf st0 ptr limit LCLMS.concretelyNullTerminatedString
 
 -- | Load a null-terminated string from memory.
 --
@@ -131,15 +144,8 @@ loadSymbolicString ::
   -- | Maximum number of characters to read
   Maybe Int ->
   IO ([WI.SymBV sym 8], C.SimState p sym (MacawExt arch) rtp f args)
-loadSymbolicString bak memVar mmConf st0 ptr limit = do
-  let loader = macawLoader memVar mmConf
-  mem <- getMem st0 memVar
-  flip State.runStateT st0 $
-    case limit of
-      Nothing -> LCLMS.loadBytes bak mem id ptr loader LCLMS.nullTerminatedString
-      Just l ->
-        let byteChecker = LCLMS.withMaxChars l (\f -> pure (f [])) LCLMS.nullTerminatedString in
-        LCLMS.loadBytes bak mem (id, 0) ptr loader byteChecker
+loadSymbolicString bak memVar mmConf st0 ptr limit =
+  loadString bak memVar mmConf st0 ptr limit LCLMS.nullTerminatedString
 
 ---------------------------------------------------------------------
 -- * Low-level string loading primitives
