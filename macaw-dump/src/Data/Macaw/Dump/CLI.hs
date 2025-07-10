@@ -66,8 +66,8 @@ cli = do
 
 cliInfo :: Opt.ParserInfo Cli
 cliInfo =
-  Opt.info
-    (cli <**> Opt.helper)
+  helperInfo
+    cli
     (  Opt.fullDesc
     <> Opt.header
          "A tool to display internal Macaw data structures"
@@ -75,3 +75,9 @@ cliInfo =
 
 parseCli :: IO Cli
 parseCli = Opt.execParser cliInfo
+
+-- | Helper, not exported
+--
+-- Create a 'Opt.ParserInfo' with a @--help@ option.
+helperInfo :: Opt.Parser a -> Opt.InfoMod a -> Opt.ParserInfo a
+helperInfo parser = Opt.info (parser <**> Opt.helper)
