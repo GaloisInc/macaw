@@ -7,7 +7,9 @@
 
 -- | Manipulating C-style null-terminated strings
 module Data.Macaw.Symbolic.Memory.Strings (
+  loadConcreteString,
   loadConcretelyNullTerminatedString,
+  loadSymbolicString,
   -- * Low-level string loading primitives
   macawLoader,
 ) where
@@ -21,12 +23,48 @@ import Data.Macaw.Symbolic (MacawExt)
 import Data.Macaw.Symbolic qualified as DMS
 import Data.Macaw.Symbolic.MemOps (getMem)
 import Data.Parameterized.NatRepr qualified as NatRepr
-import GHC.TypeLits (type (<=))
+import Data.Word (Word8)
+import Lang.Crucible.Backend qualified as LCB
+import Lang.Crucible.Backend.Online qualified as LCBO
 import Lang.Crucible.LLVM.MemModel qualified as LCLM
 import Lang.Crucible.LLVM.MemModel.Strings qualified as LCLMS
 import Lang.Crucible.Simulator qualified as C
 import Lang.Crucible.Simulator.ExecutionTree qualified as C
+import What4.Expr.Builder qualified as WEB
 import What4.Interface qualified as WI
+import What4.Protocol.Online qualified as WPO
+
+-- | Load a concrete null-terminated string from memory.
+--
+-- The string must be fully concrete. If a maximum number of characters is
+-- provided, no more than that number of characters will be read. In either
+-- case, 'loadConcreteString' will stop reading if it encounters a null
+-- terminator.
+--
+-- c.f. 'LCLMS.loadString', which does the same thing for LLVM.
+loadConcreteString ::
+  ( LCLM.HasPtrWidth (MC.ArchAddrWidth arch)
+  , LCLM.HasLLVMAnn sym
+  , MC.MemWidth (MC.ArchAddrWidth arch)
+  , ?memOpts :: LCLM.MemOptions
+  ) =>
+  C.GlobalVar LCLM.Mem ->
+  DMS.MemModelConfig p sym arch LCLM.Mem ->
+  C.SimState p sym (MacawExt arch) rtp f args ->
+  LCLM.LLVMPtr sym (MC.ArchAddrWidth arch) ->
+  -- | Maximum number of characters to read
+  Maybe Int ->
+  IO ([Word8], C.SimState p sym (MacawExt arch) rtp f args)
+loadConcreteString memVar mmConf st0 ptr limit =
+  C.withBackend (st0 ^. C.stateContext) $ \bak -> do
+    let loader = macawLoader memVar mmConf
+    mem <- getMem st0 memVar
+    flip State.runStateT st0 $
+      case limit of
+        Nothing -> LCLMS.loadBytes bak mem id ptr loader LCLMS.fullyConcreteNullTerminatedString
+        Just l ->
+          let byteChecker = LCLMS.withMaxChars l (\f -> pure (f [])) LCLMS.fullyConcreteNullTerminatedString in
+          LCLMS.loadBytes bak mem (id, 0) ptr loader byteChecker
 
 -- | Load a null-terminated string (with a concrete null terminator) from memory.
 --
@@ -63,6 +101,45 @@ loadConcretelyNullTerminatedString memVar mmConf st0 ptr limit =
         Just l ->
           let byteChecker = LCLMS.withMaxChars l (\f -> pure (f [])) LCLMS.concretelyNullTerminatedString in
           LCLMS.loadBytes bak mem (id, 0) ptr loader byteChecker
+
+-- | Load a null-terminated string from memory.
+--
+-- Consults an SMT solver to check if any of the loaded bytes are known to be
+-- null (0). If a maximum number of characters is provided, no more than that
+-- number of charcters will be read. In either case, 'loadSymbolicString' will
+-- stop reading if it encounters a null terminator.
+--
+-- Note that the loaded string may actually be smaller than the returned list if
+-- any of the symbolic bytes are equal to 0.
+--
+-- c.f. 'LCLMS.loadSymbolicString', which does the same thing for LLVM.
+loadSymbolicString ::
+  ( LCLM.HasPtrWidth (MC.ArchAddrWidth arch)
+  , LCLM.HasLLVMAnn sym
+  , MC.MemWidth (MC.ArchAddrWidth arch)
+  , LCB.IsSymBackend sym bak
+  , sym ~ WEB.ExprBuilder scope st fs
+  , bak ~ LCBO.OnlineBackend solver scope st fs
+  , WPO.OnlineSolver solver
+  , ?memOpts :: LCLM.MemOptions
+  ) =>
+  bak ->
+  C.GlobalVar LCLM.Mem ->
+  DMS.MemModelConfig p sym arch LCLM.Mem ->
+  C.SimState p sym (MacawExt arch) rtp f args ->
+  LCLM.LLVMPtr sym (MC.ArchAddrWidth arch) ->
+  -- | Maximum number of characters to read
+  Maybe Int ->
+  IO ([WI.SymBV sym 8], C.SimState p sym (MacawExt arch) rtp f args)
+loadSymbolicString bak memVar mmConf st0 ptr limit = do
+  let loader = macawLoader memVar mmConf
+  mem <- getMem st0 memVar
+  flip State.runStateT st0 $
+    case limit of
+      Nothing -> LCLMS.loadBytes bak mem id ptr loader LCLMS.nullTerminatedString
+      Just l ->
+        let byteChecker = LCLMS.withMaxChars l (\f -> pure (f [])) LCLMS.nullTerminatedString in
+        LCLMS.loadBytes bak mem (id, 0) ptr loader byteChecker
 
 ---------------------------------------------------------------------
 -- * Low-level string loading primitives
