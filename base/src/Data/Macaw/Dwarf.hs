@@ -163,6 +163,10 @@ newtype Parser r = Parser {unParser :: ReaderT ParserState (WarnT String Identit
       WarnMonad String
     )
 
+instance MonadFail Parser where
+  fail = throwError
+
+
 runParser :: Dwarf.Reader -> Parser r -> (Either String r, [String])
 runParser dr p = runIdentity (runWarnT (runReaderT (unParser p) s))
   where
@@ -1292,9 +1296,10 @@ getAddressRangeTable end enc bs = parseGet bs (go [])
         else pure $! reverse prev
 
 parseCompileUnit ::
+  Dwarf.Sections ->
   (CUContext, DIE) ->
   (Either String CompileUnit, [String])
-parseCompileUnit (ctx, d) =
+parseCompileUnit secs (ctx, d) =
   runParser (cuReader ctx) $
     runDIEParser "parseCompileUnit" d $ do
       let contents = cuSections ctx
@@ -1312,11 +1317,11 @@ parseCompileUnit (ctx, d) =
         case mStmtOffset of
           Nothing -> pure (V.empty, [])
           Just offset -> do
-            let lines_bs = dsLineSection contents
+            lines_bs <- dsLineSection contents
             when (fromIntegral offset > BS.length lines_bs) $ do
               throwError "Illegal compile unit debug_line offset"
             let bs = BS.drop (fromIntegral offset) lines_bs
-            (fileList, lne) <- lift $ parseGet bs (getLNE end tgt)
+            (fileList, lne) <- lift $ parseGet bs (getLNE secs end tgt)
             pure (fmap DwarfFilePath (V.fromList fileList), lne)
 
       ranges <-
@@ -1331,16 +1336,19 @@ parseCompileUnit (ctx, d) =
                 pure $! [Range lowPC (lowPC + highPC)]
               else do
                 range_offset <- getSingleAttribute DW_AT_ranges attributeAsUInt
+                ranges <- dsRangesSection contents
                 lift $
                   getAddressRangeTable end (drEncoding dr) $
-                    BS.drop (fromIntegral range_offset) $ dsRangesSection contents
+                    BS.drop (fromIntegral range_offset) ranges
           else do
             when (hasAttribute DW_AT_high_pc d) $ do
               throwError $ "Unexpected high_pc\n" ++ show d
             when (hasAttribute DW_AT_ranges d) $ do
               throwError $ "Unexpected ranges\n" ++ show d
             pure []
-
+      -- The compile unit context already gets updated to use these during a parse
+      ignoreAttribute DW_AT_str_offsets_base
+      ignoreAttribute DW_AT_addr_base
       gnuMacros <- getMaybeAttribute DW_AT_GNU_macros attributeAsUInt
       -- Type map for children
       typeMap <- parseTypeMap Map.empty fileVec
@@ -1374,11 +1382,11 @@ parseCompileUnit (ctx, d) =
 ------------------------------------------------------------------------
 -- dwarfCompileUnits
 
-getCompileUnit :: CUContext -> (Either String CompileUnit, [String])
-getCompileUnit ctx =
+getCompileUnit :: Dwarf.Sections -> CUContext -> (Either String CompileUnit, [String])
+getCompileUnit secs ctx =
   case cuFirstDie ctx of
     Left e -> (Left e, [])
-    Right d -> parseCompileUnit (ctx, d)
+    Right d -> parseCompileUnit secs (ctx, d)
 
 firstCUContext :: Endianness -> Dwarf.Sections -> Maybe (Either String CUContext)
 firstCUContext end sections = do
@@ -1403,7 +1411,7 @@ dwarfCompileUnits end sections = do
       go prevWarn cus Nothing = (reverse prevWarn, reverse cus)
       go prevWarn cus (Just (Left e)) = (reverse (e : prevWarn), reverse cus)
       go prevWarn cus (Just (Right ctx)) =
-        case getCompileUnit ctx of
+        case getCompileUnit sections ctx of
           (Left msg, warnings) ->
             go (warnings ++ msg : prevWarn) cus (nextCUContext ctx)
           (Right cu, warnings) ->
@@ -1414,17 +1422,13 @@ dwarfCompileUnits end sections = do
 -- dwarfInfoFromElf
 
 -- | Elf informaton
-tryGetElfSection :: Elf.Elf v -> BS.ByteString -> State [String] BS.ByteString
+tryGetElfSection :: Elf.Elf v -> BS.ByteString -> Maybe BS.ByteString
 tryGetElfSection e nm =
   case Elf.findSectionByName nm e of
-    [] -> do
-      let msg = "Could not find " ++ show nm ++ " section."
-      modify $ (:) msg
-      pure $ BS.empty
-    s : r -> do
-      when (not (null r)) $ do
-        let msg = "Found multiple " ++ show nm ++ " sections."
-        modify $ (:) msg
+    [] -> Nothing
+    -- We would like to warn about duplicate sections in this function
+    --  but are restricted by the galois-dwarf API: https://github.com/GaloisInc/dwarf/issues/23
+    s : _ -> do
       pure $ Elf.elfSectionData s
 
 -- | Return dwarf information out of an Elf file.
@@ -1437,9 +1441,9 @@ dwarfInfoFromElf e = do
             case Elf.elfData e of
               Elf.ELFDATA2LSB -> LittleEndian
               Elf.ELFDATA2MSB -> BigEndian
-          (sections, bufWarn) = runState (mkSections (tryGetElfSection e)) []
+          sections = mkSections (tryGetElfSection e)
           (cuWarn, cu) = dwarfCompileUnits end sections
-       in (reverse bufWarn ++ cuWarn, cu)
+       in (reverse cuWarn, cu)
 
 -- | This returns all the variables in the given compile units.
 dwarfGlobals :: [CompileUnit] -> [Variable]
