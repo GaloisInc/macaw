@@ -1622,20 +1622,18 @@ elfStaticSymbolTable :: Integral (ElfWordType w)
                      => Elf.ElfHeaderInfo w
                      -> Maybe (V.Vector (Elf.SymtabEntry BS.ByteString (ElfWordType w)))
 elfStaticSymbolTable elf = do
-  symtab <- Elf.decodeHeaderSymtab elf
-  case symtab of
+  case Elf.decodeHeaderSymtabLenient elf of
     Left _ -> Nothing
-    Right v -> Just (Elf.symtabEntries v)
+    Right mbSymtab -> Elf.symtabEntries <$> mbSymtab
 
 -- | Find and get dynamic symbol table entries from an ELF binary.
 elfDynamicSymbolTable :: Integral (ElfWordType w)
                       => Elf.ElfHeaderInfo w
                       -> Maybe (V.Vector (Elf.SymtabEntry BS.ByteString (ElfWordType w)))
 elfDynamicSymbolTable elf = do
-  symtab <- Elf.decodeHeaderDynsym elf
-  case symtab of
+  case Elf.decodeHeaderDynsymLenient elf of
     Left _ -> Nothing
-    Right v -> Just (Elf.symtabEntries v)
+    Right mbDynsym -> Elf.symtabEntries <$> mbDynsym
 
 -- | Load allocated Elf sections into memory.
 --
