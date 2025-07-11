@@ -1339,7 +1339,7 @@ parseCompileUnit secs (ctx, d) =
                 ranges <- dsRangesSection contents
                 lift $
                   getAddressRangeTable end (drEncoding dr) $
-                    BS.drop (fromIntegral range_offset) $ ranges
+                    BS.drop (fromIntegral range_offset) ranges
           else do
             when (hasAttribute DW_AT_high_pc d) $ do
               throwError $ "Unexpected high_pc\n" ++ show d
