@@ -63,20 +63,20 @@ aarch32EntryPoints loadedBinary =
     mem = MBL.memoryImage loadedBinary
     addr = MM.memWord (offset + fromIntegral (EE.headerEntry (EE.header (elf (MBL.binaryFormatData loadedBinary)))))
     elfData = elf (MBL.binaryFormatData loadedBinary)
-    staticSyms = symtabEntriesList $ EE.decodeHeaderSymtab elfData
-    dynSyms = symtabEntriesList $ EE.decodeHeaderDynsym elfData
+    staticSyms = symtabEntriesList $ EE.decodeHeaderSymtabLenient elfData
+    dynSyms = symtabEntriesList $ EE.decodeHeaderDynsymLenient elfData
     symbols = [ MM.memWord (offset + fromIntegral (EE.steValue entry))
               | entry <- staticSyms ++ dynSyms
               , EE.steType entry == EE.STT_FUNC
               ]
 
-    symtabEntriesList :: Maybe (Either EE.SymtabError (EE.Symtab 32))
+    symtabEntriesList :: Either EE.SymtabError (Maybe (EE.Symtab 32))
                       -> [EE.SymtabEntry BS.ByteString Word32]
     symtabEntriesList symtab =
       case symtab of
-        Nothing -> []
-        Just (Left _) -> []
-        Just (Right st) -> F.toList (EE.symtabEntries st)
+        Left _ -> []
+        Right Nothing -> []
+        Right (Just st) -> F.toList (EE.symtabEntries st)
 
 loadAArch32Binary :: (X.MonadThrow m)
                   => LC.LoadOptions

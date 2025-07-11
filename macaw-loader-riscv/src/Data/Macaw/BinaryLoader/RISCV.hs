@@ -73,16 +73,16 @@ riscvEntryPoints loadedBinary =
     elfData = elf (MBL.binaryFormatData loadedBinary)
     elfHeader = EE.header elfData
     elfClass = EE.headerClass elfHeader
-    staticSyms = symtabEntriesList $ EE.decodeHeaderSymtab elfData
-    dynSyms = symtabEntriesList $ EE.decodeHeaderDynsym elfData
+    staticSyms = symtabEntriesList $ EE.decodeHeaderSymtabLenient elfData
+    dynSyms = symtabEntriesList $ EE.decodeHeaderDynsymLenient elfData
 
-    symtabEntriesList :: Maybe (Either EE.SymtabError (EE.Symtab (G.RVWidth rv)))
+    symtabEntriesList :: Either EE.SymtabError (Maybe (EE.Symtab (G.RVWidth rv)))
                       -> [EE.SymtabEntry BS.ByteString (EE.ElfWordType (G.RVWidth rv))]
     symtabEntriesList symtab =
       case symtab of
-        Nothing -> []
-        Just (Left _) -> []
-        Just (Right st) -> F.toList (EE.symtabEntries st)
+        Left _ -> []
+        Right Nothing -> []
+        Right (Just st) -> F.toList (EE.symtabEntries st)
 
 loadRiscvBinary :: forall m rv
                  . (X.MonadThrow m)

@@ -62,20 +62,20 @@ x86EntryPoints loadedBinary =
     mem = BL.memoryImage loadedBinary
     addrWord = MM.memWord (offset + (fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary))))))
     elfData = elf (BL.binaryFormatData loadedBinary)
-    staticSyms = symtabEntriesList $ E.decodeHeaderSymtab elfData
-    dynSyms = symtabEntriesList $ E.decodeHeaderDynsym elfData
+    staticSyms = symtabEntriesList $ E.decodeHeaderSymtabLenient elfData
+    dynSyms = symtabEntriesList $ E.decodeHeaderDynsymLenient elfData
     symbolWords = [ MM.memWord (offset + E.steValue entry)
                   | entry <- staticSyms ++ dynSyms
                   , E.steType entry == E.STT_FUNC
                   ]
 
-    symtabEntriesList :: Maybe (Either E.SymtabError (E.Symtab 64))
+    symtabEntriesList :: Either E.SymtabError (Maybe (E.Symtab 64))
                       -> [E.SymtabEntry BS.ByteString Word64]
     symtabEntriesList symtab =
       case symtab of
-        Nothing -> []
-        Just (Left _) -> []
-        Just (Right st) -> F.toList (E.symtabEntries st)
+        Left _ -> []
+        Right Nothing -> []
+        Right (Just st) -> F.toList (E.symtabEntries st)
 
 loadX86Binary :: (X.MonadThrow m)
               => LC.LoadOptions

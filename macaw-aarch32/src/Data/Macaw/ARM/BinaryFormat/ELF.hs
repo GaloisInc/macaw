@@ -21,7 +21,7 @@ getElfSections e =
 getELFSymbols :: (Show (E.ElfWordType w), Data.Bits.Bits (E.ElfWordType w), Integral (E.ElfWordType w)) => E.ElfHeaderInfo w -> Doc ann
 getELFSymbols elf =
   case E.decodeHeaderSymtab elf of
-    Nothing -> emptyDoc
-    Just (Left e) -> error (show e)
-    Just (Right symtab) ->
+    Left E.NoSymtabs -> emptyDoc
+    Left e -> error (show e)
+    Right symtab ->
       E.ppSymbolTableEntries (toList (E.symtabEntries symtab))
