@@ -1977,20 +1977,16 @@ resolveElfContents :: LoadOptions
 resolveElfContents loadOpts elf = do
   let hdr = Elf.header elf
   let regIdx = adjustedLoadRegionIndex (Elf.headerType hdr) loadOpts
-  case Elf.headerType hdr of
-    Elf.ET_REL -> do
-      (mem, funcSymbols, warnings, symErrs) <- memoryForElf loadOpts elf
-      pure (fmap show warnings ++ fmap show symErrs, mem, Nothing, funcSymbols)
-    Elf.ET_EXEC -> do
-      (mem, funcSymbols, warnings, symErrs) <- memoryForElf loadOpts elf
-      let (entryWarn, mentry) = getElfEntry loadOpts mem regIdx hdr
-      Right (fmap show warnings ++ fmap show symErrs ++ entryWarn, mem, mentry, funcSymbols)
-    Elf.ET_DYN -> do
-      -- This is a shared library or position-independent executable.
-      (mem, funcSymbols, warnings, symErrs) <- memoryForElf loadOpts elf
-      let (entryWarn, mentry) = getElfEntry loadOpts mem regIdx hdr
-      pure (fmap show warnings ++ fmap show symErrs ++ entryWarn, mem, mentry, funcSymbols)
-    Elf.ET_CORE ->
-      Left "No support for loading core files (Macaw)."
-    tp ->
-      Left $ "No support for loading ELF files with type " ++ show tp ++ " (Macaw)."
+  (mem, funcSymbols, warnings, symErrs) <- memoryForElf loadOpts elf
+  let (entryWarn, mentry)
+        | hasEntryPoint (Elf.headerType hdr)
+        = getElfEntry loadOpts mem regIdx hdr
+        | otherwise
+        = ([], Nothing)
+  pure (fmap show warnings ++ fmap show symErrs ++ entryWarn, mem, mentry, funcSymbols)
+  where
+    -- Does an ELF file's type have an entry point?
+    hasEntryPoint :: Elf.ElfType -> Bool
+    hasEntryPoint Elf.ET_EXEC = True
+    hasEntryPoint Elf.ET_DYN = True
+    hasEntryPoint _ = False
