@@ -2,6 +2,9 @@
 
 ## Next
 
+- Added a new module `Data.Macaw.Symbolic.Memory.Strings` for manipulating
+  C-style null-terminated strings.
+
 ### Features
 
 ### API Changes
