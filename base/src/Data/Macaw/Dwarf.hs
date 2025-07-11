@@ -1426,6 +1426,8 @@ tryGetElfSection :: Elf.Elf v -> BS.ByteString -> Maybe BS.ByteString
 tryGetElfSection e nm =
   case Elf.findSectionByName nm e of
     [] -> Nothing
+    -- We would like to warn about duplicate sections in this function
+    --  but are restricted by the galois-dwarf API: https://github.com/GaloisInc/dwarf/issues/23
     s : _ -> do
       pure $ Elf.elfSectionData s
 
