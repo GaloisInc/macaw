@@ -1,3 +1,4 @@
+{-# LANGUAGE  ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -16,6 +17,9 @@ module Data.Macaw.Symbolic.Memory.Common
   , defaultGlobalMemoryHooks
 
   , mkGlobalPointerValidityPredCommon
+  , MacawProcessAssertion
+  , MacawError(..)
+  , ignoreMacawAssertions
   , mapRegionPointersCommon
   , populateMemChunkBytes
   , memArrEqualityAssumption
@@ -112,6 +116,21 @@ defaultGlobalMemoryHooks =
       return (error ("SymbolicRef SegmentRanges are not supported yet: " ++ show r))
     }
 
+
+data MacawError sym where 
+  UnmappedGlobalMemoryAccess :: CS.RegValue sym (CL.LLVMPointerType w) -> MacawError sym
+
+-- | Given a safety predicate and a description of the error it represents,
+-- return a new predicate (and possibly perform additional side-effects, such as
+-- recording information about the predicate).
+type MacawProcessAssertion sym
+  = (?processMacawAssert :: sym -> WI.Pred sym -> MacawError sym -> IO (WI.Pred sym))
+
+
+ignoreMacawAssertions :: sym -> WI.Pred sym -> MacawError sym -> IO (WI.Pred sym)
+ignoreMacawAssertions _ p _  = pure p
+
+
 -- | The shared implementation for the @mkGlobalPointerValidityPred@ function in
 -- the default memory model ("Data.Macaw.Symbolic.Memory") and the lazy memory
 -- model ("Data.Macaw.Symbolic.Memory.Lazy").
@@ -119,10 +138,11 @@ mkGlobalPointerValidityPredCommon ::
      forall sym w
    . ( CB.IsSymInterface sym
      , MC.MemWidth w
+     , MacawProcessAssertion sym
      )
   => IM.IntervalMap (MC.MemWord w) CL.Mutability
   -> MS.MkGlobalPointerValidityAssertion sym w
-mkGlobalPointerValidityPredCommon tbl = \sym puse mcond ptr -> do
+mkGlobalPointerValidityPredCommon tbl sym puse mcond ptr = do
   let w = MC.memWidthNatRepr @w
 
   -- If this is a write, the pointer cannot be in an immutable range (so just
@@ -170,9 +190,10 @@ mkGlobalPointerValidityPredCommon tbl = \sym puse mcond ptr -> do
   case WI.asNat ptrBase of
     Just 0 -> do
       p <- mkPred ptrOff
+      p' <- ?processMacawAssert sym p (UnmappedGlobalMemoryAccess ptrVal)
       let msg = printf "%s outside of static memory range (known BlockID 0): %s" (show (MS.pointerUseTag puse)) (show (WI.printSymExpr ptrOff))
       let loc = MS.pointerUseLocation puse
-      let assertion = CB.LabeledPred p (CS.SimError loc (CS.GenericSimError msg))
+      let assertion = CB.LabeledPred p' (CS.SimError loc (CS.GenericSimError msg))
       return (Just assertion)
     Just _ -> return Nothing
     Nothing -> do
@@ -182,10 +203,13 @@ mkGlobalPointerValidityPredCommon tbl = \sym puse mcond ptr -> do
       zeroNat <- WI.natLit sym 0
       isZeroBase <- WI.natEq sym zeroNat ptrBase
       p' <- WI.itePred sym isZeroBase p (WI.truePred sym)
+      p'' <- ?processMacawAssert sym p' (UnmappedGlobalMemoryAccess ptrVal)
       let msg = printf "%s outside of static memory range (unknown BlockID): %s" (show (MS.pointerUseTag puse)) (show (WI.printSymExpr ptrOff))
       let loc = MS.pointerUseLocation puse
-      let assertion = CB.LabeledPred p' (CS.SimError loc (CS.GenericSimError msg))
+      let assertion = CB.LabeledPred p'' (CS.SimError loc (CS.GenericSimError msg))
       return (Just assertion)
+
+
 
 -- | The shared implementation for the @mapRegionPointers@ function in the
 -- default memory model ("Data.Macaw.Symbolic.Memory") and the lazy memory model

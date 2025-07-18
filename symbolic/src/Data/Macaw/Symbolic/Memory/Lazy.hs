@@ -119,6 +119,7 @@ memModelConfig ::
      , 16 <= w
      , CL.HasLLVMAnn sym
      , ?memOpts :: CL.MemOptions
+     , MSMC.MacawProcessAssertion sym
      )
   => bak
   -> MemPtrTable sym w
@@ -782,6 +783,7 @@ mkGlobalPointerValidityPred ::
      forall sym w
    . ( CB.IsSymInterface sym
      , MC.MemWidth w
+     , MSMC.MacawProcessAssertion sym
      )
   => MemPtrTable sym w
   -> MS.MkGlobalPointerValidityAssertion sym w
