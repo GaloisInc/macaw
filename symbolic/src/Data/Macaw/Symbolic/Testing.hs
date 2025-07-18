@@ -105,6 +105,7 @@ import qualified What4.ProgramLoc as WPL
 import qualified What4.Protocol.Online as WPO
 import qualified What4.SatResult as WSR
 import qualified What4.Solver as WS
+import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 
 data TestingException = ELFResolutionError String
   deriving (Show)
@@ -460,6 +461,7 @@ simulateAndVerify :: forall arch sym bak ids w solver scope st fs
 simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmPreset extractor dfi =
   MS.withArchConstraints archVals $ do
     halloc <- CFH.newHandleAllocator
+    let ?processMacawAssert = MSMC.ignoreMacawAssertions
     let ?recordLLVMAnnotation = \_ _ _ -> return ()
 
     -- Initialize memory
@@ -544,6 +546,7 @@ initialMem ::
   , bak ~ CBO.OnlineBackend solver scope st fs
   , WPO.OnlineSolver solver
   , ?memOpts :: CLM.MemOptions
+  , MSMC.MacawProcessAssertion sym
   ) =>
   BinariesInfo arch ->
   bak ->
@@ -575,6 +578,7 @@ lazyInitialMem ::
   , WPO.OnlineSolver solver
   , ?memOpts :: CLM.MemOptions
   , MS.HasMacawLazySimulatorState p sym w
+  , MSMC.MacawProcessAssertion sym
   ) =>
   BinariesInfo arch ->
   bak ->

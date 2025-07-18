@@ -124,6 +124,8 @@ module Data.Macaw.Symbolic.Memory (
   newGlobalMemoryWith,
   newMergedGlobalMemoryWith,
   MSMC.MemoryModelContents(..),
+  MSMC.MacawProcessAssertion,
+  MSMC.ignoreMacawAssertions,
   mkGlobalPointerValidityPred,
   mapRegionPointers
   ) where
@@ -174,6 +176,7 @@ memModelConfig ::
      , 16 <= w
      , CL.HasLLVMAnn sym
      , ?memOpts :: CL.MemOptions
+     , MSMC.MacawProcessAssertion sym
      )
   => bak
   -> MemPtrTable sym w
@@ -496,6 +499,7 @@ populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
 mkGlobalPointerValidityPred :: forall sym w
                              . ( CB.IsSymInterface sym
                                , MC.MemWidth w
+                               , MSMC.MacawProcessAssertion sym
                                )
                             => MemPtrTable sym w
                             -> MS.MkGlobalPointerValidityAssertion sym w
