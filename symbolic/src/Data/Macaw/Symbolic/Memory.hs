@@ -125,6 +125,7 @@ module Data.Macaw.Symbolic.Memory (
   newMergedGlobalMemoryWith,
   MSMC.MemoryModelContents(..),
   MSMC.MacawProcessAssertion,
+  MSMC.MacawError(..),
   MSMC.ignoreMacawAssertions,
   mkGlobalPointerValidityPred,
   mapRegionPointers
