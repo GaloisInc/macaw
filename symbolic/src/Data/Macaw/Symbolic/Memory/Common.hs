@@ -118,7 +118,7 @@ defaultGlobalMemoryHooks =
 
 
 data MacawError sym where 
-  UnmappedGlobalMemoryAccess :: CS.RegValue sym (CL.LLVMPointerType w) -> MacawError sym
+  UnmappedGlobalMemoryAccess :: (1 <= w) => CS.RegValue sym (CL.LLVMPointerType w) -> MacawError sym
 
 -- | Given a safety predicate and a description of the error it represents,
 -- return a new predicate (and possibly perform additional side-effects, such as
