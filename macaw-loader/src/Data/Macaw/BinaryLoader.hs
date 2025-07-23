@@ -9,6 +9,7 @@ module Data.Macaw.BinaryLoader (
   BinaryLoader(..),
   LoadedBinary(..),
   BinaryRepr(..),
+  RawBin(..),
   addressWidth
   ) where
 
@@ -23,13 +24,17 @@ import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.NatRepr as NR
 
 
+newtype RawBin = RawBin BS.ByteString
+
 data BinaryRepr binFmt where
   Elf32Repr :: BinaryRepr (E.ElfHeaderInfo 32)
   Elf64Repr :: BinaryRepr (E.ElfHeaderInfo 64)
+  RawBinary :: BinaryRepr RawBin
 
 instance PC.TestEquality BinaryRepr where
   testEquality Elf32Repr Elf32Repr = Just PC.Refl
   testEquality Elf64Repr Elf64Repr = Just PC.Refl
+  testEquality RawBinary RawBinary = Just PC.Refl
   testEquality _ _ = Nothing
 
 data LoadedBinary arch binFmt =
