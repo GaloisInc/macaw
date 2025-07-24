@@ -11,7 +11,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Data.Macaw.BinaryLoader.Raw (RawBinLoadException(..)) where
+module Data.Macaw.BinaryLoader.Raw (RawBinLoadException (..)) where
 
 import Control.Monad.Catch (MonadThrow (throwM))
 import qualified Data.ByteString as BS
@@ -29,9 +29,11 @@ segFromRawBS :: (MM.MemWidth w, Monad m) => BS.ByteString -> Integer -> m (MM.Me
 segFromRawBS bs loadBase =
     let wordBase = fromIntegral loadBase
         sz = fromIntegral (BS.length bs)
-     in MM.memSegment Map.empty 0 0 Nothing wordBase MM.execute bs sz
+        baseRegionIndex = 0
+        segmentOffset = 0
+     in MM.memSegment Map.empty baseRegionIndex segmentOffset Nothing wordBase MM.execute bs sz
 
-memFromRawBS :: forall w m. (MM.MemWidth w, MonadThrow m, KnownNat w) => BS.ByteString -> Integer -> m (MM.Memory w)
+memFromRawBS :: (MM.MemWidth w, MonadThrow m, KnownNat w) => BS.ByteString -> Integer -> m (MM.Memory w)
 memFromRawBS bs base = do
     let w = MM.addrWidthRepr knownNat
     let emp = MM.emptyMemory w
