@@ -24,7 +24,7 @@ import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.NatRepr as NR
 
 
-newtype RawBin = RawBin BS.ByteString
+data RawBin = RawBin BS.ByteString MM.Endianness
 
 data BinaryRepr binFmt where
   Elf32Repr :: BinaryRepr (E.ElfHeaderInfo 32)

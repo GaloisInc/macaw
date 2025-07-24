@@ -40,18 +40,23 @@ memFromRawBS bs base = do
         Left _ -> throwM OverlappingSegments
         Right mem -> pure mem
 
+{- | Loads a "raw" binary at a fixed offset. Loading a binary in this way assumes that
+it is a position-dependent, statically linked binary. The information parsed from such a
+binary is consequently limited. Entrypoints and symbols do not exist, and the memory will simply
+represent the binary at a fixed base address in a single segment.
+-}
 instance ((MM.MemWidth (MR.ArchAddrWidth arch)), KnownNat (MR.ArchAddrWidth arch)) => (BinaryLoader arch MBL.RawBin) where
     type ArchBinaryData arch MBL.RawBin = ()
     type BinaryFormatData arch MBL.RawBin = ()
     type Diagnostic arch MBL.RawBin = ()
     loadBinary lc bin = do
         let off = LC.loadRegionBaseOffset lc
-        let (MBL.RawBin bs) = bin
+        let (MBL.RawBin bs end) = bin
         mem <- memFromRawBS bs off
         pure
             MBL.LoadedBinary
                 { MBL.memoryImage = mem
-                , MBL.memoryEndianness = MM.LittleEndian
+                , MBL.memoryEndianness = end
                 , MBL.archBinaryData = ()
                 , MBL.binaryFormatData = ()
                 , MBL.loadDiagnostics = []
