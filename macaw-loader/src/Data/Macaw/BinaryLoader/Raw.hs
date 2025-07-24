@@ -11,7 +11,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Data.Macaw.BinaryLoader.RawBinary () where
+module Data.Macaw.BinaryLoader.Raw () where
 
 import Control.Monad.Catch (MonadThrow (throwM))
 import qualified Data.ByteString as BS

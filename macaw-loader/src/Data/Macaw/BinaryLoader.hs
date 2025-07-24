@@ -23,8 +23,10 @@ import qualified Data.Macaw.CFG.AssignRhs as MR
 import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.NatRepr as NR
 
-
-data RawBin = RawBin BS.ByteString MM.Endianness
+-- | A format for raw binaries made up of the contents of memory to 
+-- load and the endianess of memory
+data RawBin = RawBin { contents:: BS.ByteString
+                     , endianess :: MM.Endianness }
 
 data BinaryRepr binFmt where
   Elf32Repr :: BinaryRepr (E.ElfHeaderInfo 32)
