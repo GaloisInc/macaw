@@ -51,12 +51,11 @@ instance ((MM.MemWidth (MR.ArchAddrWidth arch)), KnownNat (MR.ArchAddrWidth arch
     type Diagnostic arch MBL.RawBin = ()
     loadBinary lc bin = do
         let off = LC.loadRegionBaseOffset lc
-        let (MBL.RawBin bs end) = bin
-        mem <- memFromRawBS bs off
+        mem <- memFromRawBS (MBL.rawContents bin) off
         pure
             MBL.LoadedBinary
                 { MBL.memoryImage = mem
-                , MBL.memoryEndianness = end
+                , MBL.memoryEndianness = (MBL.rawEndianess bin)
                 , MBL.archBinaryData = ()
                 , MBL.binaryFormatData = ()
                 , MBL.loadDiagnostics = []
