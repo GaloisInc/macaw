@@ -11,7 +11,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Data.Macaw.BinaryLoader.Raw () where
+module Data.Macaw.BinaryLoader.Raw (RawBinLoadException(..)) where
 
 import Control.Monad.Catch (MonadThrow (throwM))
 import qualified Data.ByteString as BS
@@ -33,11 +33,12 @@ segFromRawBS bs loadBase =
 
 memFromRawBS :: forall w m. (MM.MemWidth w, MonadThrow m, KnownNat w) => BS.ByteString -> Integer -> m (MM.Memory w)
 memFromRawBS bs base = do
-    let x = MM.addrWidthRepr knownNat
-    let emp = MM.emptyMemory x
+    let w = MM.addrWidthRepr knownNat
+    let emp = MM.emptyMemory w
     seg <- segFromRawBS bs base
     case MM.insertMemSegment seg emp of
-        Left _ -> throwM OverlappingSegments
+        -- Should be impossible as we insert a single segment
+        Left (MM.OverlapSegment _ _) -> throwM OverlappingSegments
         Right mem -> pure mem
 
 {- | Loads a "raw" binary at a fixed offset. Loading a binary in this way assumes that
@@ -45,7 +46,7 @@ it is a position-dependent, statically linked binary. The information parsed fro
 binary is consequently limited. Entrypoints and symbols do not exist, and the memory will simply
 represent the binary at a fixed base address in a single segment.
 -}
-instance ((MM.MemWidth (MR.ArchAddrWidth arch)), KnownNat (MR.ArchAddrWidth arch)) => (BinaryLoader arch MBL.RawBin) where
+instance (MM.MemWidth (MR.ArchAddrWidth arch), KnownNat (MR.ArchAddrWidth arch)) => (BinaryLoader arch MBL.RawBin) where
     type ArchBinaryData arch MBL.RawBin = ()
     type BinaryFormatData arch MBL.RawBin = ()
     type Diagnostic arch MBL.RawBin = ()
@@ -67,9 +68,13 @@ instance ((MM.MemWidth (MR.ArchAddrWidth arch)), KnownNat (MR.ArchAddrWidth arch
     entryPoints _ = pure []
     symbolFor _ _ = throwM MissingSymbol
 
+-- | Exceptions for loading a raw binary
 data RawBinLoadException
-    = MissingSymbol
-    | OverlappingSegments
+    = -- | Looked for the symbol at an address where no symbol exists
+      -- for a raw binary no addresses should have symbols
+      MissingSymbol
+    | -- | An error building out segments during loading
+      OverlappingSegments
 
 deriving instance Show RawBinLoadException
 

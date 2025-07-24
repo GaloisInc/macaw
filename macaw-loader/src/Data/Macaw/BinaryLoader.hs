@@ -9,7 +9,7 @@ module Data.Macaw.BinaryLoader (
   BinaryLoader(..),
   LoadedBinary(..),
   BinaryRepr(..),
-  RawBin(..),
+  RawBin(RawBin, rawContents, rawEndianess),
   addressWidth
   ) where
 
@@ -25,8 +25,8 @@ import qualified Data.Parameterized.NatRepr as NR
 
 -- | A format for raw binaries made up of the contents of memory to 
 -- load and the endianess of memory
-data RawBin = RawBin { contents:: BS.ByteString
-                     , endianess :: MM.Endianness }
+data RawBin = RawBin { rawContents:: BS.ByteString
+                     , rawEndianess :: MM.Endianness }
 
 data BinaryRepr binFmt where
   Elf32Repr :: BinaryRepr (E.ElfHeaderInfo 32)
