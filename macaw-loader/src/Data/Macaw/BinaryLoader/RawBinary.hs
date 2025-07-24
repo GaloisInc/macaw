@@ -23,9 +23,6 @@ import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Macaw.Memory.Permissions as MM
 import Data.Macaw.Types (KnownNat, knownNat)
 import qualified Data.Map as Map
-import Data.Parameterized (IxedF' (ixF'))
-import Data.Type.Ord
-import Data.Typeable (Proxy (Proxy))
 import qualified GHC.Exception as X
 
 segFromRawBS :: (MM.MemWidth w, Monad m) => BS.ByteString -> Integer -> m (MM.MemSegment w)
@@ -42,12 +39,6 @@ memFromRawBS bs base = do
     case MM.insertMemSegment seg emp of
         Left _ -> throwM OverlappingSegments
         Right mem -> pure mem
-
--- knownNat
--- seg <- segFromRawBS bs base
--- case MM.insertMemSegment seg MM.emptyMemory of
---    Left _ -> undefined
---    Right _ -> undefined
 
 instance ((MM.MemWidth (MR.ArchAddrWidth arch)), KnownNat (MR.ArchAddrWidth arch)) => (BinaryLoader arch MBL.RawBin) where
     type ArchBinaryData arch MBL.RawBin = ()
