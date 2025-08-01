@@ -189,7 +189,7 @@ smtSolveTransfer ctx slice
         C.SomeCFG cfg -> do
           let executionFeatures = []
           let ?recordLLVMAnnotation = \_ _ _ -> pure ()
-          let ?processMacawAssert = MS.ignoreMacawAssertions
+          let ?processMacawAssert = MS.defaultProcessMacawAssertion
           initialState <- initializeSimulator ctx bak archVals halloc cfg entryBlock
 
           -- Symbolically execute the relevant code in a fresh assumption
