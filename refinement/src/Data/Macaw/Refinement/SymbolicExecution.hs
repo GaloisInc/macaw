@@ -189,6 +189,7 @@ smtSolveTransfer ctx slice
         C.SomeCFG cfg -> do
           let executionFeatures = []
           let ?recordLLVMAnnotation = \_ _ _ -> pure ()
+          let ?processMacawAssert = MS.defaultProcessMacawAssertion
           initialState <- initializeSimulator ctx bak archVals halloc cfg entryBlock
 
           -- Symbolically execute the relevant code in a fresh assumption
@@ -474,6 +475,7 @@ initializeSimulator :: forall m sym bak arch blocks ids tp t st fs
                        , MS.SymArchConstraints arch
                        , CB.IsSymBackend sym bak
                        , LLVM.HasLLVMAnn sym
+                       , MS.MacawProcessAssertion sym
                        , Show (W.SymExpr sym (W.BaseBVType (M.ArchAddrWidth arch)))
                        , sym ~ WE.ExprBuilder t st fs
                        , ?memOpts :: LLVM.MemOptions

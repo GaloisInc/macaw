@@ -61,6 +61,7 @@ withX86Hooks k = do
       ext bak =  do
         let sym = C.backendGetSym bak
         let ?recordLLVMAnnotation = \_ _ _ -> pure ()
+        let ?processMacawAssert = DMS.defaultProcessMacawAssertion
         symFns <- newSymFuns sym
         let elfMem = DMC.emptyMemory DMM.Addr64
         let eFn = x86_64MacawEvalFn symFns DMS.defaultMacawArchStmtExtensionOverride

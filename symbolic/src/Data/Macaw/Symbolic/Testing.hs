@@ -64,6 +64,7 @@ import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MELP
 import qualified Data.Macaw.Memory.LoadCommon as MML
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Memory as MSM
+import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 import qualified Data.Macaw.Symbolic.Memory.Lazy as MSMLazy
 import qualified Data.Macaw.Symbolic.Stack as MSS
 import qualified Data.Macaw.Types as MT
@@ -460,6 +461,7 @@ simulateAndVerify :: forall arch sym bak ids w solver scope st fs
 simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmPreset extractor dfi =
   MS.withArchConstraints archVals $ do
     halloc <- CFH.newHandleAllocator
+    let ?processMacawAssert = MSMC.defaultProcessMacawAssertion
     let ?recordLLVMAnnotation = \_ _ _ -> return ()
 
     -- Initialize memory
@@ -544,6 +546,7 @@ initialMem ::
   , bak ~ CBO.OnlineBackend solver scope st fs
   , WPO.OnlineSolver solver
   , ?memOpts :: CLM.MemOptions
+  , MSMC.MacawProcessAssertion sym
   ) =>
   BinariesInfo arch ->
   bak ->
@@ -575,6 +578,7 @@ lazyInitialMem ::
   , WPO.OnlineSolver solver
   , ?memOpts :: CLM.MemOptions
   , MS.HasMacawLazySimulatorState p sym w
+  , MSMC.MacawProcessAssertion sym
   ) =>
   BinariesInfo arch ->
   bak ->
