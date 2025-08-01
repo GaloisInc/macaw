@@ -50,7 +50,6 @@ import qualified What4.Expr.Builder as WEB
 import qualified What4.Interface as WI
 
 import qualified Data.Macaw.Symbolic as MS
-import Debug.Trace (trace)
 
 -- | A configuration knob controlling how the initial contents of the memory
 -- model are populated
@@ -129,7 +128,7 @@ type MacawProcessAssertion sym
 
 
 ignoreMacawAssertions :: sym -> WI.Pred sym -> MacawError sym -> IO (WI.Pred sym)
-ignoreMacawAssertions _ p _  = trace "Processing with ignore macaw assertion"  (pure p)
+ignoreMacawAssertions _ p _  = pure p
 
 
 -- | The shared implementation for the @mkGlobalPointerValidityPred@ function in
@@ -191,7 +190,7 @@ mkGlobalPointerValidityPredCommon tbl sym puse mcond ptr = do
   case WI.asNat ptrBase of
     Just 0 -> do
       p <- mkPred ptrOff
-      p' <- trace "annotating a unmapped global err?" (?processMacawAssert sym p (UnmappedGlobalMemoryAccess ptrVal))
+      p' <- ?processMacawAssert sym p (UnmappedGlobalMemoryAccess ptrVal)
       let msg = printf "%s outside of static memory range (known BlockID 0): %s" (show (MS.pointerUseTag puse)) (show (WI.printSymExpr ptrOff))
       let loc = MS.pointerUseLocation puse
       let assertion = CB.LabeledPred p' (CS.SimError loc (CS.GenericSimError msg))
