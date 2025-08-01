@@ -299,6 +299,7 @@ mkSymbolicTest testinp = do
               (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy bak CLD.LittleEndian MSM.ConcreteMutable mem
               let lookupFn = MS.unsupportedFunctionCalls "macaw-refinement-tests"
               let lookupSC = MS.unsupportedSyscalls "macaw-refinement-tests"
+              let ?processMacawAssert = MSM.defaultProcessMacawAssertion
               let validityCheck _ _ _ _ = return Nothing
               let mmConf = (MSM.memModelConfig bak memPtrTbl)
                              { MS.lookupFunctionHandle = lookupFn
