@@ -42,6 +42,7 @@ import qualified Data.Macaw.ARM.ARMReg as MAR
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as M
 import qualified Data.Macaw.Symbolic as MS
+import qualified Data.Macaw.Symbolic.Memory as MS
 import qualified Data.Macaw.Symbolic.Testing as MST
 import qualified What4.Config as WC
 import qualified What4.Expr.Builder as WEB
@@ -191,6 +192,7 @@ setupRegsAndMem ::
   , CCE.IsSyntaxExtension ext
   , CB.IsSymBackend sym bak
   , LLVM.HasLLVMAnn sym
+  , MS.MacawProcessAssertion sym
   , sym ~ WEB.ExprBuilder scope st fs
   , bak ~ CBO.OnlineBackend solver scope st fs
   , WPO.OnlineSolver solver
@@ -273,7 +275,7 @@ symExTestSized expected mmPreset exePath saveSMT saveMacaw step ehi archInfo = d
        MS.withArchConstraints archVals $ do
          halloc <- CFH.newHandleAllocator
          let ?recordLLVMAnnotation = \_ _ _ -> return ()
-
+         let ?processMacawAssert = MS.defaultProcessMacawAssertion
          (regs, iMem) <- setupRegsAndMem bak archVals mmPreset binfo
          (memVar, execResult) <-
            MST.simDiscoveredFunction bak execFeatures archVals halloc iMem regs binfo dfi
