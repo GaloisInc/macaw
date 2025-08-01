@@ -64,6 +64,7 @@ import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MELP
 import qualified Data.Macaw.Memory.LoadCommon as MML
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Memory as MSM
+import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 import qualified Data.Macaw.Symbolic.Memory.Lazy as MSMLazy
 import qualified Data.Macaw.Symbolic.Stack as MSS
 import qualified Data.Macaw.Types as MT
@@ -105,7 +106,6 @@ import qualified What4.ProgramLoc as WPL
 import qualified What4.Protocol.Online as WPO
 import qualified What4.SatResult as WSR
 import qualified What4.Solver as WS
-import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 
 data TestingException = ELFResolutionError String
   deriving (Show)
