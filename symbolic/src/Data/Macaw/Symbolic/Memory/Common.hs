@@ -19,7 +19,7 @@ module Data.Macaw.Symbolic.Memory.Common
   , mkGlobalPointerValidityPredCommon
   , MacawProcessAssertion
   , MacawError(..)
-  , ignoreMacawAssertions
+  , defaultProcessMacawAssertions
   , mapRegionPointersCommon
   , populateMemChunkBytes
   , memArrEqualityAssumption
@@ -117,18 +117,25 @@ defaultGlobalMemoryHooks =
     }
 
 
+-- | Describes the type of error a Macaw generated predicate represents if the assertion
+-- is violated. See 'MacawProcessAssertion' for information on how to consume this information 
+-- via a callback.
 data MacawError sym where 
   UnmappedGlobalMemoryAccess :: (1 <= w) => CS.RegValue sym (CL.LLVMPointerType w) -> MacawError sym
 
 -- | Given a safety predicate and a description of the error it represents,
 -- return a new predicate (and possibly perform additional side-effects, such as
--- recording information about the predicate).
+-- recording information about the predicate). Typically the callback will want to
+-- annotate the predicate via 'W4.annotateTerm' so that information about the predicate
+-- can be found later.
 type MacawProcessAssertion sym
   = (?processMacawAssert :: sym -> WI.Pred sym -> MacawError sym -> IO (WI.Pred sym))
 
 
-ignoreMacawAssertions :: sym -> WI.Pred sym -> MacawError sym -> IO (WI.Pred sym)
-ignoreMacawAssertions _ p _  = pure p
+-- | A default 'MacawProcessAssertion' implementation that simply returns the original predicate
+-- with no effect.
+defaultProcessMacawAssertions :: sym -> WI.Pred sym -> MacawError sym -> IO (WI.Pred sym)
+defaultProcessMacawAssertions _ p _  = pure p
 
 
 -- | The shared implementation for the @mkGlobalPointerValidityPred@ function in
