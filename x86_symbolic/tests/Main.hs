@@ -34,7 +34,7 @@ import qualified Test.Tasty.Runners as TTR
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as M
 import qualified Data.Macaw.Symbolic as MS
-import qualified Data.Macaw.Symbolic.Memory as MSM (ignoreMacawAssertions, MacawProcessAssertion)
+import qualified Data.Macaw.Symbolic.Memory as MSM (defaultProcessMacawAssertion, MacawProcessAssertion)
 import qualified Data.Macaw.Symbolic.Testing as MST
 import qualified Data.Macaw.X86 as MX
 import           Data.Macaw.X86.Symbolic ()
@@ -285,7 +285,7 @@ mkSymExTest expected mmPreset exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> T
               MS.withArchConstraints archVals $ do
                 halloc <- CFH.newHandleAllocator
                 let ?recordLLVMAnnotation = \_ _ _ -> return ()
-                let ?processMacawAssert = MSM.ignoreMacawAssertions
+                let ?processMacawAssert = MSM.defaultProcessMacawAssertion
 
                 (regs, iMem) <- setupRegsAndMem bak archVals mmPreset binariesInfo
                 (memVar, execResult) <-
