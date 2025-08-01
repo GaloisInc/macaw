@@ -19,7 +19,7 @@ module Data.Macaw.Symbolic.Memory.Common
   , mkGlobalPointerValidityPredCommon
   , MacawProcessAssertion
   , MacawError(..)
-  , defaultProcessMacawAssertions
+  , defaultProcessMacawAssertion
   , mapRegionPointersCommon
   , populateMemChunkBytes
   , memArrEqualityAssumption
@@ -134,8 +134,8 @@ type MacawProcessAssertion sym
 
 -- | A default 'MacawProcessAssertion' implementation that simply returns the original predicate
 -- with no effect.
-defaultProcessMacawAssertions :: sym -> WI.Pred sym -> MacawError sym -> IO (WI.Pred sym)
-defaultProcessMacawAssertions _ p _  = pure p
+defaultProcessMacawAssertion :: sym -> WI.Pred sym -> MacawError sym -> IO (WI.Pred sym)
+defaultProcessMacawAssertion _ p _  = pure p
 
 
 -- | The shared implementation for the @mkGlobalPointerValidityPred@ function in

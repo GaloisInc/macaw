@@ -126,7 +126,7 @@ module Data.Macaw.Symbolic.Memory (
   MSMC.MemoryModelContents(..),
   MSMC.MacawProcessAssertion,
   MSMC.MacawError(..),
-  MSMC.ignoreMacawAssertions,
+  MSMC.defaultProcessMacawAssertion,
   mkGlobalPointerValidityPred,
   mapRegionPointers
   ) where

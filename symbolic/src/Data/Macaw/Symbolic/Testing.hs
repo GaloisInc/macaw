@@ -461,7 +461,7 @@ simulateAndVerify :: forall arch sym bak ids w solver scope st fs
 simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmPreset extractor dfi =
   MS.withArchConstraints archVals $ do
     halloc <- CFH.newHandleAllocator
-    let ?processMacawAssert = MSMC.ignoreMacawAssertions
+    let ?processMacawAssert = MSMC.defaultProcessMacawAssertion
     let ?recordLLVMAnnotation = \_ _ _ -> return ()
 
     -- Initialize memory
