@@ -118,20 +118,20 @@ ppc32EntryPoints loadedBinary =
     mem = BL.memoryImage loadedBinary
     entryAddr = MM.memWord (offset + fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary)))))
     elfData = elf (BL.binaryFormatData loadedBinary)
-    staticSyms = symtabEntriesList $ E.decodeHeaderSymtab elfData
-    dynSyms = symtabEntriesList $ E.decodeHeaderDynsym elfData
+    staticSyms = symtabEntriesList $ E.decodeHeaderSymtabLenient elfData
+    dynSyms = symtabEntriesList $ E.decodeHeaderDynsymLenient elfData
     symbols = [ MM.memWord (offset + fromIntegral (E.steValue entry))
               | entry <- staticSyms ++ dynSyms
               , E.steType entry == E.STT_FUNC
               ]
 
-    symtabEntriesList :: Maybe (Either E.SymtabError (E.Symtab 32))
+    symtabEntriesList :: Either E.SymtabError (Maybe (E.Symtab 32))
                       -> [E.SymtabEntry BS.ByteString Word32]
     symtabEntriesList symtab =
       case symtab of
-        Nothing -> []
-        Just (Left _) -> []
-        Just (Right st) -> F.toList (E.symtabEntries st)
+        Left _ -> []
+        Right Nothing -> []
+        Right (Just st) -> F.toList (E.symtabEntries st)
 
 loadPPC32Binary
   :: (X.MonadThrow m, MC.ArchAddrWidth PPC32.PPC ~ 32)

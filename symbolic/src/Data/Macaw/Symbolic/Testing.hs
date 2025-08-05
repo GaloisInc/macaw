@@ -253,8 +253,8 @@ runDiscovery mainEHI mainPath toEntryPoints archInfo pltStubInfo = do
       -> EE.ElfHeaderInfo w
       -> [(WF.FunctionName, (EE.SymtabEntry BS.ByteString (EE.ElfWordType w), MM.MemWord w))]
     getDynamicFunAddrs loadOpts ehi =
-      case EE.decodeHeaderDynsym ehi of
-        Just (Right symtab) ->
+      case EE.decodeHeaderDynsymLenient ehi of
+        Right (Just symtab) ->
             EE.elfClassInstances (EE.headerClass (EE.header ehi))
           $ V.toList
           $ V.map (\entry -> ( functionNameFromByteString $ EE.steName entry
