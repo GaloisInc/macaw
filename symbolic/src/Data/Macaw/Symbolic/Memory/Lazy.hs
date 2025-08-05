@@ -35,6 +35,9 @@ module Data.Macaw.Symbolic.Memory.Lazy (
   newGlobalMemoryWith,
   newMergedGlobalMemoryWith,
   MSMC.MemoryModelContents(..),
+  MSMC.MacawProcessAssertion,
+  MSMC.MacawError(..),
+  MSMC.defaultProcessMacawAssertion,
   mkGlobalPointerValidityPred,
   mapRegionPointers
   ) where
