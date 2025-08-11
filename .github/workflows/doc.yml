@@ -21,7 +21,7 @@ jobs:
     strategy:
       matrix:
         # Latest GHC that we build with in the CI workflow
-        ghc: ["9.8.2"]
+        ghc: ["9.10.2"]
         os: [self-hosted]
     permissions:
       contents: read

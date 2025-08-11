@@ -1,3 +1,13 @@
+-- See https://github.com/Happstack/boomerang/issues/12
+allow-newer: boomerang:template-haskell
+-- See https://github.com/GaloisInc/bv-sized-float/issues/8
+allow-newer: bv-sized-float:containers
+-- https://github.com/GaloisInc/grift/issues/13
+allow-newer: grift:containers
+allow-newer: grift:filepath
+-- See https://github.com/travitch/haggle/issues/29
+allow-newer: haggle:primitive
+
 packages: base/
           crucible-macaw-debug/
           macaw-aarch32/
