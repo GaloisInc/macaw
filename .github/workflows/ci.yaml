@@ -27,7 +27,7 @@ jobs:
       matrix:
         # Remember to update the GHC version in the documentation workflow as well
         ghc-ver: ["9.4.8", "9.6.6", "9.8.2"]
-        cabal: [ '3.10.3.0' ]
+        cabal: [ '3.14.2.0' ]
         os: [self-hosted]
       # complete all jobs
       fail-fast: false
