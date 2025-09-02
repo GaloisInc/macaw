@@ -1,8 +1,3 @@
--- See https://github.com/Happstack/boomerang/issues/12
-allow-newer: boomerang:template-haskell
--- See https://github.com/travitch/haggle/issues/29
-allow-newer: haggle:primitive
-
 packages: base/
           crucible-macaw-debug/
           macaw-aarch32/
