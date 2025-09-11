@@ -256,7 +256,7 @@ macawExtImpl iFns archVals mElf =
             \ctx execState (Debug.MStar rNms0) -> do
               let rNms = List.map (\(Debug.MLit (Debug.AText t)) -> t) rNms0
               let resp =
-                      case M.mostRecentRegs (M.archFunctions archVals) execState of
+                      case M.execStateRegs (M.archFunctions archVals) execState of
                         Nothing -> Debug.XResponse RNoRegs
                         Just regs ->
                           Debug.XResponse

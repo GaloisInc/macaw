@@ -3,7 +3,8 @@
 {-# LANGUAGE LambdaCase #-}
 
 module Data.Macaw.Symbolic.Regs
-  ( mostRecentRegs
+  ( simStateRegs
+  , execStateRegs
   ) where
 
 import Control.Applicative ((<|>))
@@ -56,22 +57,30 @@ mostRecentValOfTypeInFrames ty =
         C.RF {} -> mostRecentValOfTypeInFrames ty fs
 
 -- | Helper, not exported
-mostRecentValOfTypeInState ::
-  C.ExecState p sym ext r ->
+mostRecentValOfTypeInSimState ::
+  C.SimState p sym ext r f args ->
   C.TypeRepr t ->
   Maybe (C.RegValue sym t)
-mostRecentValOfTypeInState execState ty =
-  case C.execStateSimState execState of
-    Nothing -> Nothing
-    Just (C.SomeSimState simState) -> do
-      let frs = simState Lens.^. C.stateTree . Lens.to C.activeFrames
-      mostRecentValOfTypeInFrames ty frs
+mostRecentValOfTypeInSimState simState ty =
+  let frs = simState Lens.^. C.stateTree . Lens.to C.activeFrames in
+  mostRecentValOfTypeInFrames ty frs
 
--- | Get the most recently-defined value of type @'M.ArchRegStruct' arch@.
-mostRecentRegs ::
+-- | Get the most recently-defined value of type @'M.ArchRegStruct' arch@ in
+-- a 'C.SimState'.
+simStateRegs ::
+  M.MacawSymbolicArchFunctions arch ->
+  C.SimState p sym ext r f args ->
+  Maybe (C.RegValue sym (M.ArchRegStruct arch))
+simStateRegs archFns simState =
+  let regType = C.StructRepr (M.crucArchRegTypes archFns) in
+  mostRecentValOfTypeInSimState simState regType
+
+-- | Get the most recently-defined value of type @'M.ArchRegStruct' arch@ in
+-- an 'C.ExecState'.
+execStateRegs ::
   M.MacawSymbolicArchFunctions arch ->
   C.ExecState p sym ext r ->
   Maybe (C.RegValue sym (M.ArchRegStruct arch))
-mostRecentRegs archFns execState =
-  let regType = C.StructRepr (M.crucArchRegTypes archFns) in
-  mostRecentValOfTypeInState execState regType
+execStateRegs archFns execState = do
+  C.SomeSimState simState <- C.execStateSimState execState
+  simStateRegs archFns simState
