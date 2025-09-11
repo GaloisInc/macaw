@@ -10,7 +10,6 @@ module Data.Macaw.Symbolic.Debug
   , macawExtImpl
   ) where
 
-import Control.Applicative ((<|>))
 import Control.Lens qualified as Lens
 import Data.ByteString (ByteString)
 import Data.ElfEdit qualified as Elf
@@ -20,6 +19,7 @@ import Data.List qualified as List
 import Data.Macaw.Dwarf qualified as D
 import Data.Macaw.CFG qualified as M
 import Data.Macaw.Symbolic qualified as M
+import Data.Macaw.Symbolic.Regs qualified as M
 import Data.Maybe qualified as Maybe
 import Data.Parameterized.Classes (knownRepr, ixF')
 import Data.Parameterized.Context qualified as Ctx
@@ -28,15 +28,12 @@ import Data.Parameterized.SymbolRepr (someSymbol)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Data.Text (Text)
-import Data.Type.Equality ((:~:)(Refl), testEquality)
 import Data.Void (Void, absurd)
 import Lang.Crucible.CFG.Core qualified as C
 import Lang.Crucible.Debug (ExtImpl, CommandExt)
 import Lang.Crucible.Debug qualified as Debug
 import Lang.Crucible.Pretty (IntrinsicPrinters, ppRegVal)
-import Lang.Crucible.Simulator.CallFrame qualified as C
 import Lang.Crucible.Simulator.EvalStmt qualified as C
-import Lang.Crucible.Simulator.ExecutionTree qualified as C
 import Lang.Crucible.Simulator.RegMap qualified as C
 import Prettyprinter as PP
 import What4.Interface qualified as W4
@@ -191,57 +188,6 @@ insnsInStmts =
     C.TermStmt {} -> []
 
 -- | Helper, not exported
-mostRecentValOfTypeInAssignment ::
-  C.TypeRepr t ->
-  Ctx.Assignment (C.RegEntry sym) ctx ->
-  Maybe (C.RegValue sym t)
-mostRecentValOfTypeInAssignment ty =
-  \case
-    Ctx.Empty -> Nothing
-    ctx Ctx.:> C.RegEntry ty' v ->
-      case testEquality ty ty' of
-        Just Refl -> Just v
-        Nothing -> mostRecentValOfTypeInAssignment ty ctx
-
--- | Helper, not exported
-mostRecentValOfTypeInRegMap ::
-  C.TypeRepr t ->
-  C.RegMap sym ctx ->
-  Maybe (C.RegValue sym t)
-mostRecentValOfTypeInRegMap ty =
-  mostRecentValOfTypeInAssignment ty . C.regMap
-
--- | Helper, not exported
-mostRecentValOfTypeInFrames ::
-  C.TypeRepr t ->
-  [C.SomeFrame (C.SimFrame sym ext)] ->
-  Maybe (C.RegValue sym t)
-mostRecentValOfTypeInFrames ty =
-  \case
-    [] -> Nothing
-    (C.SomeFrame f : fs) ->
-      case f of
-        C.OF ovFrame ->
-          mostRecentValOfTypeInRegMap ty (ovFrame Lens.^. C.overrideRegMap) <|>
-            mostRecentValOfTypeInFrames ty fs
-        C.MF callFrame ->
-          mostRecentValOfTypeInRegMap ty (callFrame Lens.^. C.frameRegs) <|>
-            mostRecentValOfTypeInFrames ty fs
-        C.RF {} -> mostRecentValOfTypeInFrames ty fs
-
--- | Helper, not exported
-mostRecentValOfTypeInState ::
-  C.ExecState p sym ext r ->
-  C.TypeRepr t ->
-  Maybe (C.RegValue sym t)
-mostRecentValOfTypeInState execState ty =
-  case Debug.execStateSimState execState of
-    Left _ -> Nothing
-    Right (C.SomeSimState simState) -> do
-      let frs = simState Lens.^. C.stateTree . Lens.to C.activeFrames
-      mostRecentValOfTypeInFrames ty frs
-
--- | Helper, not exported
 ppRegs ::
   M.PrettyF (M.ArchReg arch) =>
   W4.IsExpr (W4.SymExpr sym) =>
@@ -309,9 +255,8 @@ macawExtImpl iFns archVals mElf =
         , Debug.implBody =
             \ctx execState (Debug.MStar rNms0) -> do
               let rNms = List.map (\(Debug.MLit (Debug.AText t)) -> t) rNms0
-              let regType = C.StructRepr (M.crucArchRegTypes (M.archFunctions archVals))
               let resp =
-                      case mostRecentValOfTypeInState execState regType of
+                      case M.mostRecentRegs (M.archFunctions archVals) execState of
                         Nothing -> Debug.XResponse RNoRegs
                         Just regs ->
                           Debug.XResponse
@@ -335,3 +280,4 @@ macawExtImpl iFns archVals mElf =
               let resp = Debug.XResponse (RMTrace (map entryInsns ents))
               pure (Debug.EvalResult ctx C.ExecutionFeatureNoChange resp)
         }
+
