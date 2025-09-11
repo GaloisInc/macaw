@@ -40,6 +40,7 @@ library
     Data.Macaw.Symbolic.Memory.Lazy
     Data.Macaw.Symbolic.Memory.Strings
     Data.Macaw.Symbolic.MemOps
+    Data.Macaw.Symbolic.Regs
     Data.Macaw.Symbolic.Stack
     Data.Macaw.Symbolic.Testing
   other-modules:
