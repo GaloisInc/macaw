@@ -111,6 +111,15 @@ parseReg =
       LCSA.AtomName "r13" -> pure (Some X86R.r13)
       LCSA.AtomName "r14" -> pure (Some X86R.r14)
       LCSA.AtomName "r15" -> pure (Some X86R.r15)
+      LCSA.AtomName "cf" -> pure (Some X86R.cf)
+      LCSA.AtomName "pf" -> pure (Some X86R.pf)
+      LCSA.AtomName "af" -> pure (Some X86R.af)
+      LCSA.AtomName "zf" -> pure (Some X86R.zf)
+      LCSA.AtomName "sf" -> pure (Some X86R.sf)
+      LCSA.AtomName "tf" -> pure (Some X86R.tf)
+      LCSA.AtomName "ifl" -> pure (Some X86R.if_)
+      LCSA.AtomName "df" -> pure (Some X86R.df)
+      LCSA.AtomName "of" -> pure (Some X86R.of_)
       LCSA.AtomName _ -> empty
 
 x86AtomParser ::
