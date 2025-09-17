@@ -32,5 +32,14 @@ This `ParserHooks` supports the following types and operations:
   - `r13 :: X86Reg`: general-purpose register
   - `r14 :: X86Reg`: general-purpose register
   - `r15 :: X86Reg`: general-purpose register
+  - `cf :: X86Reg`: carry flag
+  - `pf :: X86Reg`: parity flag
+  - `af :: X86Reg`: auxiliary carry flag
+  - `zf :: X86Reg`: zero flag
+  - `sf :: X86Reg`: sign flag
+  - `tf :: X86Reg`: trap flag
+  - `ifl :: X86Reg`: interrupt enable flag
+  - `df :: X86Reg`: direction flag
+  - `of :: X86Reg`: overflow flag
 
 [syn]: https://github.com/GaloisInc/crucible/tree/master/crucible-syntax
