@@ -111,6 +111,7 @@ parseReg =
       LCSA.AtomName "r13" -> pure (Some X86R.r13)
       LCSA.AtomName "r14" -> pure (Some X86R.r14)
       LCSA.AtomName "r15" -> pure (Some X86R.r15)
+      LCSA.AtomName "of" -> pure (Some X86R.of_)
       LCSA.AtomName _ -> empty
 
 x86AtomParser ::
