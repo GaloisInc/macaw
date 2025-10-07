@@ -1483,7 +1483,7 @@ addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
                    , [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
                    )
 addMacawBlock archFns addr lbl posFn b = do
-  let archRegStructRepr = C.StructRepr (crucArchRegTypes archFns)
+  let archRegStructRepr = crucGenRegStructType archFns
   ng <- gets nonceGen
   regRegId <- mmExecST $ freshNonce ng
   let regReg = CR.Reg { CR.regPosition = posFn 0
@@ -1538,9 +1538,8 @@ addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
   case tstmt of
     M.ParsedCall regs mret -> do
       curRegs <- createRegStruct regs
-      let tps = typeCtxToCrucible $ fmapFC M.typeRepr $ crucGenRegAssignment archFns
       fh <- evalMacawStmt (MacawLookupFunctionHandle (crucArchRegTypes archFns) curRegs)
-      newRegs <- evalAtom $ CR.Call fh (Ctx.singleton curRegs) (C.StructRepr tps)
+      newRegs <- evalAtom $ CR.Call fh (Ctx.singleton curRegs) (crucGenRegStructType archFns)
       case mret of
         Just nextAddr -> do
           setMachineRegs newRegs
@@ -1582,7 +1581,7 @@ addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
       unless (MapF.null updatedRegs) (error "Do not support updated regvals")
       curRegs <- getRegs
       fh <- evalMacawStmt (MacawLookupFunctionHandle (crucArchRegTypes archFns) curRegs)
-      let archRegStructRepr = C.StructRepr (crucArchRegTypes archFns)
+      let archRegStructRepr = crucGenRegStructType archFns
       addTermStmt $ CR.TailCall fh (Ctx.empty Ctx.:> archRegStructRepr) (Ctx.singleton curRegs)
     M.ParsedTranslateError msg -> do
       msgVal <- crucibleValue (C.StringLit (C.UnicodeLiteral msg))
