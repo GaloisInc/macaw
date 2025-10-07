@@ -63,6 +63,7 @@ import qualified Data.Macaw.Memory.ElfLoader.DynamicDependencies as MELD
 import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MELP
 import qualified Data.Macaw.Memory.LoadCommon as MML
 import qualified Data.Macaw.Symbolic as MS
+import qualified Data.Macaw.Symbolic.CrucGen as MSC
 import qualified Data.Macaw.Symbolic.Memory as MSM
 import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 import qualified Data.Macaw.Symbolic.Memory.Lazy as MSMLazy
@@ -360,8 +361,7 @@ defaultRegs bak archVals mem = do
   let symArchFns = MS.archFunctions archVals
   initialRegs <- freshRegs symArchFns sym
 
-  let crucRegTypes = MS.crucArchRegTypes symArchFns
-  let regsRepr = CT.StructRepr crucRegTypes
+  let regsRepr = MSC.crucGenRegStructType symArchFns
   let initialRegsEntry = CS.RegEntry regsRepr initialRegs
   let regs = MS.updateReg archVals initialRegsEntry MC.sp_reg sp
   pure (regs, mem')
@@ -800,8 +800,7 @@ lookupFunction archVals binariesInfo = MS.LookupFunctionHandle $ \s0 _memImpl re
     _ -> error ("Symbolic pointer offset in lookupFunction: " ++ show (WI.printSymExpr ptrOffset))
   where
     symArchFns = MS.archFunctions archVals
-    crucRegTypes = MS.crucArchRegTypes symArchFns
-    regsRepr = CT.StructRepr crucRegTypes
+    regsRepr = MSC.crucGenRegStructType symArchFns
 
     -- Resolve the address that a PLT stub will jump to, also returning the
     -- binary that the address resides in.
