@@ -109,7 +109,8 @@ main = do
   TT.defaultMainWithIngredients ingredients $
     TT.testGroup "macaw-aarch32-symbolic tests"
     [ TT.testGroup "Unit tests" 
-        [ TTH.testCase "r0" $ getRegName MASR.r0 TTH.@?= "zenc!rznzuR0"
+        [ TTH.testCase "pstateT" $ getRegName MASR.pstateT TTH.@?= "zenc!rznPSTATEzuT" 
+        ,TTH.testCase "r0" $ getRegName MASR.r0 TTH.@?= "zenc!rznzuR0"
         , TTH.testCase "r1" $ getRegName MASR.r1 TTH.@?= "zenc!rznzuR1"
         , TTH.testCase "r2" $ getRegName MASR.r2 TTH.@?= "zenc!rznzuR2"
         , TTH.testCase "r3" $ getRegName MASR.r3 TTH.@?= "zenc!rznzuR3"
