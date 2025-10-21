@@ -43,12 +43,14 @@ module Data.Macaw.AArch32.Symbolic.Regs
   ( RegContext
   , aarch32RegAssignment
   , aarch32RegStructType
-  , R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, Fp, R12, Ip, R13, Sp, R14, Lr, R15, Pc
+  , PSTATE_T
+  ,R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, Fp, R12, Ip, R13, Sp, R14, Lr, R15, Pc
   , V0, V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16
-  , V17, V18, V19, V20, V21, V22, V23, V24, V25, V26, V27, V28, V29, V30, V31, PSTATE_T
+  , V17, V18, V19, V20, V21, V22, V23, V24, V25, V26, V27, V28, V29, V30, V31, 
+  , pstateT
   , r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, fp, r12, ip, r13, sp, r14, lr, r15, pc
   , v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16
-  , v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, pstateT
+  , v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31
   ) where
 
 import           GHC.TypeLits
