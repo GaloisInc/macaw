@@ -6,7 +6,8 @@
 {-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.Symbolic.Debug
-  ( macawCommandExt
+  ( MacawCommand
+  , macawCommandExt
   , macawExtImpl
   ) where
 
