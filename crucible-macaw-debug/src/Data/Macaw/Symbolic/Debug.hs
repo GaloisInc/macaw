@@ -17,8 +17,8 @@ import Data.ElfEdit qualified as Elf
 import Data.Functor.Const (Const(Const, getConst))
 import Data.Functor.Product (Product(Pair))
 import Data.List qualified as List
-import Data.Macaw.Dwarf qualified as D
 import Data.Macaw.CFG qualified as M
+import Data.Macaw.Dwarf qualified as D
 import Data.Macaw.Symbolic qualified as M
 import Data.Macaw.Symbolic.Regs qualified as M
 import Data.Maybe qualified as Maybe
@@ -26,15 +26,18 @@ import Data.Parameterized.Classes (knownRepr, ixF')
 import Data.Parameterized.Context qualified as Ctx
 import Data.Parameterized.Some (Some(Some))
 import Data.Parameterized.SymbolRepr (someSymbol)
+import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
-import Data.Text (Text)
 import Data.Void (Void, absurd)
 import Lang.Crucible.CFG.Core qualified as C
 import Lang.Crucible.Debug (ExtImpl, CommandExt)
 import Lang.Crucible.Debug qualified as Debug
+import Lang.Crucible.LLVM.MemModel qualified as Mem
 import Lang.Crucible.Pretty (IntrinsicPrinters, ppRegVal)
 import Lang.Crucible.Simulator.EvalStmt qualified as C
+import Lang.Crucible.Simulator.ExecutionTree qualified as C
+import Lang.Crucible.Simulator.GlobalState qualified as C
 import Lang.Crucible.Simulator.RegMap qualified as C
 import Prettyprinter as PP
 import What4.Interface qualified as W4
@@ -51,6 +54,7 @@ regNames archVals =
 
 data MacawCommand
   = MDwarfGlobals
+  | MMem
   | MRegister
   | MTrace
   deriving (Bounded, Enum)
@@ -62,6 +66,7 @@ abbrev :: MacawCommand -> Text
 abbrev =
   \case
     MDwarfGlobals -> "mglob"
+    MMem -> "mmem"
     MRegister -> "mreg"
     MTrace -> "mtr"
 
@@ -72,6 +77,7 @@ detail =
       \When given no arguments, prints all globals described in DWARF. \
       \Otherwise, prints the globals with the given names, one per line.\
       \"
+    MMem -> Just "Display LLVM memory"
     MRegister -> Just "\
       \When given no arguments, prints all machine registers. \
       \Otherwise, prints the registers with the given names, one per line.\
@@ -91,6 +97,7 @@ help :: MacawCommand -> Text
 help =
   \case
     MDwarfGlobals -> "print DWARF globals"
+    MMem -> "display LLVM memory"
     MRegister -> "display machine registers"
     MTrace -> "print executed machine instructions"
 
@@ -98,11 +105,15 @@ name :: MacawCommand -> Text
 name =
   \case
     MDwarfGlobals -> "mglobals"
+    MMem -> "mmemory"
     MRegister -> "mregister"
     MTrace -> "mtrace"
 
 rMDwarfGlobals :: Debug.RegexRepr Debug.ArgTypeRepr (Debug.Star Debug.Text)
 rMDwarfGlobals = knownRepr
+
+rMemory :: Debug.RegexRepr Debug.ArgTypeRepr Debug.Empty
+rMemory = knownRepr
 
 rMRegister :: Debug.RegexRepr Debug.ArgTypeRepr (Debug.Star Debug.Text)
 rMRegister = knownRepr
@@ -129,6 +140,7 @@ regex ::
 regex archVals =
   \case
     MDwarfGlobals -> Some rMDwarfGlobals
+    MMem -> Some rMemory
     MRegister ->
       case enumRepr (M.toListFC (Text.pack . getConst) (regNames archVals)) of
         Some r -> Some (Debug.Star r)
@@ -149,14 +161,18 @@ macawCommandExt archVals =
   }
 
 data MacawResponse
-  = RNoRegs
+  = RMemory (PP.Doc Void)
   | RMDwarfGlobals [String] [(ByteString, PP.Doc Void)]
+  | RMissingMemory
   | RMRegister [(String, PP.Doc Void)]
   | RMTrace [[Text]]
+  | RNoRegs
 
 instance PP.Pretty MacawResponse where
   pretty =
     \case
+      RMemory mem -> fmap absurd mem
+      RMissingMemory -> "LLVM memory global variable was undefined!"
       RNoRegs -> "Couldn't find register struct"
       RMDwarfGlobals errs globals ->
         let warnings = if List.null errs
@@ -230,10 +246,11 @@ macawExtImpl ::
   M.PrettyF (M.ArchReg arch) =>
   W4.IsExpr (W4.SymExpr sym) =>
   IntrinsicPrinters sym ->
+  C.GlobalVar Mem.Mem ->
   M.GenArchVals mem arch ->
   Maybe (Elf.Elf (M.ArchAddrWidth arch)) ->
   ExtImpl MacawCommand p sym (M.MacawExt arch) t
-macawExtImpl iFns archVals mElf =
+macawExtImpl iFns mVar archVals mElf =
   Debug.ExtImpl $
     \case
       MDwarfGlobals ->
@@ -249,6 +266,23 @@ macawExtImpl iFns archVals mElf =
               let gNms = List.map (\(Debug.MLit (Debug.AText t)) -> t) gNms0
               let resp = Debug.XResponse (RMDwarfGlobals errs $ ppGlobals gNms vars)
               pure (Debug.EvalResult ctx C.ExecutionFeatureNoChange resp)
+        }
+      MMem ->
+        Debug.CommandImpl
+        { Debug.implRegex = rMemory
+        , Debug.implBody =
+            \ctx execState Debug.MEmpty -> do
+              let result = Debug.EvalResult ctx C.ExecutionFeatureNoChange Debug.Ok
+              case Debug.execStateSimState execState of
+                Left notApplicable ->
+                  pure result { Debug.evalResp = Debug.UserError (Debug.NotApplicable notApplicable) }
+                Right (C.SomeSimState simState) -> do
+                  let globs = simState Lens.^. C.stateTree . C.actFrame . C.gpGlobals
+                  case C.lookupGlobal mVar globs of
+                    Nothing -> pure result { Debug.evalResp = Debug.XResponse RMissingMemory }
+                    Just mem ->
+                      let resp = Debug.XResponse (RMemory (Mem.ppMem (Mem.memImplHeap mem))) in
+                      pure result { Debug.evalResp = resp }
         }
       MRegister ->
         Debug.CommandImpl

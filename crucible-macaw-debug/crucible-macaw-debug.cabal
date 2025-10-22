@@ -118,6 +118,7 @@ library
     containers,
     crucible,
     crucible-debug,
+    crucible-llvm,
     elf-edit,
     lens,
     macaw-base,
