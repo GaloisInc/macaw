@@ -196,6 +196,13 @@ data ARMPrimFn (f :: MT.Type -> Type) tp where
              -> f (MT.BVType 32) -- r5
              -> f (MT.BVType 32) -- r6
              -> f (MT.BVType 32) -- r7 (syscall number)
+             -> f (MT.BVType 32) -- r8
+             -> f (MT.BVType 32) -- r9
+             -> f (MT.BVType 32) -- r10
+             -> f (MT.BVType 32) -- r11
+             -> f (MT.BVType 32) -- r12
+             -> f (MT.BVType 32) -- r13 (sp)
+             -> f (MT.BVType 32) -- r14 (lr)
              -> ARMPrimFn f (MT.TupleType [MT.BVType 32, MT.BVType 32])
 
   -- | Signed division at @w@ bits. Both operands are treated as signed. The
@@ -386,10 +393,10 @@ instance MC.IsArchFn ARMPrimFn where
         let ppUnary s v' = s PP.<+> v'
             ppBinary s v1' v2' = s PP.<+> v1' PP.<+> v2'
             ppTernary s v1' v2' v3' = s PP.<+> v1' PP.<+> v2' PP.<+> v3'
-            ppSC s imm r0 r1 r2 r3 r4 r5 r6 r7 = s PP.<+> PP.viaShow imm PP.<+> r0 PP.<+> r1 PP.<+> r2 PP.<+> r3 PP.<+> r4 PP.<+> r5 PP.<+> r6 PP.<+> r7
+            ppSC s imm r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 = s PP.<+> PP.viaShow imm PP.<+> r0 PP.<+> r1 PP.<+> r2 PP.<+> r3 PP.<+> r4 PP.<+> r5 PP.<+> r6 PP.<+> r7
         in case f of
-          ARMSyscall imm r0 r1 r2 r3 r4 r5 r6 r7 ->
-            ppSC "arm_syscall" imm <$> pp r0 <*> pp r1 <*> pp r2 <*> pp r3 <*> pp r4 <*> pp r5 <*> pp r6 <*> pp r7
+          ARMSyscall imm r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 ->
+            ppSC "arm_syscall" imm <$> pp r0 <*> pp r1 <*> pp r2 <*> pp r3 <*> pp r4 <*> pp r5 <*> pp r6 <*> pp r7 <*> pp r8 <*> pp r9 <*> pp r10 <*> pp r11  <*> pp r12  <*> pp r13 <*> pp r14  
           UDiv _ lhs rhs -> ppBinary "arm_udiv" <$> pp lhs <*> pp rhs
           SDiv _ lhs rhs -> ppBinary "arm_sdiv" <$> pp lhs <*> pp rhs
           URem _ lhs rhs -> ppBinary "arm_urem" <$> pp lhs <*> pp rhs
@@ -660,6 +667,13 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
                                  <*> G.getRegVal ARMReg.r5
                                  <*> G.getRegVal ARMReg.r6
                                  <*> G.getRegVal ARMReg.r7
+                                 <*> G.getRegVal ARMReg.r8
+                                 <*> G.getRegVal ARMReg.r9
+                                 <*> G.getRegVal ARMReg.r10
+                                 <*> G.getRegVal ARMReg.r11
+                                 <*> G.getRegVal ARMReg.r12
+                                 <*> G.getRegVal ARMReg.r13
+                                 <*> G.getRegVal ARMReg.r14
             res <- G.addExpr =<< evalArchFn sc
             -- res is a tuple of form (R1, R0).  This is reversed from the
             -- user provided return Assignment of empty :> R0 :> R1 because
