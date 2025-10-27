@@ -143,7 +143,7 @@ aarch32GenFn :: MAA.ARMPrimFn (MC.Value SA.AArch32 ids) tp
              -> MSB.CrucGen SA.AArch32 ids s (CR.Atom s (MS.ToCrucibleType tp))
 aarch32GenFn fn =
   case fn of
-    MAA.ARMSyscall _imm v0 v1 v2 v3 v4 v5 v6 v7 -> do
+    MAA.ARMSyscall _imm v0 v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 -> do
       a0 <- MSB.valueToCrucible v0
       a1 <- MSB.valueToCrucible v1
       a2 <- MSB.valueToCrucible v2
@@ -152,8 +152,16 @@ aarch32GenFn fn =
       a5 <- MSB.valueToCrucible v5
       a6 <- MSB.valueToCrucible v6
       a7 <- MSB.valueToCrucible v7
+      a8 <- MSB.valueToCrucible v8
+      a9 <- MSB.valueToCrucible v9
+      a10 <- MSB.valueToCrucible v10
+      a11 <- MSB.valueToCrucible v11
+      a12 <- MSB.valueToCrucible v12
+      a13 <- MSB.valueToCrucible v13
+      a14 <- MSB.valueToCrucible v14
 
-      let syscallArgs = Ctx.Empty Ctx.:> a0 Ctx.:> a1 Ctx.:> a2 Ctx.:> a3 Ctx.:> a4 Ctx.:> a5 Ctx.:> a6 Ctx.:> a7
+      let syscallArgs = Ctx.Empty Ctx.:> a0 Ctx.:> a1 Ctx.:> a2 Ctx.:> a3 Ctx.:> a4 Ctx.:> a5 Ctx.:> a6 Ctx.:> a7 Ctx.:>
+                            a8 Ctx.:> a9 Ctx.:> a10 Ctx.:> a11 Ctx.:> a12 Ctx.:> a13 Ctx.:> a14
       let argTypes = PC.knownRepr
       let retTypes = Ctx.Empty Ctx.:> LCLM.LLVMPointerRepr (PN.knownNat @32) Ctx.:> LCLM.LLVMPointerRepr (PN.knownNat @32)
       let retRepr = CT.StructRepr retTypes
