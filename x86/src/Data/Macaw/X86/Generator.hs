@@ -354,7 +354,9 @@ addArchStmt = addStmt . ExecArchStmt
 -- when it encounters a syscall.
 addArchSyscall :: X86Generator st_s ids ()
 addArchSyscall = do
-  sc <- X86Syscall (knownNat @64) <$> getRegValue RAX <*> getRegValue RDI <*> getRegValue RSI <*> getRegValue RDX <*> getRegValue R10 <*> getRegValue R8 <*> getRegValue R9
+  s <- getState
+  let regs = s^.curX86State
+  let sc = X86Syscall (knownNat @64) regs
   res <- evalArchFn sc
   -- res is a tuple of form (RDX, RAX).  This is reversed from the user
   -- provided return Assignment of empty :> RAX :> RDX because the conversion
