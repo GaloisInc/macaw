@@ -43,6 +43,7 @@ import           GHC.TypeLits
 import qualified Language.ASL.Globals as ASL
 import qualified Prettyprinter as PP
 import qualified SemMC.Architecture.AArch32 as ARM
+import qualified Data.Parameterized.Map as MapF
 
 -- ----------------------------------------------------------------------
 -- ARM-specific statement definitions
@@ -188,21 +189,7 @@ data ARMPrimFn (f :: MT.Type -> Type) tp where
   --
   -- The system call can return up to two values (in r0 and r1)
   ARMSyscall :: WI.W 24
-             -> f (MT.BVType 32) -- r0
-             -> f (MT.BVType 32) -- r1
-             -> f (MT.BVType 32) -- r2
-             -> f (MT.BVType 32) -- r3
-             -> f (MT.BVType 32) -- r4
-             -> f (MT.BVType 32) -- r5
-             -> f (MT.BVType 32) -- r6
-             -> f (MT.BVType 32) -- r7 (syscall number)
-             -> f (MT.BVType 32) -- r8
-             -> f (MT.BVType 32) -- r9
-             -> f (MT.BVType 32) -- r10
-             -> f (MT.BVType 32) -- r11
-             -> f (MT.BVType 32) -- r12
-             -> f (MT.BVType 32) -- r13 (sp)
-             -> f (MT.BVType 32) -- r14 (lr)
+             -> MapF.MapF ARMReg.ARMReg f
              -> ARMPrimFn f (MT.TupleType [MT.BVType 32, MT.BVType 32])
 
   -- | Signed division at @w@ bits. Both operands are treated as signed. The
@@ -393,11 +380,12 @@ instance MC.IsArchFn ARMPrimFn where
         let ppUnary s v' = s PP.<+> v'
             ppBinary s v1' v2' = s PP.<+> v1' PP.<+> v2'
             ppTernary s v1' v2' v3' = s PP.<+> v1' PP.<+> v2' PP.<+> v3'
-            ppSC s imm r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 = s PP.<+> PP.viaShow imm PP.<+> r0 PP.<+> r1 PP.<+> r2 PP.<+> r3 PP.<+> r4 PP.<+> r5 PP.<+> r6 PP.<+> r7 
-              PP.<+> r8 PP.<+> r9 PP.<+> r10 PP.<+> r11 PP.<+> r12 PP.<+> r13 PP.<+> r14
+            ppSC s imm rMapDoc = s PP.<+> PP.viaShow imm PP.<+> rMapDoc
         in case f of
-          ARMSyscall imm r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 ->
-            ppSC "arm_syscall" imm <$> pp r0 <*> pp r1 <*> pp r2 <*> pp r3 <*> pp r4 <*> pp r5 <*> pp r6 <*> pp r7 <*> pp r8 <*> pp r9 <*> pp r10 <*> pp r11  <*> pp r12  <*> pp r13 <*> pp r14  
+          ARMSyscall imm rMap ->
+            let lst =  TF.toListF pp rMap
+                regArgs = PP.cat <$> sequenceA lst in
+            ppSC "arm_syscall" imm <$> regArgs
           UDiv _ lhs rhs -> ppBinary "arm_udiv" <$> pp lhs <*> pp rhs
           SDiv _ lhs rhs -> ppBinary "arm_sdiv" <$> pp lhs <*> pp rhs
           URem _ lhs rhs -> ppBinary "arm_urem" <$> pp lhs <*> pp rhs
@@ -437,9 +425,9 @@ instance FCls.FoldableFC ARMPrimFn where
 instance FCls.TraversableFC ARMPrimFn where
   traverseFC go f =
     case f of
-      ARMSyscall imm r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 ->
-        ARMSyscall imm <$> go r0 <*> go r1 <*> go r2 <*> go r3 <*> go r4 <*> go r5 <*> go r6 
-          <*> go r7 <*> go r8 <*> go r9 <*> go r10 <*> go r11 <*> go r12 <*> go r13 <*> go r14
+      ARMSyscall imm rMap ->
+        let x = TF.traverseF go rMap in
+        ARMSyscall imm <$> x
       UDiv rep lhs rhs -> UDiv rep <$> go lhs <*> go rhs
       SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
       URem rep lhs rhs -> URem rep <$> go lhs <*> go rhs
@@ -569,9 +557,8 @@ rewritePrimFn :: ARMPrimFn (MC.Value ARM.AArch32 src) tp
               -> Rewriter ARM.AArch32 s src tgt (MC.Value ARM.AArch32 tgt tp)
 rewritePrimFn f =
   case f of
-    ARMSyscall imm r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 -> do
-      tgtFn <- ARMSyscall imm <$> rewriteValue r0 <*> rewriteValue r1 <*> rewriteValue r2 <*> rewriteValue r3 <*> rewriteValue r4 <*> rewriteValue r5 <*> rewriteValue r6 <*> rewriteValue r7
-        <*> rewriteValue r8 <*> rewriteValue r9 <*> rewriteValue r10 <*> rewriteValue r11 <*> rewriteValue r12 <*> rewriteValue r13 <*> rewriteValue r14
+    ARMSyscall imm rMap -> do
+      tgtFn <- ARMSyscall imm <$> TF.traverseF rewriteValue rMap
       evalRewrittenArchFn tgtFn
     UDiv rep lhs rhs -> do
       tgtFn <- UDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
@@ -662,21 +649,7 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
       ARMDis.SVC_A1 ->
         case operands of
           ARMDis.Bv4 _opPred ARMDis.:< ARMDis.Bv24 imm ARMDis.:< ARMDis.Nil -> Just $ do
-            sc <- ARMSyscall imm <$> G.getRegVal ARMReg.r0
-                                 <*> G.getRegVal ARMReg.r1
-                                 <*> G.getRegVal ARMReg.r2
-                                 <*> G.getRegVal ARMReg.r3
-                                 <*> G.getRegVal ARMReg.r4
-                                 <*> G.getRegVal ARMReg.r5
-                                 <*> G.getRegVal ARMReg.r6
-                                 <*> G.getRegVal ARMReg.r7
-                                 <*> G.getRegVal ARMReg.r8
-                                 <*> G.getRegVal ARMReg.r9
-                                 <*> G.getRegVal ARMReg.r10
-                                 <*> G.getRegVal ARMReg.r11
-                                 <*> G.getRegVal ARMReg.r12
-                                 <*> G.getRegVal ARMReg.r13
-                                 <*> G.getRegVal ARMReg.r14
+            sc <- ARMSyscall imm . MC.regStateMap <$> G.getRegs
             res <- G.addExpr =<< evalArchFn sc
             -- res is a tuple of form (R1, R0).  This is reversed from the
             -- user provided return Assignment of empty :> R0 :> R1 because
@@ -723,21 +696,7 @@ t32InstructionMatcher (ThumbDis.Instruction opc operands) =
             -- so we can just zero extend the immediate value and use the same
             -- syscall representation in macaw
             let imm24 = zeroExtend imm8 (NR.knownNat @24)
-            sc <- ARMSyscall imm24 <$> G.getRegVal ARMReg.r0
-                                   <*> G.getRegVal ARMReg.r1
-                                   <*> G.getRegVal ARMReg.r2
-                                   <*> G.getRegVal ARMReg.r3
-                                   <*> G.getRegVal ARMReg.r4
-                                   <*> G.getRegVal ARMReg.r5
-                                   <*> G.getRegVal ARMReg.r6
-                                   <*> G.getRegVal ARMReg.r7
-                                   <*> G.getRegVal ARMReg.r8
-                                   <*> G.getRegVal ARMReg.r9
-                                   <*> G.getRegVal ARMReg.r10
-                                   <*> G.getRegVal ARMReg.r11
-                                   <*> G.getRegVal ARMReg.r12
-                                   <*> G.getRegVal ARMReg.r13
-                                   <*> G.getRegVal ARMReg.r14
+            sc <- ARMSyscall imm24 . MC.regStateMap <$> G.getRegs
             res <- G.addExpr =<< evalArchFn sc
             -- res is a tuple of form (R1, R0).  This is reversed from the
             -- user provided return Assignment of empty :> R0 :> R1 because
