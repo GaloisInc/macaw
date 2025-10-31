@@ -1469,7 +1469,7 @@ runCrucGen archFns posFn lbl regReg action = crucGenArchConstraints archFns $ do
   let !blks = reverse (extraBlocks s)
   pure (blk, blks)
 
-addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
+addMacawBlock :: (M.MemWidth (M.ArchAddrWidth arch), OrdF (M.ArchReg arch))
               => MacawSymbolicArchFunctions arch
               -> M.ArchSegmentOff arch
                  -- ^ Address of start of block
@@ -1497,10 +1497,22 @@ addMacawBlock archFns addr lbl posFn b = do
                           , CR.typeOfAtom = archRegStructRepr
                           }
   runCrucGen archFns posFn lbl regReg $ do
+    mp <- updatesFromRegStruct (crucGenRegAssignment archFns)
+    void $ evalMacawStmt $ MacawArchStateUpdate (M.segoffAddr addr) mp
     addStmt $ CR.SetReg regReg regStruct
     mapM_ (addMacawStmt addr)  (M.blockStmts b)
     addMacawTermStmt (M.blockTerm b)
+  where
+    updatesFromRegStruct :: OrdF (M.ArchReg arch) => 
+      Assignment (M.ArchReg arch) ctx -> 
+        CrucGen arch ids s (MapF.MapF (M.ArchReg arch) (MacawCrucibleValue (CR.Atom s)))
+    updatesFromRegStruct Empty = pure MapF.empty 
+    updatesFromRegStruct (rst :> reg) = do 
+          rstOf <- updatesFromRegStruct rst
+          rval <- getRegValue reg
+          pure $ MapF.insert reg (MacawCrucibleValue rval) rstOf
 
+   
 parsedBlockLabel :: (Ord addr, Show addr)
                  => Map addr (CR.Label s)
                     -- ^ Map from block addresses to starting label
