@@ -38,13 +38,6 @@ jobs:
       with:
         submodules: true
 
-    - uses: haskell-actions/setup@v2
-      id: setup-haskell
-      name: Setup Haskell
-      with:
-        ghc-version: ${{ matrix.ghc-ver }}
-        cabal-version: ${{ matrix.cabal }}
-
     - name: System Dependencies
       run: |
         sudo apt update
@@ -59,6 +52,13 @@ jobs:
         cd deps/softfloat-hs
         git submodule update --init --recursive
         cd ../..
+
+    - uses: haskell-actions/setup@v2
+      id: setup-haskell
+      name: Setup Haskell
+      with:
+        ghc-version: ${{ matrix.ghc-ver }}
+        cabal-version: ${{ matrix.cabal }}
 
     - name: Copy cabal project files
       run: |
