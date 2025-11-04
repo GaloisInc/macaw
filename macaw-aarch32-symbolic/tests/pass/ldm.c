@@ -1,6 +1,9 @@
-int x[5];
+// Regression test for https://github.com/GaloisInc/macaw/issues/266
 
 int __attribute__((noinline)) test_ldm() {
+  // manually put 'x' at the end of memory so that the LLVM memory
+  // model will throw an error if more than 2 words are read from it
+  int *x = (int*)0xfffffff6;
   int ret1;
   int ret2;
   // we pick the registers manually to ensure they're ascending
@@ -10,7 +13,7 @@ int __attribute__((noinline)) test_ldm() {
           : [x]"r" (x)
           : "r1","r2"
   );
-  return x[0] == ret1 && x[1] == ret2;
+  return (x[0] == ret1 && x[1] == ret2);
 }
 
 void _start() {
