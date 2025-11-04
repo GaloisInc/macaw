@@ -1502,7 +1502,6 @@ addMacawBlock archFns addr lbl posFn b = do
     mapM_ (addMacawStmt addr)  (M.blockStmts b)
     addMacawTermStmt (M.blockTerm b)
 
-   
 parsedBlockLabel :: (Ord addr, Show addr)
                  => Map addr (CR.Label s)
                     -- ^ Map from block addresses to starting label
