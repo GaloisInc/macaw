@@ -1497,20 +1497,9 @@ addMacawBlock archFns addr lbl posFn b = do
                           , CR.typeOfAtom = archRegStructRepr
                           }
   runCrucGen archFns posFn lbl regReg $ do
-    mp <- updatesFromRegStruct (crucGenRegAssignment archFns)
-    void $ evalMacawStmt $ MacawArchStateUpdate (M.segoffAddr addr) mp
     addStmt $ CR.SetReg regReg regStruct
     mapM_ (addMacawStmt addr)  (M.blockStmts b)
     addMacawTermStmt (M.blockTerm b)
-  where
-    updatesFromRegStruct :: OrdF (M.ArchReg arch) => 
-      Assignment (M.ArchReg arch) ctx -> 
-        CrucGen arch ids s (MapF.MapF (M.ArchReg arch) (MacawCrucibleValue (CR.Atom s)))
-    updatesFromRegStruct Empty = pure MapF.empty 
-    updatesFromRegStruct (rst :> reg) = do 
-          rstOf <- updatesFromRegStruct rst
-          rval <- getRegValue reg
-          pure $ MapF.insert reg (MacawCrucibleValue rval) rstOf
 
    
 parsedBlockLabel :: (Ord addr, Show addr)
@@ -1767,6 +1756,22 @@ addSwitch blockLabelMap idx possibleAddrs = do
   mapM_ addStmt stmts
   addTermStmt termStmt
 
+
+addRegUpdateForBlock :: (OrdF (M.ArchReg arch)) => MacawSymbolicArchFunctions arch -> M.ArchSegmentOff arch -> CrucGen arch ids s ()
+addRegUpdateForBlock archFns startAddr = do
+  mp <- updatesFromRegStruct (crucGenRegAssignment archFns)
+  void $ evalMacawStmt $ MacawArchStateUpdate (M.segoffAddr startAddr) mp
+ where
+  updatesFromRegStruct ::
+    (OrdF (M.ArchReg arch)) =>
+    Assignment (M.ArchReg arch) ctx ->
+    CrucGen arch ids s (MapF.MapF (M.ArchReg arch) (MacawCrucibleValue (CR.Atom s)))
+  updatesFromRegStruct Empty = pure MapF.empty
+  updatesFromRegStruct (rst :> reg) = do
+    rstOf <- updatesFromRegStruct rst
+    rval <- getRegValue reg
+    pure $ MapF.insert reg (MacawCrucibleValue rval) rstOf
+
 addParsedBlock :: forall arch ids s
                .  MacawSymbolicArchFunctions arch
                -> BlockLabelMap arch s
@@ -1796,9 +1801,11 @@ addParsedBlock archFns blockLabelMap externalResolutions posFn regReg macawBlock
         throwError $ "Internal: Could not find block with address " ++ show startAddr
   (b,bs) <-
     runCrucGen archFns thisPosFn lbl regReg $ do
+      addRegUpdateForBlock archFns startAddr
       mapM_ (addMacawStmt startAddr) (M.pblockStmts  macawBlock)
       addMacawParsedTermStmt blockLabelMap externalResolutions startAddr (M.pblockTermStmt macawBlock)
   pure (reverse (b : bs))
+
 
 traverseArchStateUpdateMap :: (Applicative m)
                            => (forall tp . e tp -> m (f tp))
