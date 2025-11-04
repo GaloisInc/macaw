@@ -1498,6 +1498,7 @@ addMacawBlock archFns addr lbl posFn b = do
                           }
   runCrucGen archFns posFn lbl regReg $ do
     addStmt $ CR.SetReg regReg regStruct
+    addRegUpdateForBlock archFns addr
     mapM_ (addMacawStmt addr)  (M.blockStmts b)
     addMacawTermStmt (M.blockTerm b)
 
