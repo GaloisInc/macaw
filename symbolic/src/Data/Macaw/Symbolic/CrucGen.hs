@@ -1807,7 +1807,6 @@ addParsedBlock archFns blockLabelMap externalResolutions posFn regReg macawBlock
       addMacawParsedTermStmt blockLabelMap externalResolutions startAddr (M.pblockTermStmt macawBlock)
   pure (reverse (b : bs))
 
-
 traverseArchStateUpdateMap :: (Applicative m)
                            => (forall tp . e tp -> m (f tp))
                            -> MapF.MapF k (MacawCrucibleValue e)
