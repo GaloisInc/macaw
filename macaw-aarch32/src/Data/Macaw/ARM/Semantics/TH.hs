@@ -53,7 +53,7 @@ import qualified SemMC.Architecture.ARM.Opcodes as ARM
 import qualified What4.BaseTypes as WT
 import qualified What4.Expr.Builder as WB
 
-import qualified Language.ASL.Globals as ASL
+import           Language.ASL.Globals.Definitions (typeAsWriteKind, isWritePlaceholderType, WriteK(..))
 import qualified Data.List as L
 import Text.Read (readMaybe)
 import Data.Parameterized (Some(..))
@@ -770,20 +770,6 @@ addArchAssignment :: (M.HasRepr (M.ArchFn ARM.AArch32 (M.Value ARM.AArch32 ids))
                   -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
 addArchAssignment expr = (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn expr (M.typeRepr expr))
 
-
--- | indicates that this is a placeholder type (i.e. memory or registers)
-isPlaceholderType :: WT.BaseTypeRepr tp -> Bool
-isPlaceholderType tp = isJust (typeAsWriteKind tp)
-
-data WriteK = MemoryWrite | GPRWrite | SIMDWrite
-
-typeAsWriteKind :: WT.BaseTypeRepr tp -> Maybe WriteK
-typeAsWriteKind tp = case tp of
-  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.MemoryBaseType) -> Just MemoryWrite
-  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllGPRBaseType) -> Just GPRWrite
-  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) -> Just SIMDWrite
-  _ -> Nothing
-
 -- | A smart constructor for division
 --
 -- The smart constructor recognizes divisions that can be converted into shifts.
@@ -816,7 +802,7 @@ armTranslateType :: Q Type
                  -> Maybe (Q Type)
 armTranslateType idsTy sTy tp = case tp of
   WT.BaseStructRepr reprs -> Just $ mkTupT $ FC.toListFC translateBaseType reprs
-  _ | isPlaceholderType tp -> Just $ translateBaseType tp
+  _ | isWritePlaceholderType tp -> Just $ translateBaseType tp
   _ -> Nothing
   where
     translateBaseType :: forall tp'. WT.BaseTypeRepr tp' -> Q Type
