@@ -130,7 +130,6 @@ import qualified Lang.Crucible.LLVM.MemModel as MM
 
 import           Data.Macaw.Symbolic.PersistentState
 
-
 -- | The Crucible type of a register state
 --
 -- The registers are stored in an 'Ctx.Assignment' tagged with their Macaw
@@ -1469,7 +1468,7 @@ runCrucGen archFns posFn lbl regReg action = crucGenArchConstraints archFns $ do
   let !blks = reverse (extraBlocks s)
   pure (blk, blks)
 
-addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
+addMacawBlock :: (M.MemWidth (M.ArchAddrWidth arch), OrdF (M.ArchReg arch))
               => MacawSymbolicArchFunctions arch
               -> M.ArchSegmentOff arch
                  -- ^ Address of start of block
@@ -1498,6 +1497,7 @@ addMacawBlock archFns addr lbl posFn b = do
                           }
   runCrucGen archFns posFn lbl regReg $ do
     addStmt $ CR.SetReg regReg regStruct
+    addRegUpdateForBlock archFns addr
     mapM_ (addMacawStmt addr)  (M.blockStmts b)
     addMacawTermStmt (M.blockTerm b)
 
@@ -1755,6 +1755,29 @@ addSwitch blockLabelMap idx possibleAddrs = do
   mapM_ addStmt stmts
   addTermStmt termStmt
 
+
+{- | Adds a 'MacawArchStateUpdate' statement collecting all of
+the architecture register's initial values at the start of the block.
+These statements help consumers monitor the value of registers throughout a function.
+
+Adding this statemnet at the start of blocks is currently sufficient for consumers to track 
+register state because syscall, 'M.ParsedCall', and 'M.PLTStub' break the current block and jump 
+to a new block. This behavior means an update will collect the register state after the call/stub/syscall
+at entry to the next block. 
+-}
+addRegUpdateForBlock :: OrdF (M.ArchReg arch) => MacawSymbolicArchFunctions arch -> M.ArchSegmentOff arch -> CrucGen arch ids s ()
+addRegUpdateForBlock archFns startAddr = do
+  mp <- updatesFromRegStruct (crucGenRegAssignment archFns)
+  void $ evalMacawStmt $ MacawArchStateUpdate (M.segoffAddr startAddr) mp
+ where
+  updatesFromRegStruct ::
+    OrdF (M.ArchReg arch) =>
+    Assignment (M.ArchReg arch) ctx ->
+    CrucGen arch ids s (MapF.MapF (M.ArchReg arch) (MacawCrucibleValue (CR.Atom s)))
+  updatesFromRegStruct = foldlMFC' (\mp reg -> do
+    rval <- getRegValue reg
+    pure $ MapF.insert reg (MacawCrucibleValue rval) mp) MapF.empty
+
 addParsedBlock :: forall arch ids s
                .  MacawSymbolicArchFunctions arch
                -> BlockLabelMap arch s
@@ -1784,6 +1807,7 @@ addParsedBlock archFns blockLabelMap externalResolutions posFn regReg macawBlock
         throwError $ "Internal: Could not find block with address " ++ show startAddr
   (b,bs) <-
     runCrucGen archFns thisPosFn lbl regReg $ do
+      addRegUpdateForBlock archFns startAddr
       mapM_ (addMacawStmt startAddr) (M.pblockStmts  macawBlock)
       addMacawParsedTermStmt blockLabelMap externalResolutions startAddr (M.pblockTermStmt macawBlock)
   pure (reverse (b : bs))
