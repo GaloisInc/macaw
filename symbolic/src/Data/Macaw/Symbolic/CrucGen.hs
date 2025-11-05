@@ -1756,6 +1756,10 @@ addSwitch blockLabelMap idx possibleAddrs = do
   addTermStmt termStmt
 
 
+{- | Adds a 'MacawArchStateUpdate' statement collecting all of
+the architecture register's initial values at the start of the block.
+These statements help consumers monitor the value of registers throughout a function.
+-}
 addRegUpdateForBlock :: (OrdF (M.ArchReg arch)) => MacawSymbolicArchFunctions arch -> M.ArchSegmentOff arch -> CrucGen arch ids s ()
 addRegUpdateForBlock archFns startAddr = do
   mp <- updatesFromRegStruct (crucGenRegAssignment archFns)
