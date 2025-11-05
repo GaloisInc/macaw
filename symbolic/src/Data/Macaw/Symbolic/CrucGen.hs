@@ -1771,7 +1771,7 @@ addRegUpdateForBlock archFns startAddr = do
   void $ evalMacawStmt $ MacawArchStateUpdate (M.segoffAddr startAddr) mp
  where
   updatesFromRegStruct ::
-    (OrdF (M.ArchReg arch)) =>
+    OrdF (M.ArchReg arch) =>
     Assignment (M.ArchReg arch) ctx ->
     CrucGen arch ids s (MapF.MapF (M.ArchReg arch) (MacawCrucibleValue (CR.Atom s)))
   updatesFromRegStruct = foldlMFC' (\mp reg -> do
