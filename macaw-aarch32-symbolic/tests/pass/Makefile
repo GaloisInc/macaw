@@ -31,6 +31,11 @@ strd.unopt.exe: strd.s
 strd.opt.exe: strd.s
 	$(CC) $(CFLAGS) -mcpu=cortex-a7 -O2 $< -o $@
 
+pop.unopt.exe: pop.c
+	$(CC) $(CFLAGS) -mcpu=cortex-a7 -O0 $< -o $@
+pop.opt.exe: pop.c
+	$(CC) $(CFLAGS) -mcpu=cortex-a7 -O2 $< -o $@
+
 so/libfib.unopt.so: so/fib.c so/libgetone.unopt.so
 	$(CC) $(SO_CFLAGS) -O0 -Lso/ -Iso/ -shared $< -lgetone.unopt -o $@
 so/libfib.opt.so: so/fib.c so/libgetone.opt.so

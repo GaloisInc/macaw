@@ -53,7 +53,10 @@ import qualified SemMC.Architecture.ARM.Opcodes as ARM
 import qualified What4.BaseTypes as WT
 import qualified What4.Expr.Builder as WB
 
-import qualified Language.ASL.Globals as ASL
+import           Language.ASL.Globals.Definitions (typeAsWriteKind, isWritePlaceholderType, WriteK(..))
+import qualified Data.List as L
+import Text.Read (readMaybe)
+import Data.Parameterized (Some(..))
 
 loadSemantics :: WEB.ExprBuilder t st fs -> IO (ARM.ASLSemantics (WEB.ExprBuilder t st fs))
 loadSemantics sym = ARM.loadSemantics sym (ARM.ASLSemanticsOpts { ARM.aslOptTrimRegs = True})
@@ -412,9 +415,65 @@ armNonceAppEval bvi nonceApp =
                Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(translateBaseTypeRepr tp)) |]
           _ | "uf_INIT_GLOBAL_" `isPrefixOf` fnName ->
                Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(translateBaseTypeRepr tp)) |]
+
+          -- Added to address https://github.com/GaloisInc/macaw/issues/266
+          -- The "uf_cond_read_mem" function simply has the most recent mux condition
+          -- embedded as an additional argument (i.e. its condition).
+          -- 'condReadMem' can then safely emit an undefined value if this
+          -- condition is evaluated to be concretely false at runtime, since
+          -- it will ultimately be unused.
+          --
+          -- NOTE: This assumes that the ASL semantics have been updated
+          -- accordingly to include this conditional read function.
+          --
+          -- Ideally this would be handled by the existing lazy/eager system,
+          -- but memory reads are problematic because they can appear in otherwise
+          -- "pure" expressions.
+          -- Trying to convert a Mux over a memory read into an if-then-else turns out
+          -- to be somewhat nontrivial, as tracking effects across pure expressions is
+          -- not well supported.
+          -- This approach is more straightforward, at the cost of slightly complicating
+          -- the semantics with redundant information.
+
+          _ | Just nBytes <- readCondMemBytes fnName -> do
+              case FC.toListFC Some args of
+                [_, Some addrElt, Some condElt] -> Just $ do
+                  addr <- addEltTH M.LittleEndian bvi addrElt
+                  cond <- addEltTH M.LittleEndian bvi condElt
+                  setEffectful
+                  liftQ [| let sz = (M.knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral nBytes))))
+                            in condReadMem sz $(refLazy addr) $(refLazy cond)
+                        |]
+                _ -> fail ("Unexpected arguments to read_mem: " ++ showF args)
           _ -> Nothing
       _ -> Nothing -- fallback to default handling
 
+readCondMemBytes :: String -> Maybe Int
+readCondMemBytes s = do
+  nBitsStr <- L.stripPrefix "uf_cond_read_mem_" s
+  nBits <- readMaybe nBitsStr
+  return (nBits `div` 8)
+
+undefRead :: 1 <= w
+          => M.NatRepr w 
+          -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType (8 TL.* w)))
+undefRead w | WT.LeqProof <- WT.leqMulPos (knownNat @8) w = 
+  let rhs = M.SetUndefined (M.BVTypeRepr (WT.natMultiply (knownNat @8) w))
+  in M.AssignedValue <$> G.addAssignment rhs
+
+condReadMem :: 1 <= w
+        => M.NatRepr w
+        -> LazyValue ids s (M.BVType 32)
+        -> LazyValue ids s M.BoolType
+        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType (8 TL.* w)))
+condReadMem sz addr cond = do
+  c <- evalLazyValue cond
+  case c of
+    M.BoolValue False -> undefRead sz
+    -- Note that we could instead emit a "CondReadMem" with the condition attached,
+    -- but this risks breaking compatibility with other tools, since CondReadMem
+    -- was never previously used by Aarch32
+    _ -> readMem sz =<< evalLazyValue addr
 
 unitValue :: M.Value ARM.AArch32 ids (M.TupleType '[])
 unitValue =  M.Initial ARMDummyReg
@@ -711,20 +770,6 @@ addArchAssignment :: (M.HasRepr (M.ArchFn ARM.AArch32 (M.Value ARM.AArch32 ids))
                   -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
 addArchAssignment expr = (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn expr (M.typeRepr expr))
 
-
--- | indicates that this is a placeholder type (i.e. memory or registers)
-isPlaceholderType :: WT.BaseTypeRepr tp -> Bool
-isPlaceholderType tp = isJust (typeAsWriteKind tp)
-
-data WriteK = MemoryWrite | GPRWrite | SIMDWrite
-
-typeAsWriteKind :: WT.BaseTypeRepr tp -> Maybe WriteK
-typeAsWriteKind tp = case tp of
-  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.MemoryBaseType) -> Just MemoryWrite
-  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllGPRBaseType) -> Just GPRWrite
-  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) -> Just SIMDWrite
-  _ -> Nothing
-
 -- | A smart constructor for division
 --
 -- The smart constructor recognizes divisions that can be converted into shifts.
@@ -757,7 +802,7 @@ armTranslateType :: Q Type
                  -> Maybe (Q Type)
 armTranslateType idsTy sTy tp = case tp of
   WT.BaseStructRepr reprs -> Just $ mkTupT $ FC.toListFC translateBaseType reprs
-  _ | isPlaceholderType tp -> Just $ translateBaseType tp
+  _ | isWritePlaceholderType tp -> Just $ translateBaseType tp
   _ -> Nothing
   where
     translateBaseType :: forall tp'. WT.BaseTypeRepr tp' -> Q Type
