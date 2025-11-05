@@ -130,7 +130,6 @@ import qualified Lang.Crucible.LLVM.MemModel as MM
 
 import           Data.Macaw.Symbolic.PersistentState
 
-
 -- | The Crucible type of a register state
 --
 -- The registers are stored in an 'Ctx.Assignment' tagged with their Macaw
@@ -1766,11 +1765,9 @@ addRegUpdateForBlock archFns startAddr = do
     (OrdF (M.ArchReg arch)) =>
     Assignment (M.ArchReg arch) ctx ->
     CrucGen arch ids s (MapF.MapF (M.ArchReg arch) (MacawCrucibleValue (CR.Atom s)))
-  updatesFromRegStruct Empty = pure MapF.empty
-  updatesFromRegStruct (rst :> reg) = do
-    rstOf <- updatesFromRegStruct rst
+  updatesFromRegStruct = foldlMFC' (\mp reg -> do
     rval <- getRegValue reg
-    pure $ MapF.insert reg (MacawCrucibleValue rval) rstOf
+    pure $ MapF.insert reg (MacawCrucibleValue rval) mp) MapF.empty
 
 addParsedBlock :: forall arch ids s
                .  MacawSymbolicArchFunctions arch
