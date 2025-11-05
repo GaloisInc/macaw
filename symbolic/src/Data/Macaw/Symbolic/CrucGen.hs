@@ -1765,7 +1765,7 @@ register state because syscall, 'M.ParsedCall', and 'M.PLTStub' break the curren
 to a new block. This behavior means an update will collect the register state after the call/stub/syscall
 at entry to the next block. 
 -}
-addRegUpdateForBlock :: (OrdF (M.ArchReg arch)) => MacawSymbolicArchFunctions arch -> M.ArchSegmentOff arch -> CrucGen arch ids s ()
+addRegUpdateForBlock :: OrdF (M.ArchReg arch) => MacawSymbolicArchFunctions arch -> M.ArchSegmentOff arch -> CrucGen arch ids s ()
 addRegUpdateForBlock archFns startAddr = do
   mp <- updatesFromRegStruct (crucGenRegAssignment archFns)
   void $ evalMacawStmt $ MacawArchStateUpdate (M.segoffAddr startAddr) mp
