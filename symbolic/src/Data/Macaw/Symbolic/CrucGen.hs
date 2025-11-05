@@ -1759,6 +1759,11 @@ addSwitch blockLabelMap idx possibleAddrs = do
 {- | Adds a 'MacawArchStateUpdate' statement collecting all of
 the architecture register's initial values at the start of the block.
 These statements help consumers monitor the value of registers throughout a function.
+
+Adding this statemnet at the start of blocks is currently sufficient for consumers to track 
+register state because syscall, 'M.ParsedCall', and 'M.PLTStub' break the current block and jump 
+to a new block. This behavior means an update will collect the register state after the call/stub/syscall
+at entry to the next block. 
 -}
 addRegUpdateForBlock :: (OrdF (M.ArchReg arch)) => MacawSymbolicArchFunctions arch -> M.ArchSegmentOff arch -> CrucGen arch ids s ()
 addRegUpdateForBlock archFns startAddr = do
