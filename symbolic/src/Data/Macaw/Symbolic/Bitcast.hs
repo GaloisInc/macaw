@@ -9,9 +9,8 @@ module Data.Macaw.Symbolic.Bitcast (
 
 import           GHC.TypeLits
 
-import           Control.Monad ( forM, when )
+import           Control.Monad ( when )
 import qualified Data.BitVector.Sized as BV
-import qualified Data.Foldable as F
 import qualified Data.Vector as V
 
 import           What4.Interface
@@ -19,6 +18,7 @@ import           What4.InterpretedFloatingPoint as C
 
 import           Lang.Crucible.Backend
 import qualified Lang.Crucible.Simulator as C
+import qualified Lang.Crucible.Simulator.VecValue as C
 import qualified Lang.Crucible.LLVM.MemModel as MM
 
 import qualified Data.Macaw.CFG as M
@@ -56,31 +56,30 @@ doBitcast bak x eqPr =
       let outW = natMultiply n w
       LeqProof <- pure $ leqMulPos n w
       LeqProof <- pure $ plus1LeqDbl n w
-      when (fromIntegral (V.length x) /= natValue n) $ do
+      when (fromIntegral (C.vecValSizeConcrete x) /= natValue n) $ do
         fail "bitcast: Incorrect input vector length"
       -- We should have at least one element due to constraint on n
-      h <- case x V.!? 0 of
-             Just h -> pure h
-             Nothing -> error "doBitcast: impossible"
-      let rest :: V.Vector (MM.LLVMPtr sym w)
-          rest = V.tail x
+      C.RV h <- C.vecValGetEntryConcrete bak x 0
+      rest <- C.vecValTail sym x
       extH <- bvZext sym outW =<< MM.projectLLVM_bv bak h
-      let doPack :: (Integer,SymBV sym (n GHC.TypeLits.* w)) -> MM.LLVMPtr sym w -> IO (Integer, SymBV sym (n GHC.TypeLits.* w))
-          doPack (i,r) y = do
+      let doPack :: (Integer,SymBV sym (n GHC.TypeLits.* w)) -> C.RegValue' sym (MM.LLVMPointerType w) -> IO (Integer, SymBV sym (n GHC.TypeLits.* w))
+          doPack (i,r) (C.RV y) = do
             extY <- bvZext sym outW =<< MM.projectLLVM_bv bak y
             shiftAmt <- bvLit sym outW (BV.mkBV outW i)
             r' <- bvOrBits sym r =<< bvShl sym extY shiftAmt
             pure (i+intValue w,r')
-      (_,r) <- F.foldlM doPack (intValue w,extH) rest
+      (_,r) <- C.vecValFold sym doPack (intValue w,extH) rest
       MM.llvmPointer_bv sym r
     M.UnpackBits n w -> do
       let inW = natMultiply n w
       LeqProof <- pure $ leqMulPos n w
       LeqProof <- pure $ plus1LeqDbl n w
       xbv <- MM.projectLLVM_bv bak x
-      V.generateM (fromIntegral (natValue n)) $ \i -> do
+      vs <- V.generateM (fromIntegral (natValue n)) $ \i -> do
         shiftAmt <- bvLit sym inW (BV.mkBV inW (toInteger i * intValue w))
-        MM.llvmPointer_bv sym =<< bvTrunc sym w =<< bvLshr sym xbv shiftAmt
+        res <- MM.llvmPointer_bv sym =<< bvTrunc sym w =<< bvLshr sym xbv shiftAmt
+        pure (C.RV res)
+      pure (C.vecValLit vs)
     M.FromFloat f -> do
       Refl <- pure $ checkMacawFloatEq f
       xbv <- C.iFloatToBinary sym (floatInfoToCrucible f) x
@@ -89,8 +88,10 @@ doBitcast bak x eqPr =
       xbv <- MM.projectLLVM_bv bak x
       Refl <- pure $ checkMacawFloatEq f
       C.iFloatFromBinary sym (floatInfoToCrucible f) xbv
-    M.VecEqCongruence _n eltPr -> do
-      forM x $ \e -> doBitcast bak e eltPr
+      
+    M.VecEqCongruence _n eltPr ->
+      C.vecValMap sym (\(C.RV e) -> C.RV <$> doBitcast bak e eltPr) x 
+
     M.WidthEqRefl _ -> do
       pure x
     M.WidthEqTrans p q -> do

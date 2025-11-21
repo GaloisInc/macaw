@@ -168,7 +168,6 @@ import           Data.Parameterized.Some ( Some(Some) )
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Set as S
 import qualified Data.Text as T
-import qualified Data.Vector as V
 
 import qualified What4.FunctionName as C
 import           What4.Interface
@@ -187,6 +186,7 @@ import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
+import qualified Lang.Crucible.Simulator.VecValue as C
 
 import           System.IO (stdout)
 
@@ -1434,7 +1434,7 @@ freshCrucibleConstant sym nm = go
       freshFloatConstant sym nm (floatInfoToCrucible fi)
     go (M.TupleTypeRepr l) = macawListToCrucibleM (fmap C.RV . go) l
     go (M.VecTypeRepr n tp) =
-      V.replicateM (fromIntegral (natValue n)) (go tp)
+      C.vecValReplicate sym (natValue n) =<< (C.RV <$> go tp)
 
 -- | Return macaw extension evaluation functions.
 macawExtensions

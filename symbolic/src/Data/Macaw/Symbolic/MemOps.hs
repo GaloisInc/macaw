@@ -55,7 +55,6 @@ import           Control.Monad (guard, when)
 import           Data.Bits (testBit)
 import qualified Data.IntervalMap.Interval as IMI
 import qualified Data.IntervalSet as IS
-import qualified Data.Vector as V
 
 import qualified Data.BitVector.Sized as BV
 import           Data.Parameterized (Some(..))
@@ -76,6 +75,7 @@ import           Lang.Crucible.Simulator.GlobalState (lookupGlobal,insertGlobal)
 import           Lang.Crucible.Simulator.Intrinsics (GetIntrinsic, Intrinsic)
 import           Lang.Crucible.Simulator.RegMap (RegEntry,regValue)
 import           Lang.Crucible.Simulator.RegValue (RegValue)
+import           Lang.Crucible.Simulator.VecValue
 import           Lang.Crucible.Simulator.SimError (SimErrorReason(AssertFailureSimError))
 import           Lang.Crucible.Types
 
@@ -946,11 +946,12 @@ memReprToStorageType reqEnd memRep =
 resolveMemVal :: MemRepr ty ->
                  Mem.StorageType ->
                  RegValue sym (ToCrucibleType ty) ->
-                 Mem.LLVMVal sym
+                 IO (Mem.LLVMVal sym)
 resolveMemVal (M.BVMemRepr bytes _endian) _ (Mem.LLVMPointer base bits) =
   case leqMulPos (knownNat @8) bytes of
-    LeqProof -> Mem.LLVMValInt base bits
+    LeqProof -> pure (Mem.LLVMValInt base bits)
 resolveMemVal (M.FloatMemRepr floatRep _endian) _ val =
+  pure $
   case floatRep of
     M.SingleFloatRepr -> Mem.LLVMValFloat Mem.SingleSize   val
     M.DoubleFloatRepr -> Mem.LLVMValFloat Mem.DoubleSize   val
@@ -958,8 +959,9 @@ resolveMemVal (M.FloatMemRepr floatRep _endian) _ val =
     _ -> error $ "Do not support memory accesses to " ++ show floatRep ++ " values."
 resolveMemVal (M.PackedVecMemRepr n eltType) stp val =
   case Mem.storageTypeF stp of
-    Mem.Array cnt eltStp | cnt == natValue n, fromIntegral (V.length val) == natValue n ->
-      Mem.LLVMValArray eltStp (resolveMemVal eltType eltStp <$> val)
+    Mem.Array cnt eltStp | cnt == natValue n, fromIntegral (vecValSizeConcrete val) == natValue n -> -- fromIntegral (V.length val) == natValue n ->
+      vecValToVec val >>= \xs ->
+      Mem.LLVMValArray eltStp <$> mapM (resolveMemVal eltType eltStp . C.unRV) xs
     _ -> error $ "Unexpected storage type for packed vec."
 
 -- | Report an unexpected value read from meory.
@@ -1002,7 +1004,8 @@ memValToCrucible memRep val =
     M.PackedVecMemRepr _expectedLen eltMemRepr -> do
       case val of
         Mem.LLVMValArray _ v -> do
-          traverse (memValToCrucible eltMemRepr) v
+          xs <- traverse (fmap C.RV . memValToCrucible eltMemRepr) v
+          pure (vecValLit xs)
         _ -> unexpectedMemVal
 
 -- | Given a Boolean condition and two symbolic values associated with
@@ -1029,10 +1032,8 @@ muxMemReprValue sym memRep cond x y =
         LeqProof -> muxLLVMPtr sym cond x y
     M.FloatMemRepr _floatRep _endian ->
       baseTypeIte sym cond x y
-    M.PackedVecMemRepr _ eltMemRepr -> do
-      when (V.length x /= V.length y) $ do
-        throwIO $ userError $ "Expected vectors to have same length"
-      V.zipWithM (muxMemReprValue sym eltMemRepr cond) x y
+    M.PackedVecMemRepr _ eltMemRepr -> C.muxVector sym iteFn cond x y
+      where iteFn = C.liftITE (muxMemReprValue sym eltMemRepr)
 
 -- | Use addr width to bring `HasPtrWidth` constraints in scope.
 hasPtrClass :: M.AddrWidthRepr ptrW -> (Mem.HasPtrWidth ptrW => a) -> a
@@ -1123,7 +1124,7 @@ doWriteMem bak mem ptrWidth memRep ptr val = hasPtrClass ptrWidth $
              Left msg -> throwIO $ userError msg
              Right tp -> pure tp
      let alignment = noAlignment -- default to byte alignment (FIXME)
-     let memVal = resolveMemVal memRep ty val
+     memVal <- resolveMemVal memRep ty val
      Mem.storeRaw bak mem ptr ty alignment memVal
 
 
@@ -1151,5 +1152,5 @@ doCondWriteMem bak mem ptrWidth memRep cond ptr val = hasPtrClass ptrWidth $
              Left msg -> throwIO $ userError msg
              Right tp -> pure tp
      let alignment = noAlignment -- default to byte alignment (FIXME)
-     let memVal = resolveMemVal memRep ty val
+     memVal <- resolveMemVal memRep ty val
      Mem.condStoreRaw bak mem cond ptr ty alignment memVal
