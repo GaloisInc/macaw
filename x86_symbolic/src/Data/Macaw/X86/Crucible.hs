@@ -58,6 +58,7 @@ import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.Evaluation as C
 import           Lang.Crucible.Simulator.ExecutionTree
 import           Lang.Crucible.Simulator.Intrinsics (IntrinsicTypes)
+import qualified Lang.Crucible.Simulator.VecValue as C
 import           Lang.Crucible.Simulator.RegMap
 import           Lang.Crucible.Syntax
 import           Lang.Crucible.Types
@@ -393,13 +394,20 @@ pureSem sym fn = do
     M.XGetBV {} -> throw (MissingPrimFnSemantics fn)
     M.PShufb sw (AtomWrapper vxs) (AtomWrapper vys) ->
       case sw of
-        M.SIMDByteCount_XMM
-          | Just pxs <- V.fromList n16 $ DV.toList $ regValue vxs
-          , Just pys <- V.fromList n16 $ DV.toList $ regValue vys -> do
-              xs <- mapM (pure . ValBV n8 <=< projectLLVM_bv bak) pxs
-              ys <- mapM (pure . ValBV n8 <=< projectLLVM_bv bak) pys
-              let res = DV.fromList $ V.toList $ shuffleB xs ys
-              mapM (llvmPointer_bv (symIface sym) <=< evalE sym) res
+        -- XXX: Using lists seems unnecessary?
+        M.SIMDByteCount_XMM ->
+          do
+            xs' <- C.vecValToVec (regValue vxs)
+            ys' <- C.vecValToVec (regValue vys)
+            case (V.fromList n16 (DV.toList xs'), V.fromList n16 (DV.toList ys')) of
+              (Just pxs, Just pys) ->
+                do
+                  xs <- mapM (\(RV x) -> ValBV n8 <$> projectLLVM_bv bak x) pxs
+                  ys <- mapM (\(RV y) -> ValBV n8 <$> projectLLVM_bv bak y) pys
+                  let res = DV.fromList $ V.toList $ shuffleB xs ys
+                  zs <- mapM (fmap RV . llvmPointer_bv (symIface sym) <=< evalE sym) res
+                  pure (C.vecValLit zs)
+              _ -> error "PShufb is not implemented for 64-bit operands"  
         _ -> error "PShufb is not implemented for 64-bit operands"
     M.MemCmp{}      -> throw (MissingPrimFnSemantics fn)
     M.RepnzScas{}   -> throw (MissingPrimFnSemantics fn)
@@ -427,7 +435,7 @@ pureSem sym fn = do
                 M.SSE_Div  -> iFloatDiv  @_ @(ToCrucibleFloatInfo ftp) symi RNE
                 M.SSE_Min  -> iFloatMin  @_ @(ToCrucibleFloatInfo ftp) symi
                 M.SSE_Max  -> iFloatMax  @_ @(ToCrucibleFloatInfo ftp) symi
-      DV.zipWithM f (regValue x) (regValue y)
+      C.vecValZipWith symi (\(RV x') (RV y') -> RV <$> f x' y') (regValue x) (regValue y)
 
     M.SSE_Sqrt (_tp :: M.SSE_FloatType ftp) (AtomWrapper x)  -> do
       iFloatSqrt  @_ @(ToCrucibleFloatInfo ftp) symi RTP (regValue x)
