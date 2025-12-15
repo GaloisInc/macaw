@@ -193,9 +193,17 @@ mkIntraJumpBounds bnds =
                   , intraMemCleared = False
                   }
 
+
+ppPredMap :: forall ann ids. MapF (AssignId ids) SubRange -> Doc ann
+ppPredMap x = 
+  
+  let lst = MapF.toList x
+      ppAssign :: Pair (AssignId ids) SubRange -> Doc ann
+      ppAssign (Pair l r) = ppAssignId l <+> ":=" <+> pretty r in
+  vcat $ fmap ppAssign lst
 instance ShowF (ArchReg arch) => Pretty (IntraJumpBounds arch ids) where
   pretty cns = vcat $
-    ppBlockStartStackConstraints (biscInitConstraints (intraStackConstraints cns))
+    ["memCleared: ", pretty (intraMemCleared cns) , pretty (intraStackConstraints cns), "predMap: ", ppPredMap (intraReadPredMap cns), "initJumpBounds: "] ++ ppInitJumpBounds (intraInitBounds cns)
 
 -- | Update the stack constraints in the bounds.
 modifyIntraStackConstraints ::IntraJumpBounds arch ids
@@ -248,6 +256,11 @@ execStatement bnds stmt =
                       , Just (MemVal bndRepr bnd)  <- Map.lookup addr (initAddrPredMap (intraInitBounds bnds))
                       , Just Refl <- testEquality readRepr bndRepr ->
                         bnds { intraReadPredMap = MapF.insert aid bnd (intraReadPredMap bnds) }
+                    ReadMem addrVal readRepr
+                          | False <- intraMemCleared bnds
+                          , StackOffsetExpr off <- intraStackValueExpr  (intraStackConstraints bnds) addrVal
+                          , Just bnd <- locLookup (StackOffLoc off readRepr)  (initRngPredMap (intraInitBounds bnds)) ->
+                            bnds { intraReadPredMap = MapF.insert aid bnd (intraReadPredMap bnds) }
                     -- Clear all knowledge about the stack on architecture-specific
                     -- functions that accept stack pointer as they may have side effects.
                     --
@@ -256,7 +269,7 @@ execStatement bnds stmt =
                     EvalArchFn f _ ->
                       if archFnCouldAffectStack (intraStackConstraints bnds) f then
                         discardMemBounds bnds
-                       else
+                      else
                         bnds { intraMemCleared = True }
                     _ -> bnds
       -- Associate the given expression with a bounds.
