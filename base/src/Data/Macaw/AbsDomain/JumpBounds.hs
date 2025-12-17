@@ -193,17 +193,9 @@ mkIntraJumpBounds bnds =
                   , intraMemCleared = False
                   }
 
-
-ppPredMap :: forall ann ids. MapF (AssignId ids) SubRange -> Doc ann
-ppPredMap x = 
-  
-  let lst = MapF.toList x
-      ppAssign :: Pair (AssignId ids) SubRange -> Doc ann
-      ppAssign (Pair l r) = ppAssignId l <+> ":=" <+> pretty r in
-  vcat $ fmap ppAssign lst
 instance ShowF (ArchReg arch) => Pretty (IntraJumpBounds arch ids) where
   pretty cns = vcat $
-    ["memCleared: ", pretty (intraMemCleared cns) , pretty (intraStackConstraints cns), "predMap: ", ppPredMap (intraReadPredMap cns), "initJumpBounds: "] ++ ppInitJumpBounds (intraInitBounds cns)
+    ppBlockStartStackConstraints (biscInitConstraints (intraStackConstraints cns))
 
 -- | Update the stack constraints in the bounds.
 modifyIntraStackConstraints ::IntraJumpBounds arch ids
