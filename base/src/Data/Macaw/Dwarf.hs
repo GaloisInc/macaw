@@ -590,8 +590,8 @@ parseSubrange d = runDIEParser "parseSubrange" d $ do
   mbUpperVal <- getMaybeAttribute DW_AT_upper_bound attributeValue
   mbCountVal <- getMaybeAttribute DW_AT_count attributeAsUInt
   bnd <- case (mbUpperVal, mbCountVal) of
-    (Nothing, Nothing) -> throwError "Expected either DW_AT_count or DW_AT_upper_bound in DW_TAG_subrangetype"
-    (Just _, Just _) -> throwError "Unexpected in DW_TAG_subrangetype, both count and upper bound provided"
+    (Nothing, Nothing) -> throwError "Expected either DW_AT_count or DW_AT_upper_bound in DW_TAG_subrange_type"
+    (Just _, Just _) -> throwError "Unexpected in DW_TAG_subrange_type, both count and upper bound provided"
     (Just upperVal, _) -> lift $ parseUpperBound upperVal dr
     (_, Just countVal) -> pure (SubrangeCount countVal)
   pure
