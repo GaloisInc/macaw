@@ -61,6 +61,7 @@ module Data.Macaw.Dwarf
     Enumerator, -- (..)
     SubroutineTypeDecl (..),
     Subrange (..),
+    SubrangeBounds(..),
     Typedef (..),
     TypeQual (..),
     TypeQualAnn (..),
