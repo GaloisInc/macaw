@@ -557,12 +557,16 @@ parseEnumerator d = runDIEParser "parseEnumerator" d $ do
       }
 
 ------------------------------------------------------------------------
--- Subrange
+
+{- | Declares the upper bounds of a 'Subrange' either via a count (DW_AT_count)
+or via an upper bound (DW_AT_upperbound)
+-}
 data SubrangeBounds
   = SubrangeUpperBound [DW_OP]
   | SubrangeCount Word64
   deriving (Show)
 
+-- | Subrange for DW_TAG_subrange_type
 data Subrange tp = Subrange
   { subrangeType :: tp,
     subrangeUpperBound :: SubrangeBounds
