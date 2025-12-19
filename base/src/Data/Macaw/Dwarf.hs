@@ -557,35 +557,46 @@ parseEnumerator d = runDIEParser "parseEnumerator" d $ do
 
 ------------------------------------------------------------------------
 -- Subrange
+data SubrangeBounds
+  = SubrangeUpperBound [DW_OP]
+  | SubrangeCount Word64
+  deriving (Show)
 
 data Subrange tp = Subrange
   { subrangeType :: tp,
-    subrangeUpperBound :: [DW_OP]
+    subrangeUpperBound :: SubrangeBounds
   }
   deriving (Show)
 
 --subrangeTypeLens :: Lens (Subrange a) (Subrange b) a b
 --subrangeTypeLens = lens subrangeType (\s v -> s { subrangeType = v })
 
+parseUpperBound :: DW_ATVAL -> Dwarf.Reader -> Parser SubrangeBounds
+parseUpperBound upperVal dr =
+  SubrangeUpperBound <$> case upperVal of
+    DW_ATVAL_UINT w -> pure [DW_OP_const8u w]
+    DW_ATVAL_BLOB bs ->
+      case parseDW_OPs dr bs of
+        Left (_, _, msg) -> throwError msg
+        Right ops -> pure ops
+    _ -> throwError "Invalid upper bound"
+
+
 parseSubrange :: DIE -> Parser (Subrange TypeRef)
 parseSubrange d = runDIEParser "parseSubrange" d $ do
   dr <- lift $ Parser $ asks readerInfo
   tp <- getSingleAttribute DW_AT_type attributeAsTypeRef
-  upperVal <- getSingleAttribute DW_AT_upper_bound attributeValue
-
-  upper <-
-    case upperVal of
-      DW_ATVAL_UINT w -> pure [DW_OP_const8u w]
-      DW_ATVAL_BLOB bs ->
-        case parseDW_OPs dr bs of
-          Left (_, _, msg) -> throwError msg
-          Right ops -> pure ops
-      _ -> throwError "Invalid upper bound"
-
+  mbUpperVal <- getMaybeAttribute DW_AT_upper_bound attributeValue
+  mbCountVal <- getMaybeAttribute DW_AT_count attributeAsUInt
+  bnd <- case (mbUpperVal, mbCountVal) of
+    (Nothing, Nothing) -> throwError "Expected either DW_AT_count or DW_AT_upper_bound in DW_TAG_subrangetype"
+    (Just _, Just _) -> throwError "Unexpected in DW_TAG_subrangetype, both count and upper bound provided"
+    (Just upperVal, _) -> lift $ parseUpperBound upperVal dr
+    (_, Just countVal) -> pure (SubrangeCount countVal)
   pure
     $! Subrange
       { subrangeType = tp,
-        subrangeUpperBound = upper
+        subrangeUpperBound = bnd
       }
 
 ------------------------------------------------------------------------
