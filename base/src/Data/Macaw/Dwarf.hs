@@ -559,7 +559,7 @@ parseEnumerator d = runDIEParser "parseEnumerator" d $ do
 ------------------------------------------------------------------------
 
 {- | Declares the upper bounds of a 'Subrange' either via a count (DW_AT_count)
-or via an upper bound (DW_AT_upperbound)
+or via an upper bound (DW_AT_upper_bound)
 -}
 data SubrangeBounds
   = SubrangeUpperBound [DW_OP]
