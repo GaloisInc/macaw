@@ -403,6 +403,31 @@ wrapPointerToBits = ExtensionWrapper
             DMS.PtrToBits WI.knownNat in
       Ctx.uncurryAssignment (pure . pointerToBits) args }
 
+wrapPointerCmp
+  :: ( 1 <= w
+     , KnownNat w
+     , DMC.MemWidth w
+     , w ~ DMC.ArchAddrWidth arch )
+  => LCSA.AtomName
+  -> (forall s.
+      DMM.AddrWidthRepr (DMC.ArchAddrWidth arch)
+      -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
+      -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
+      -> DMS.MacawStmtExtension arch (LCCR.Atom s) LCT.BoolType)
+  -> ExtensionWrapper arch
+                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
+                                    Ctx.::> LCLM.LLVMPointerType w)
+                      LCT.BoolType
+wrapPointerCmp name op = ExtensionWrapper
+  { extName = name
+  , extArgTypes =
+      Ctx.empty
+      Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
+      Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
+  , extWrapper =
+      \args -> Ctx.uncurryAssignment (binop (op . DMM.addrWidthRepr)) args
+  }
+
 -- | Wrapper for the 'DMS.PtrEq' syntax extension that enables users to test
 -- the equality of two pointers.
 --
@@ -416,11 +441,37 @@ wrapPointerEq
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
                                     Ctx.::> LCLM.LLVMPointerType w)
                       LCT.BoolType
-wrapPointerEq = ExtensionWrapper
- { extName = LCSA.AtomName "pointer-eq"
- , extArgTypes = Ctx.empty Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
-                           Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
- , extWrapper = \args -> Ctx.uncurryAssignment (binop (DMS.PtrEq . DMM.addrWidthRepr)) args }
+wrapPointerEq = wrapPointerCmp (LCSA.AtomName "pointer-eq") DMS.PtrEq
+
+-- | Wrapper for the 'DMS.PtrLeq' syntax extension that enables users to compare
+-- two pointers.
+--
+-- > pointer-leq ptr1 ptr2
+wrapPointerLeq
+  :: ( 1 <= w
+     , KnownNat w
+     , DMC.MemWidth w
+     , w ~ DMC.ArchAddrWidth arch )
+  => ExtensionWrapper arch
+                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
+                                    Ctx.::> LCLM.LLVMPointerType w)
+                      LCT.BoolType
+wrapPointerLeq =  wrapPointerCmp (LCSA.AtomName "pointer-leq") DMS.PtrLeq
+
+-- | Wrapper for the 'DMS.PtrLt' syntax extension that enables users to compare
+-- two pointers.
+--
+-- > pointer-lt ptr1 ptr2
+wrapPointerLt
+  :: ( 1 <= w
+     , KnownNat w
+     , DMC.MemWidth w
+     , w ~ DMC.ArchAddrWidth arch )
+  => ExtensionWrapper arch
+                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
+                                    Ctx.::> LCLM.LLVMPointerType w)
+                      LCT.BoolType
+wrapPointerLt =  wrapPointerCmp (LCSA.AtomName "pointer-lt") DMS.PtrLt
 
 -- | Wrapper for the 'DMS.MacawReadMem' syntax extension that enables users to
 -- read through a pointer to retrieve data at the underlying memory location.
@@ -552,6 +603,8 @@ extensionWrappers = Map.fromList
   , (LCSA.AtomName "pointer-diff", SomeExtensionWrapper wrapPointerDiff)
   , (LCSA.AtomName "pointer-sub", SomeExtensionWrapper wrapPointerSub)
   , (LCSA.AtomName "pointer-eq", SomeExtensionWrapper wrapPointerEq)
+  , (LCSA.AtomName "pointer-leq", SomeExtensionWrapper wrapPointerLeq)
+  , (LCSA.AtomName "pointer-lt", SomeExtensionWrapper wrapPointerLt)
   , (LCSA.AtomName "pointer-make-null", SomeExtensionWrapper wrapMakeNull)
   , (LCSA.AtomName "pointer-to-bits", SomeExtensionWrapper wrapPointerToBits)
   , (LCSA.AtomName "bits-to-pointer", SomeExtensionWrapper wrapBitsToPointer)
