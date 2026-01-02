@@ -8,6 +8,8 @@
       (let r (pointer-add p d))
       (let s (pointer-sub r d))
       (let e (pointer-eq s p))
+      (let l (pointer-leq s p))
+      (let L (pointer-lt s p))
       (let t (pointer-read Int le s))
       (pointer-write SizeT le s b)
       (return ())))
@@ -32,18 +34,22 @@ ops
   $9 = extensionApp((bits_to_ptr_64 $8))
   % 9:12
   $10 = (ptr_add $0 $9)
-  % 10:16
+  % 10:12
   $11 = (ptr_sub $10 $9)
-  % 11:16
+  % 11:12
   $12 = (ptr_eq $11 $0)
-  % internal
-  $13 = (macawReadMem bvle4 $11)
   % 12:12
-  $14 = extensionApp((ptr_to_bits_32 $13))
-  % 13:5
-  $15 = (macawWriteMem bvle8 $11 $4)
-  % 14:13
-  $16 = emptyApp()
-  % 14:5
-  return $16
+  $13 = (ptr_leq $11 $0)
+  % 13:12
+  $14 = (ptr_lt $11 $0)
+  % internal
+  $15 = (macawReadMem bvle4 $11)
+  % 14:12
+  $16 = extensionApp((ptr_to_bits_32 $15))
+  % 15:5
+  $17 = (macawWriteMem bvle8 $11 $4)
+  % 16:13
+  $18 = emptyApp()
+  % 16:5
+  return $18
   % no postdom
