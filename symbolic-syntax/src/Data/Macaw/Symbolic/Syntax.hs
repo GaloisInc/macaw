@@ -157,7 +157,6 @@ extensionParser :: forall s m ext arch w
                  . ( ExtensionParser m ext s
                    , ext ~ (DMS.MacawExt arch)
                    , w ~ DMC.ArchAddrWidth arch
-                   , 1 <= w
                    , KnownNat w
                    , DMM.MemWidth w
                    )
@@ -269,8 +268,7 @@ binopRhsBvToPtr op p1 p2 = do
 -- Note that the underlying macaw primitive allows the offset to be in either
 -- position. This user-facing interface is more restrictive.
 wrapPointerAdd
-  :: ( 1 <= w
-     , KnownNat w
+  :: ( KnownNat w
      , DMC.MemWidth w
      , w ~ DMC.ArchAddrWidth arch )
   => ExtensionWrapper arch
@@ -291,8 +289,7 @@ wrapPointerAdd = ExtensionWrapper
 -- Note that the underlying macaw primitive allows the offset to be in either
 -- position. This user-facing interface is more restrictive.
 wrapPointerSub
-  :: ( 1 <= w
-     , KnownNat w
+  :: ( KnownNat w
      , DMC.MemWidth w
      , w ~ DMC.ArchAddrWidth arch )
   => ExtensionWrapper arch
@@ -309,7 +306,6 @@ wrapPointerSub = ExtensionWrapper
 pointerDiff :: ( w ~ DMC.ArchAddrWidth arch
                , ext ~ DMS.MacawExt arch
                , ExtensionParser m ext s
-               , 1 <= w
                , KnownNat w
                , DMM.MemWidth w )
             => LCCR.Atom s (LCLM.LLVMPointerType w)
@@ -328,7 +324,6 @@ pointerDiff lhs rhs = do
 -- > pointer-diff ptr1 ptr2
 wrapPointerDiff
   :: ( w ~ DMC.ArchAddrWidth arch
-     , 1 <= w
      , KnownNat w
      , DMC.MemWidth w )
   => ExtensionWrapper arch
@@ -346,7 +341,6 @@ wrapPointerDiff = ExtensionWrapper
 -- > pointer-make-null
 wrapMakeNull
   :: ( w ~ DMC.ArchAddrWidth arch
-     , 1 <= w
      , KnownNat w
      , DMC.MemWidth w )
   => ExtensionWrapper arch
@@ -365,7 +359,6 @@ wrapMakeNull = ExtensionWrapper
 -- > bits-to-pointer bv
 wrapBitsToPointer
   :: ( w ~ DMC.ArchAddrWidth arch
-     , 1 <= w
      , KnownNat w
      , DMC.MemWidth w )
   => ExtensionWrapper arch
@@ -387,7 +380,6 @@ wrapBitsToPointer = ExtensionWrapper
 -- > pointer-to-bits bv
 wrapPointerToBits
   :: ( w ~ DMC.ArchAddrWidth arch
-     , 1 <= w
      , KnownNat w
      , DMC.MemWidth w )
   => ExtensionWrapper arch
@@ -404,8 +396,7 @@ wrapPointerToBits = ExtensionWrapper
       Ctx.uncurryAssignment (pure . pointerToBits) args }
 
 wrapPointerCmp
-  :: ( 1 <= w
-     , KnownNat w
+  :: ( KnownNat w
      , DMC.MemWidth w
      , w ~ DMC.ArchAddrWidth arch )
   => LCSA.AtomName
@@ -433,8 +424,7 @@ wrapPointerCmp name op = ExtensionWrapper
 --
 -- > pointer-eq ptr1 ptr2
 wrapPointerEq
-  :: ( 1 <= w
-     , KnownNat w
+  :: ( KnownNat w
      , DMC.MemWidth w
      , w ~ DMC.ArchAddrWidth arch )
   => ExtensionWrapper arch
@@ -448,8 +438,7 @@ wrapPointerEq = wrapPointerCmp (LCSA.AtomName "pointer-eq") DMS.PtrEq
 --
 -- > pointer-leq ptr1 ptr2
 wrapPointerLeq
-  :: ( 1 <= w
-     , KnownNat w
+  :: ( KnownNat w
      , DMC.MemWidth w
      , w ~ DMC.ArchAddrWidth arch )
   => ExtensionWrapper arch
@@ -463,8 +452,7 @@ wrapPointerLeq =  wrapPointerCmp (LCSA.AtomName "pointer-leq") DMS.PtrLeq
 --
 -- > pointer-lt ptr1 ptr2
 wrapPointerLt
-  :: ( 1 <= w
-     , KnownNat w
+  :: ( KnownNat w
      , DMC.MemWidth w
      , w ~ DMC.ArchAddrWidth arch )
   => ExtensionWrapper arch
@@ -478,8 +466,7 @@ wrapPointerLt =  wrapPointerCmp (LCSA.AtomName "pointer-lt") DMS.PtrLt
 --
 -- > pointer-read type endianness ptr
 buildPointerReadWrapper
-  :: ( 1 <= w
-     , KnownNat w
+  :: ( KnownNat w
      , DMC.MemWidth w
      , w ~ DMC.ArchAddrWidth arch
      )
@@ -596,7 +583,7 @@ bvTypedLit (LCT.BVRepr w) val = return (LCCR.EvalApp (LCE.IntegerToBV w val))
 
 -- | Syntax extension wrappers
 extensionWrappers
-  :: (w ~ DMC.ArchAddrWidth arch, 1 <= w, KnownNat w, DMC.MemWidth w)
+  :: (w ~ DMC.ArchAddrWidth arch, KnownNat w, DMC.MemWidth w)
   => Map.Map LCSA.AtomName (SomeExtensionWrapper arch)
 extensionWrappers = Map.fromList
   [ (LCSA.AtomName "pointer-add", SomeExtensionWrapper wrapPointerAdd)
@@ -618,7 +605,7 @@ ptrTypeParser = LCSM.describe "Pointer type" $ do
 -- | All of the crucible syntax extensions to support machine code
 machineCodeParserHooks
   :: forall w arch proxy
-   . (w ~ DMC.ArchAddrWidth arch, 1 <= w, KnownNat w, DMC.MemWidth w)
+   . (w ~ DMC.ArchAddrWidth arch, KnownNat w, DMC.MemWidth w)
   => proxy arch
   -- | Hooks with which to further extend this parser
   -> LCSC.ParserHooks (DMS.MacawExt arch)
