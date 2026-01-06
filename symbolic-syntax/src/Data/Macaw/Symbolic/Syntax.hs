@@ -336,6 +336,72 @@ wrapPointerDiff = ExtensionWrapper
                             Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
   , extWrapper = \args -> Ctx.uncurryAssignment pointerDiff args }
 
+wrapPointerBinop
+  :: ( KnownNat w
+     , DMC.MemWidth w
+     , w ~ DMC.ArchAddrWidth arch )
+  => LCSA.AtomName
+  -> (forall s.
+      DMM.AddrWidthRepr (DMC.ArchAddrWidth arch)
+      -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
+      -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
+      -> DMS.MacawStmtExtension arch (LCCR.Atom s) (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch)))
+  -> ExtensionWrapper arch
+                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
+                                    Ctx.::> LCLM.LLVMPointerType w)
+                      (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
+wrapPointerBinop name op = ExtensionWrapper
+  { extName = name
+  , extArgTypes =
+      Ctx.empty
+      Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
+      Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
+  , extWrapper =
+      \args -> Ctx.uncurryAssignment (binop (op . DMM.addrWidthRepr)) args
+  }
+
+wrapPointerAnd
+  :: ( w ~ DMC.ArchAddrWidth arch
+     , KnownNat w
+     , DMC.MemWidth w )
+  => ExtensionWrapper arch
+                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
+                                    Ctx.::> LCLM.LLVMPointerType w )
+                      (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
+wrapPointerAnd =
+  wrapPointerBinop (LCSA.AtomName "ptr-and") DMS.PtrAnd
+
+wrapPointerXor
+  :: ( w ~ DMC.ArchAddrWidth arch
+     , KnownNat w
+     , DMC.MemWidth w )
+  => ExtensionWrapper arch
+                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
+                                    Ctx.::> LCLM.LLVMPointerType w )
+                      (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
+wrapPointerXor =
+  wrapPointerBinop (LCSA.AtomName "ptr-xor") DMS.PtrXor
+
+wrapPointerMux
+  :: ( w ~ DMC.ArchAddrWidth arch
+     , KnownNat w
+     , DMC.MemWidth w )
+  => ExtensionWrapper arch
+                      (Ctx.EmptyCtx Ctx.::> LCT.BoolType
+                                    Ctx.::> LCLM.LLVMPointerType w
+                                    Ctx.::> LCLM.LLVMPointerType w )
+                      (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
+wrapPointerMux = ExtensionWrapper
+  { extName = LCSA.AtomName "ptr-mux"
+  , extArgTypes = WI.knownRepr
+  , extWrapper =
+      let w = DMM.addrWidthRepr WI.knownNat in
+      \args ->
+        Ctx.uncurryAssignment
+          (\b l r -> pure (LCCR.EvalExt (DMS.PtrMux w b l r)))
+          args
+  }
+
 -- | Wrapper for 'DMS.MacawNullPtr' to construct a null pointer.
 --
 -- > pointer-make-null
@@ -589,6 +655,9 @@ extensionWrappers = Map.fromList
   [ (LCSA.AtomName "pointer-add", SomeExtensionWrapper wrapPointerAdd)
   , (LCSA.AtomName "pointer-diff", SomeExtensionWrapper wrapPointerDiff)
   , (LCSA.AtomName "pointer-sub", SomeExtensionWrapper wrapPointerSub)
+  , (LCSA.AtomName "pointer-and", SomeExtensionWrapper wrapPointerAnd)
+  , (LCSA.AtomName "pointer-xor", SomeExtensionWrapper wrapPointerXor)
+  , (LCSA.AtomName "pointer-mux", SomeExtensionWrapper wrapPointerMux)
   , (LCSA.AtomName "pointer-eq", SomeExtensionWrapper wrapPointerEq)
   , (LCSA.AtomName "pointer-leq", SomeExtensionWrapper wrapPointerLeq)
   , (LCSA.AtomName "pointer-lt", SomeExtensionWrapper wrapPointerLt)

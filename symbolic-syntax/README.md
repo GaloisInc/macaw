@@ -22,6 +22,9 @@ The extra operations are:
 - `pointer-add :: Pointer -> Bitvector w -> Pointer` where `w` is the number of bits in a pointer (usually 32 or 64).
 - `pointer-diff :: Pointer -> Pointer -> Bitvector w` where `w` is the number of bits in a pointer (usually 32 or 64).
 - `pointer-sub :: Pointer -> Bitvector w -> Pointer` where `w` is the number of bits in a pointer (usually 32 or 64).
+- `pointer-and :: Pointer -> Pointer -> Pointer`
+- `pointer-xor :: Pointer -> Pointer -> Pointer`
+- `pointer-mux :: Bool -> Pointer -> Pointer -> Pointer`
 - `pointer-eq :: Pointer -> Pointer -> Bool`.
 - `pointer-leq :: Pointer -> Pointer -> Bool`.
 - `pointer-lt :: Pointer -> Pointer -> Bool`.
