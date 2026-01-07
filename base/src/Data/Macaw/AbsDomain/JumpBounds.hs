@@ -242,7 +242,6 @@ execStatement bnds stmt =
   case stmt of
     AssignStmt (Assignment aid arhs) -> do
       let bnds1 = case arhs of
-
                     ReadMem addrVal readRepr
                       | False <- intraMemCleared bnds
                       , Just addr <- valueAsMemAddr addrVal
@@ -258,7 +257,7 @@ execStatement bnds stmt =
                       -- will have the same bounds from 3.
                       | False <- intraMemCleared bnds
                       , StackOffsetExpr off <- intraStackValueExpr (intraStackConstraints bnds) addrVal
-                      , Just bnd <- locLookup (StackOffLoc off readRepr)  (initRngPredMap (intraInitBounds bnds)) ->
+                      , Just bnd <- locLookup (StackOffLoc off readRepr) (initRngPredMap (intraInitBounds bnds)) ->
                             bnds { intraReadPredMap = MapF.insert aid bnd (intraReadPredMap bnds) }
                     -- Clear all knowledge about the stack on architecture-specific
                     -- functions that accept stack pointer as they may have side effects.
