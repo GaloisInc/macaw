@@ -248,6 +248,17 @@ execStatement bnds stmt =
                       , Just (MemVal bndRepr bnd)  <- Map.lookup addr (initAddrPredMap (intraInitBounds bnds))
                       , Just Refl <- testEquality readRepr bndRepr ->
                         bnds { intraReadPredMap = MapF.insert aid bnd (intraReadPredMap bnds) }
+                      
+                      -- Check that 
+                      -- 1. a memory access could not modify the value at the given stack offset
+                      -- 2. that the read address is a given stack offset "off"
+                      -- 3. that the range map has bounds for the read stack location
+                      -- If these conditions hold then we can conclude that the loaded value 
+                      -- will have the same bounds from 3.
+                      | False <- intraMemCleared bnds
+                      , StackOffsetExpr off <- intraStackValueExpr (intraStackConstraints bnds) addrVal
+                      , Just bnd <- locLookup (StackOffLoc off readRepr) (initRngPredMap (intraInitBounds bnds)) ->
+                            bnds { intraReadPredMap = MapF.insert aid bnd (intraReadPredMap bnds) }
                     -- Clear all knowledge about the stack on architecture-specific
                     -- functions that accept stack pointer as they may have side effects.
                     --
@@ -256,7 +267,7 @@ execStatement bnds stmt =
                     EvalArchFn f _ ->
                       if archFnCouldAffectStack (intraStackConstraints bnds) f then
                         discardMemBounds bnds
-                       else
+                      else
                         bnds { intraMemCleared = True }
                     _ -> bnds
       -- Associate the given expression with a bounds.
