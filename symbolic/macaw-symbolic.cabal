@@ -63,7 +63,7 @@ test-suite doctests
   hs-source-dirs: test
   main-is: doctest.hs
   ghc-options: -Wall -Wcompat -threaded
-  build-depends: base, macaw-base, macaw-symbolic, doctest >= 0.10 && < 0.23
+  build-depends: base, macaw-base, macaw-symbolic, doctest >= 0.10 && < 0.25
 
 test-suite macaw-symbolic-tests
   type: exitcode-stdio-1.0
