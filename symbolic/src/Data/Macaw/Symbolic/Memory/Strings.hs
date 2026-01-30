@@ -9,7 +9,7 @@
 module Data.Macaw.Symbolic.Memory.Strings (
   loadConcreteString,
   loadConcretelyNullTerminatedString,
-  loadSymbolicString,
+  loadProvablyNullTerminatedString,
   -- * Low-level string loading primitives
   macawLoader,
 ) where
@@ -125,8 +125,9 @@ loadConcretelyNullTerminatedString memVar mmConf st0 ptr limit =
 -- Note that the loaded string may actually be smaller than the returned list if
 -- any of the symbolic bytes are equal to 0.
 --
--- c.f. 'LCLMS.loadSymbolicString', which does the same thing for LLVM.
-loadSymbolicString ::
+-- c.f. 'LCLMS.loadProvablyNullTerminatedString', which does the same thing for
+-- LLVM.
+loadProvablyNullTerminatedString ::
   ( LCLM.HasPtrWidth (MC.ArchAddrWidth arch)
   , LCLM.HasLLVMAnn sym
   , MC.MemWidth (MC.ArchAddrWidth arch)
@@ -144,8 +145,8 @@ loadSymbolicString ::
   -- | Maximum number of characters to read
   Maybe Int ->
   IO ([WI.SymBV sym 8], C.SimState p sym (MacawExt arch) rtp f args)
-loadSymbolicString bak memVar mmConf st0 ptr limit =
-  loadString bak memVar mmConf st0 ptr limit LCLMS.nullTerminatedString
+loadProvablyNullTerminatedString bak memVar mmConf st0 ptr limit =
+  loadString bak memVar mmConf st0 ptr limit LCLMS.provablyNullTerminatedString
 
 ---------------------------------------------------------------------
 -- * Low-level string loading primitives

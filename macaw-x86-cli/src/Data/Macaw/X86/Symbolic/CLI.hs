@@ -39,12 +39,12 @@ import Data.Macaw.X86.Symbolic.Syntax (x86ParserHooks)
 -- with 'Lang.Crucible.CLI.execCommand'.
 withX86Hooks ::
   ((?parserHooks :: ParserHooks (DMS.MacawExt X86_64)) =>
-   (forall sym bak t st fs. 
+   (forall p sym bak t st fs.
      ( C.IsSymBackend sym bak
      , sym ~ ExprBuilder t st fs
      ) =>
      bak ->
-     IO (ExtensionImpl () sym (DMS.MacawExt X86_64))) ->
+     IO (ExtensionImpl p sym (DMS.MacawExt X86_64))) ->
     SimulateProgramHooks (DMS.MacawExt X86_64) ->
     IO a) ->
   IO a
@@ -54,10 +54,10 @@ withX86Hooks k = do
   let ?ptrWidth = knownNat @64
   let ?memOpts = Mem.defaultMemOptions
   let ext ::
-        forall sym bak t st fs.
+        forall p sym bak t st fs.
         (C.IsSymBackend sym bak, sym ~ ExprBuilder t st fs) =>
         bak ->
-        IO (ExtensionImpl () sym (DMS.MacawExt X86_64))
+        IO (ExtensionImpl p sym (DMS.MacawExt X86_64))
       ext bak =  do
         let sym = C.backendGetSym bak
         let ?recordLLVMAnnotation = \_ _ _ -> pure ()

@@ -48,4 +48,4 @@ testSimulator inFile outFile =
   do contents <- T.readFile inFile
      withFile outFile WriteMode $ \outh ->
        withX86Hooks $ \ext hooks ->
-         simulateProgramWithExtension ext inFile contents outh Nothing z3Options hooks
+         simulateProgramWithExtension ext inFile contents outh Nothing z3Options hooks False []
