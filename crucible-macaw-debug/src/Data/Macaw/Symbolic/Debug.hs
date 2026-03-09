@@ -77,7 +77,7 @@ detail =
       \When given no arguments, prints all globals described in DWARF. \
       \Otherwise, prints the globals with the given names, one per line.\
       \"
-    MMem -> Just "Display LLVM memory"
+    MMem -> Nothing
     MRegister -> Just "\
       \When given no arguments, prints all machine registers. \
       \Otherwise, prints the registers with the given names, one per line.\

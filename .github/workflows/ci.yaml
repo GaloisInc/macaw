@@ -179,6 +179,9 @@ jobs:
     - name: Build crucible-macaw-debug
       run: cabal build pkg:crucible-macaw-debug
 
+    - name: Test crucible-macaw-debug
+      run: cabal test pkg:crucible-macaw-debug
+
     - name: Build compare-dwarfdump
       run: cabal build compare-dwarfdump
 

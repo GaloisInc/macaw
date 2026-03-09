@@ -1,0 +1,20 @@
+> mregister
+
+Couldn't find register struct
+
+> mmemory
+
+The simulator is not yet running
+
+> mglobals
+
+
+
+> mtrace
+
+
+
+> quit
+
+Ok
+
