@@ -1,0 +1,70 @@
+> help
+
+# (#): Ignore all arguments and do nothing
+backend (bak): Print the state of the symbolic backend
+backtrace (bt): Print the backtrace (AKA stack trace)
+block (blk): Print the statements in the current block
+break (b): Set a breakpoint at the entry to a function
+call (cl): Call a function (must take no arguments and return the unit type)
+cfg (cg): Print the CFG of a function (the current function if none is provided)
+clear (cr): Drop the current proof obligations
+delete (d): Remove a breakpoint
+done (done): Like `quit`, but only applies when symbolic execution has finished
+finish (fh): Execute to the end of the current function
+frame (fr): Print information about the active stack frame
+help (h): Display help text
+load (l): Load a Crucible S-expression program from a file
+location (loc): Print the current program location
+mglobals (mglob): print DWARF globals
+mmemory (mmem): display LLVM memory
+mregister (mreg): display machine registers
+mtrace (mtr): print executed machine instructions
+obligation (o): Print the current proof obligations
+path-condition (pcond): Print the current path condition
+prove (p): Prove the current goals
+quit (q): Exit the debugger
+register (reg): Print registers (including block/function arguments)
+run (r): Continue to the next breakpoint or the end of execution
+secret (.): Maintenance commands, used for testing
+source (src): Execute a file containing debugger commands
+step (s): Continue N steps of execution (default: 1)
+trace (trace): Print the N most recently executed basic blocks (default: 2)
+usage (u): Display command usage hint
+
+
+> help mglobals
+
+mglobals TEXT*
+
+print DWARF globals.
+
+When given no arguments, prints all globals described in DWARF. Otherwise, prints the globals with the given names, one per line.
+
+> help mmemory
+
+mmemory 
+
+display LLVM memory.
+
+> help mregister
+
+mregister ((rip|(rax|(rcx|(rdx|(rbx|(rsp|(rbp|(rsi|(rdi|(r8|(r9|(r10|(r11|(r12|(r13|(r14|(r15|(cf|(pf|(af|(zf|(sf|(tf|(if|(df|(of|(ie|(de|(ze|(oe|(ue|(pe|(ef|(es|(c0|(c1|(c2|(c3|(x87top|(tag0|(tag1|(tag2|(tag3|(tag4|(tag5|(tag6|(tag7|(mm0|(mm1|(mm2|(mm3|(mm4|(mm5|(mm6|(mm7|(zmm0|(zmm1|(zmm2|(zmm3|(zmm4|(zmm5|(zmm6|(zmm7|(zmm8|(zmm9|(zmm10|(zmm11|(zmm12|(zmm13|(zmm14|(zmm15|∅))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))*
+
+display machine registers.
+
+When given no arguments, prints all machine registers. Otherwise, prints the registers with the given names, one per line.
+
+The values printed may be slightly out of date. See https://github.com/GaloisInc/macaw/issues/460 for a discussion.
+
+> help mtrace
+
+mtrace INT?
+
+print executed machine instructions.
+
+Prints the machine instructions in the N most recent basic blocks.The default value for N is 2.The trace does not include any overrides that may have been executed.It will be empty for S-expression programs.
+
+> quit
+
+Ok
+
