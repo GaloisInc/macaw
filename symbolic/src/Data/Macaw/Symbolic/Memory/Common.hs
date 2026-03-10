@@ -36,6 +36,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.Foldable.WithIndex as FWI
 import qualified Data.IntervalMap.Strict as IM
+import qualified Data.Vector as Vec
 
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Macaw.CFG as MC
@@ -284,8 +285,13 @@ populateMemChunkBytes bak hooks mem seg addr memChunk =
       populateRelocation hooks bak mem seg addr reloc
     MC.BSSRegion sz ->
       replicate (fromIntegral sz) <$> WI.bvLit sym w8 (BV.zero w8)
-    MC.ByteRegion bytes ->
-      traverse (WI.bvLit sym w8 . BV.word8) $ BS.unpack bytes
+    MC.ByteRegion bytes -> do
+      -- Cache all 256 possible byte literals to avoid allocating a fresh
+      -- SemiRingLiteral (+ SemiRingBVRepr + Integer + ProgramLoc) per byte.
+      -- For large binaries this saves gigabytes of heap.
+      cache <- Vec.generateM 256 $ \i ->
+        WI.bvLit sym w8 (BV.word8 (fromIntegral i))
+      pure $ map (\b -> cache Vec.! fromIntegral b) $ BS.unpack bytes
   where
     sym = CB.backendGetSym bak
     w8 = WI.knownNat @8
@@ -325,7 +331,7 @@ memArrEqualityAssumption sym symArray absAddr bytes = do
       index_bv <- liftIO $ WI.bvLit sym w (BV.mkBV w (toInteger absByteAddr))
       eq_pred <- liftIO $ WI.bvEq sym byte =<< WI.arrayLookup sym symArray (Ctx.singleton index_bv)
       return (eq_pred : bmvals)
-    let desc = printf "Bytes@[addr=%s,nbytes=%s]" (show absAddr) (show (F.toList bytes))
+    let desc = printf "Bytes@[addr=%s,nbytes=%d]" (show absAddr) (length initVals) :: String
     prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
     let conj = WEA.ConjPred (BoolMap.ConjMap (BoolMap.fromVars [(e, BoolMap.Positive) | e <- initVals]))
     byteEqualityAssertion <- liftIO $ WEB.sbMakeExpr sym conj
