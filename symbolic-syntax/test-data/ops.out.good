@@ -4,6 +4,7 @@
       (let bp (bits-to-pointer b))
       (let pb (pointer-to-bits bp))
       (let n (pointer-make-null))
+      (let g (global-ptr 0 4096))
       (let d (pointer-diff p q))
       (let r (pointer-add p d))
       (let s (pointer-sub r d))
@@ -15,6 +16,26 @@
       (let t (pointer-read Int le s))
       (pointer-write SizeT le s b)
       (let x (pointer-mux e u v))
+      (let bv1 (bv-typed-literal (Bitvector 64) 100))
+      (let bv2 (bv-typed-literal (Bitvector 64) 200))
+      (let carry #f)
+      (let uadc_overflow
+           (overflows uadc (Bitvector 64) bv1 bv2 carry))
+      (let sadc_overflow
+           (overflows sadc (Bitvector 64) bv1 bv2 carry))
+      (let usbb_overflow
+           (overflows usbb (Bitvector 64) bv1 bv2 carry))
+      (let ssbb_overflow
+           (overflows ssbb (Bitvector 64) bv1 bv2 carry))
+      (let p32 (pointer-trunc (Bitvector 64) (Bitvector 32) p))
+      (let p128 (pointer-uext (Bitvector 32) (Bitvector 128) p32))
+      (let fresh_bool (fresh-symbolic MacawBool))
+      (let fresh_bv (fresh-symbolic (MacawBV 64)))
+      (let default_val (bv-typed-literal Int 0))
+      (let cond_read_result
+           (pointer-cond-read Int le e p default_val))
+      (let write_val (bv-typed-literal SizeT 42))
+      (pointer-cond-write SizeT le e p write_val)
       (return ())))
 
 ops
@@ -29,36 +50,76 @@ ops
   $5 = extensionApp((ptr_to_bits_64 $4))
   % 7:12
   $6 = extensionApp(null_ptr)
-  % internal
-  $7 = (ptr_sub $0 $1)
   % 8:12
-  $8 = extensionApp((ptr_to_bits_64 $7))
+  $7 = (global 0x1000)
   % internal
-  $9 = extensionApp((bits_to_ptr_64 $8))
+  $8 = (ptr_sub $0 $1)
   % 9:12
-  $10 = (ptr_add $0 $9)
-  % 10:12
-  $11 = (ptr_sub $10 $9)
-  % 11:12
-  $12 = (ptr_and $10 $11)
-  % 12:12
-  $13 = (ptr_xor $11 $12)
-  % 13:12
-  $14 = (ptr_eq $11 $0)
-  % 14:12
-  $15 = (ptr_leq $11 $0)
-  % 15:12
-  $16 = (ptr_lt $11 $0)
+  $9 = extensionApp((ptr_to_bits_64 $8))
   % internal
-  $17 = (macawReadMem bvle4 $11)
+  $10 = extensionApp((bits_to_ptr_64 $9))
+  % 10:12
+  $11 = (ptr_add $0 $10)
+  % 11:12
+  $12 = (ptr_sub $11 $10)
+  % 12:12
+  $13 = (ptr_and $11 $12)
+  % 13:12
+  $14 = (ptr_xor $12 $13)
+  % 14:12
+  $15 = (ptr_eq $12 $0)
+  % 15:12
+  $16 = (ptr_leq $12 $0)
   % 16:12
-  $18 = extensionApp((ptr_to_bits_32 $17))
-  % 17:5
-  $19 = (macawWriteMem bvle8 $11 $4)
-  % 18:12
-  $20 = (ptr_mux $14 $12 $13)
-  % 19:13
-  $21 = emptyApp()
-  % 19:5
-  return $21
+  $17 = (ptr_lt $12 $0)
+  % internal
+  $18 = (macawReadMem bvle4 $12)
+  % 17:12
+  $19 = extensionApp((ptr_to_bits_32 $18))
+  % 18:5
+  $20 = (macawWriteMem bvle8 $12 $4)
+  % 19:12
+  $21 = (ptr_mux $15 $13 $14)
+  % 20:14
+  $22 = intLit(100)
+  % 20:14
+  $23 = integerToBV(64, $22)
+  % 21:14
+  $24 = intLit(200)
+  % 21:14
+  $25 = integerToBV(64, $24)
+  % 22:16
+  $26 = boolLit(False)
+  % 23:24
+  $27 = extensionApp((macawOverflows_Uadc_64 $23 $25 $26))
+  % 24:24
+  $28 = extensionApp((macawOverflows_Sadc_64 $23 $25 $26))
+  % 25:24
+  $29 = extensionApp((macawOverflows_Usbb_64 $23 $25 $26))
+  % 26:24
+  $30 = extensionApp((macawOverflows_Ssbb_64 $23 $25 $26))
+  % 27:14
+  $31 = (ptr_trunc 32 $0)
+  % 28:15
+  $32 = (ptr_uext 128 $31)
+  % 29:21
+  $33 = (macawFreshSymbolic bool)
+  % 30:19
+  $34 = (macawFreshSymbolic (bv 64))
+  % 31:22
+  $35 = intLit(0)
+  % 31:22
+  $36 = integerToBV(32, $35)
+  % internal
+  $37 = extensionApp((bits_to_ptr_32 $36))
+  % internal
+  $38 = (macawCondReadMem bvle4 $15 $0 $37)
+  % 32:27
+  $39 = extensionApp((ptr_to_bits_32 $38))
+  % 34:5
+  $40 = (macawCondWriteMem $15 bvle8 $0 $4)
+  % 35:13
+  $41 = emptyApp()
+  % 35:5
+  return $41
   % no postdom
