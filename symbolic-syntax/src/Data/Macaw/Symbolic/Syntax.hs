@@ -65,9 +65,7 @@ type ExtensionParser m ext s = ( LCSM.MonadSyntax LCSA.Atomic m
 -- Note that these are pure and are intended to guide the substitution of syntax
 -- extensions for operations in the 'MDS.MacawExt' syntax.
 data ExtensionWrapper arch args ret =
-  ExtensionWrapper { extName :: LCSA.AtomName
-                  -- ^ Name of the syntax extension
-                   , extArgTypes :: LCT.CtxRepr args
+  ExtensionWrapper { extArgTypes :: LCT.CtxRepr args
                   -- ^ Types of the arguments to the syntax extension
                    , extWrapper :: forall s m
                                  . ( ExtensionParser m (DMS.MacawExt arch) s)
@@ -80,6 +78,37 @@ data ExtensionWrapper arch args ret =
 
 data SomeExtensionWrapper arch =
   forall args ret. SomeExtensionWrapper (ExtensionWrapper arch args ret)
+
+-- | Helper to create an ExtensionWrapper from just a wrapper function when
+-- the argument types have a KnownRepr instance.
+mkKnownWrapper
+  :: WI.KnownRepr LCT.CtxRepr args
+  => (forall s m. ExtensionParser m (DMS.MacawExt arch) s
+      => Ctx.Assignment (LCCR.Atom s) args
+      -> m (LCCR.AtomValue (DMS.MacawExt arch) s ret))
+  -> ExtensionWrapper arch args ret
+mkKnownWrapper f = ExtensionWrapper
+  { extArgTypes = WI.knownRepr
+  , extWrapper = f
+  }
+
+-- | Helper to create an ExtensionWrapper from an uncurried function when
+-- the argument types have a KnownRepr instance.
+mkUncurriedWrapper
+  :: forall arch args ret
+   . (WI.KnownRepr LCT.CtxRepr args, Ctx.CurryAssignmentClass args)
+  => (forall s m. ExtensionParser m (DMS.MacawExt arch) s
+      => Ctx.CurryAssignment args (LCCR.Atom s) (m (LCCR.AtomValue (DMS.MacawExt arch) s ret)))
+  -> ExtensionWrapper arch args ret
+mkUncurriedWrapper f = ExtensionWrapper
+  { extArgTypes = WI.knownRepr
+  , extWrapper = wrapper
+  }
+  where
+    wrapper :: forall s m. ExtensionParser m (DMS.MacawExt arch) s
+            => Ctx.Assignment (LCCR.Atom s) args
+            -> m (LCCR.AtomValue (DMS.MacawExt arch) s ret)
+    wrapper args = Ctx.uncurryAssignment (f @s @m) args
 
 -- | Check that a 'WI.NatRepr' containing a value in bits is a multiple of 8.
 -- If so, pass the result of the value divided by 8 (i.e., as bytes) to the
@@ -336,11 +365,7 @@ wrapPointerAdd
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
                                     Ctx.::> LCT.BVType w)
                       (LCLM.LLVMPointerType w)
-wrapPointerAdd = ExtensionWrapper
-  { extName = LCSA.AtomName "pointer-add"
-  , extArgTypes = Ctx.empty Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
-                            Ctx.:> LCT.BVRepr LCT.knownNat
-  , extWrapper = \args -> Ctx.uncurryAssignment (binopRhsBvToPtr DMS.PtrAdd) args }
+wrapPointerAdd = mkUncurriedWrapper $ binopRhsBvToPtr DMS.PtrAdd
 
 -- | Wrapper for the 'DMS.PtrSub' syntax extension that enables users to
 -- subtract integer offsets from pointers:
@@ -357,11 +382,7 @@ wrapPointerSub
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
                                     Ctx.::> LCT.BVType w)
                       (LCLM.LLVMPointerType w)
-wrapPointerSub = ExtensionWrapper
-  { extName = LCSA.AtomName "pointer-sub"
-  , extArgTypes = Ctx.empty Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
-                            Ctx.:> LCT.BVRepr LCT.knownNat
-  , extWrapper = \args -> Ctx.uncurryAssignment (binopRhsBvToPtr (DMS.PtrSub . DMM.addrWidthRepr)) args }
+wrapPointerSub = mkUncurriedWrapper $ binopRhsBvToPtr (DMS.PtrSub . DMM.addrWidthRepr)
 
 -- | Compute the difference between two pointers in bytes using 'DMS.PtrSub'
 pointerDiff :: ( w ~ DMC.ArchAddrWidth arch
@@ -391,18 +412,13 @@ wrapPointerDiff
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
                                     Ctx.::> LCLM.LLVMPointerType w )
                       (LCT.BVType w)
-wrapPointerDiff = ExtensionWrapper
-  { extName = LCSA.AtomName "pointer-diff"
-  , extArgTypes = Ctx.empty Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
-                            Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
-  , extWrapper = \args -> Ctx.uncurryAssignment pointerDiff args }
+wrapPointerDiff = mkUncurriedWrapper pointerDiff
 
 wrapPointerBinop
   :: ( KnownNat w
      , DMC.MemWidth w
      , w ~ DMC.ArchAddrWidth arch )
-  => LCSA.AtomName
-  -> (forall s.
+  => (forall s.
       DMM.AddrWidthRepr (DMC.ArchAddrWidth arch)
       -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
       -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
@@ -411,15 +427,7 @@ wrapPointerBinop
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
                                     Ctx.::> LCLM.LLVMPointerType w)
                       (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
-wrapPointerBinop name op = ExtensionWrapper
-  { extName = name
-  , extArgTypes =
-      Ctx.empty
-      Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
-      Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
-  , extWrapper =
-      \args -> Ctx.uncurryAssignment (binop (op . DMM.addrWidthRepr)) args
-  }
+wrapPointerBinop op = mkUncurriedWrapper $ binop (op . DMM.addrWidthRepr)
 
 wrapPointerAnd
   :: ( w ~ DMC.ArchAddrWidth arch
@@ -430,7 +438,7 @@ wrapPointerAnd
                                     Ctx.::> LCLM.LLVMPointerType w )
                       (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
 wrapPointerAnd =
-  wrapPointerBinop (LCSA.AtomName "ptr-and") DMS.PtrAnd
+  wrapPointerBinop DMS.PtrAnd
 
 wrapPointerXor
   :: ( w ~ DMC.ArchAddrWidth arch
@@ -441,7 +449,7 @@ wrapPointerXor
                                     Ctx.::> LCLM.LLVMPointerType w )
                       (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
 wrapPointerXor =
-  wrapPointerBinop (LCSA.AtomName "ptr-xor") DMS.PtrXor
+  wrapPointerBinop DMS.PtrXor
 
 wrapPointerMux
   :: ( w ~ DMC.ArchAddrWidth arch
@@ -452,16 +460,8 @@ wrapPointerMux
                                     Ctx.::> LCLM.LLVMPointerType w
                                     Ctx.::> LCLM.LLVMPointerType w )
                       (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
-wrapPointerMux = ExtensionWrapper
-  { extName = LCSA.AtomName "ptr-mux"
-  , extArgTypes = WI.knownRepr
-  , extWrapper =
-      let w = DMM.addrWidthRepr WI.knownNat in
-      \args ->
-        Ctx.uncurryAssignment
-          (\b l r -> pure (LCCR.EvalExt (DMS.PtrMux w b l r)))
-          args
-  }
+wrapPointerMux = mkUncurriedWrapper $ \b l r ->
+  pure $ LCCR.EvalExt $ DMS.PtrMux (DMM.addrWidthRepr WI.knownNat) b l r
 
 -- | Wrapper for 'DMS.MacawNullPtr' to construct a null pointer.
 --
@@ -473,12 +473,9 @@ wrapMakeNull
   => ExtensionWrapper arch
                       Ctx.EmptyCtx
                       (LCLM.LLVMPointerType w)
-wrapMakeNull = ExtensionWrapper
-  { extName = LCSA.AtomName "pointer-make-null"
-  , extArgTypes = Ctx.empty
-  , extWrapper = \_ ->
-      let nullptr = DMS.MacawNullPtr (DMC.addrWidthRepr WI.knownNat) in
-      return (LCCR.EvalApp (LCE.ExtensionApp nullptr)) }
+wrapMakeNull = mkKnownWrapper $ \_ ->
+  let nullptr = DMS.MacawNullPtr (DMC.addrWidthRepr WI.knownNat)
+  in return (LCCR.EvalApp (LCE.ExtensionApp nullptr))
 
 -- | Wrapper for the 'DMS.BitsToPtr' syntax extension that enables users to
 -- convert a bitvector to a pointer.
@@ -491,15 +488,8 @@ wrapBitsToPointer
   => ExtensionWrapper arch
                       (Ctx.EmptyCtx Ctx.::> LCT.BVType w)
                       (LCLM.LLVMPointerType w)
-wrapBitsToPointer = ExtensionWrapper
-  { extName = LCSA.AtomName "bits-to-pointer"
-  , extArgTypes = Ctx.empty Ctx.:> LCT.BVRepr LCT.knownNat
-  , extWrapper = \args ->
-      let bitsToPointer =
-            LCCR.EvalApp .
-            LCE.ExtensionApp .
-            DMS.BitsToPtr WI.knownNat in
-      Ctx.uncurryAssignment (pure . bitsToPointer) args }
+wrapBitsToPointer = mkUncurriedWrapper $ \bv ->
+  pure $ LCCR.EvalApp $ LCE.ExtensionApp $ DMS.BitsToPtr WI.knownNat bv
 
 -- | Wrapper for the 'DMS.PtrToBits' syntax extension that enables users to
 -- convert a pointer to a bitvector by extracting the pointer offset.
@@ -512,22 +502,14 @@ wrapPointerToBits
   => ExtensionWrapper arch
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w)
                       (LCT.BVType w)
-wrapPointerToBits = ExtensionWrapper
-  { extName = LCSA.AtomName "pointer-to-bits"
-  , extArgTypes = Ctx.empty Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
-  , extWrapper = \args ->
-      let pointerToBits =
-            LCCR.EvalApp .
-            LCE.ExtensionApp .
-            DMS.PtrToBits WI.knownNat in
-      Ctx.uncurryAssignment (pure . pointerToBits) args }
+wrapPointerToBits = mkUncurriedWrapper $ \ptr ->
+  pure $ LCCR.EvalApp $ LCE.ExtensionApp $ DMS.PtrToBits WI.knownNat ptr
 
 wrapPointerCmp
   :: ( KnownNat w
      , DMC.MemWidth w
      , w ~ DMC.ArchAddrWidth arch )
-  => LCSA.AtomName
-  -> (forall s.
+  => (forall s.
       DMM.AddrWidthRepr (DMC.ArchAddrWidth arch)
       -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
       -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
@@ -536,15 +518,7 @@ wrapPointerCmp
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
                                     Ctx.::> LCLM.LLVMPointerType w)
                       LCT.BoolType
-wrapPointerCmp name op = ExtensionWrapper
-  { extName = name
-  , extArgTypes =
-      Ctx.empty
-      Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
-      Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
-  , extWrapper =
-      \args -> Ctx.uncurryAssignment (binop (op . DMM.addrWidthRepr)) args
-  }
+wrapPointerCmp op = mkUncurriedWrapper $ binop (op . DMM.addrWidthRepr)
 
 -- | Wrapper for the 'DMS.PtrEq' syntax extension that enables users to test
 -- the equality of two pointers.
@@ -558,7 +532,7 @@ wrapPointerEq
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
                                     Ctx.::> LCLM.LLVMPointerType w)
                       LCT.BoolType
-wrapPointerEq = wrapPointerCmp (LCSA.AtomName "pointer-eq") DMS.PtrEq
+wrapPointerEq = wrapPointerCmp DMS.PtrEq
 
 -- | Wrapper for the 'DMS.PtrLeq' syntax extension that enables users to compare
 -- two pointers.
@@ -572,7 +546,7 @@ wrapPointerLeq
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
                                     Ctx.::> LCLM.LLVMPointerType w)
                       LCT.BoolType
-wrapPointerLeq =  wrapPointerCmp (LCSA.AtomName "pointer-leq") DMS.PtrLeq
+wrapPointerLeq =  wrapPointerCmp DMS.PtrLeq
 
 -- | Wrapper for the 'DMS.PtrLt' syntax extension that enables users to compare
 -- two pointers.
@@ -586,7 +560,7 @@ wrapPointerLt
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
                                     Ctx.::> LCLM.LLVMPointerType w)
                       LCT.BoolType
-wrapPointerLt =  wrapPointerCmp (LCSA.AtomName "pointer-lt") DMS.PtrLt
+wrapPointerLt =  wrapPointerCmp DMS.PtrLt
 
 -- | Wrapper for the 'DMS.MacawReadMem' syntax extension that enables users to
 -- read through a pointer to retrieve data at the underlying memory location.
@@ -602,11 +576,8 @@ buildPointerReadWrapper
   -> ExtensionWrapper arch
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w)
                       tp
-buildPointerReadWrapper tp endianness = ExtensionWrapper
-  { extName = LCSA.AtomName "pointer-read"
-  , extArgTypes = Ctx.empty Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
-  , extWrapper =
-      \args -> Ctx.uncurryAssignment (pointerRead tp endianness) args }
+buildPointerReadWrapper tp endianness = mkUncurriedWrapper $
+  pointerRead tp endianness
 
 -- | Read through a pointer using 'DMS.MacawReadMem'.
 pointerRead :: ( w ~ DMC.ArchAddrWidth arch
@@ -648,11 +619,10 @@ buildPointerWriteWrapper
                                     Ctx.::> tp)
                       LCT.UnitType
 buildPointerWriteWrapper tp endianness = ExtensionWrapper
-  { extName = LCSA.AtomName "pointer-write"
-  , extArgTypes = Ctx.empty Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
+  { extArgTypes = Ctx.empty Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
                             Ctx.:> tp
-  , extWrapper =
-      \args -> Ctx.uncurryAssignment (pointerWrite tp endianness) args }
+  , extWrapper = Ctx.uncurryAssignment (pointerWrite tp endianness)
+  }
 
 -- | Read through a pointer using 'DMS.MacawWriteMem'.
 pointerWrite :: ( w ~ DMC.ArchAddrWidth arch
@@ -702,12 +672,11 @@ buildPointerCondReadWrapper
                                     Ctx.::> tp)
                       tp
 buildPointerCondReadWrapper tp endianness = ExtensionWrapper
-  { extName = LCSA.AtomName "pointer-cond-read"
-  , extArgTypes = Ctx.empty Ctx.:> LCT.BoolRepr
+  { extArgTypes = Ctx.empty Ctx.:> LCT.BoolRepr
                             Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
                             Ctx.:> tp
-  , extWrapper =
-      \args -> Ctx.uncurryAssignment (pointerCondRead tp endianness) args }
+  , extWrapper = Ctx.uncurryAssignment (pointerCondRead tp endianness)
+  }
 
 -- | Conditionally read through a pointer using 'DMS.MacawCondReadMem'.
 pointerCondRead :: ( w ~ DMC.ArchAddrWidth arch
@@ -763,12 +732,11 @@ buildPointerCondWriteWrapper
                                     Ctx.::> tp)
                       LCT.UnitType
 buildPointerCondWriteWrapper tp endianness = ExtensionWrapper
-  { extName = LCSA.AtomName "pointer-cond-write"
-  , extArgTypes = Ctx.empty Ctx.:> LCT.BoolRepr
+  { extArgTypes = Ctx.empty Ctx.:> LCT.BoolRepr
                             Ctx.:> LCLM.LLVMPointerRepr LCT.knownNat
                             Ctx.:> tp
-  , extWrapper =
-      \args -> Ctx.uncurryAssignment (pointerCondWrite tp endianness) args }
+  , extWrapper = Ctx.uncurryAssignment (pointerCondWrite tp endianness)
+  }
 
 -- | Conditionally write through a pointer using 'DMS.MacawCondWriteMem'.
 pointerCondWrite :: ( w ~ DMC.ArchAddrWidth arch
@@ -814,10 +782,7 @@ buildBvTypedLitWrapper
   -> ExtensionWrapper arch
                       (Ctx.EmptyCtx Ctx.::> LCT.IntegerType)
                       (LCT.BVType w)
-buildBvTypedLitWrapper tp = ExtensionWrapper
-  { extName = LCSA.AtomName "bv-typed-literal"
-  , extArgTypes = Ctx.empty Ctx.:> LCT.IntegerRepr
-  , extWrapper = \args -> Ctx.uncurryAssignment (bvTypedLit tp) args }
+buildBvTypedLitWrapper tp = mkUncurriedWrapper $ bvTypedLit tp
 
 -- | Create a bitvector literal matching the size of an 'LCT.BVRepr'
 bvTypedLit :: forall s ext w m
@@ -834,12 +799,8 @@ buildMacawFreshSymbolicWrapper
   :: forall arch tp
    . DMT.TypeRepr tp
   -> ExtensionWrapper arch Ctx.EmptyCtx (DMS.ToCrucibleType tp)
-buildMacawFreshSymbolicWrapper tpRepr = ExtensionWrapper
-  { extName = LCSA.AtomName "fresh-symbolic"
-  , extArgTypes = Ctx.empty
-  , extWrapper = \_ ->
-      return (LCCR.EvalExt (DMS.MacawFreshSymbolic tpRepr))
-  }
+buildMacawFreshSymbolicWrapper tpRepr = mkKnownWrapper $ \_ ->
+  return (LCCR.EvalExt (DMS.MacawFreshSymbolic tpRepr))
 
 -- | Parse a Macaw type representation.
 --
@@ -884,13 +845,8 @@ buildPointerTruncWrapper
   -> ExtensionWrapper arch
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w)
                       (LCLM.LLVMPointerType r)
-buildPointerTruncWrapper wRepr rRepr = ExtensionWrapper
-  { extName = LCSA.AtomName "pointer-trunc"
-  , extArgTypes = Ctx.empty Ctx.:> LCLM.LLVMPointerRepr wRepr
-  , extWrapper = \args ->
-      let ptrTrunc = LCCR.EvalExt . DMS.PtrTrunc rRepr in
-      Ctx.uncurryAssignment (pure . ptrTrunc) args
-  }
+buildPointerTruncWrapper _wRepr rRepr = mkUncurriedWrapper $
+  pure . LCCR.EvalExt . DMS.PtrTrunc rRepr
 
 -- | Build a wrapper for 'DMS.PtrUExt' with explicit source and target widths.
 --
@@ -908,13 +864,8 @@ buildPointerUExtWrapper
   -> ExtensionWrapper arch
                       (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w)
                       (LCLM.LLVMPointerType r)
-buildPointerUExtWrapper wRepr rRepr = ExtensionWrapper
-  { extName = LCSA.AtomName "pointer-uext"
-  , extArgTypes = Ctx.empty Ctx.:> LCLM.LLVMPointerRepr wRepr
-  , extWrapper = \args ->
-      let ptrUExt = LCCR.EvalExt . DMS.PtrUExt rRepr in
-      Ctx.uncurryAssignment (pure . ptrUExt) args
-  }
+buildPointerUExtWrapper _wRepr rRepr = mkUncurriedWrapper $
+  pure . LCCR.EvalExt . DMS.PtrUExt rRepr
 
 -- | Wrapper for 'DMS.MacawOverflows' expression extension that tests whether
 -- an arithmetic operation overflows.
@@ -934,15 +885,8 @@ wrapMacawOverflows
                                     Ctx.::> LCT.BVType w
                                     Ctx.::> LCT.BoolType)
                       LCT.BoolType
-wrapMacawOverflows op wRepr = ExtensionWrapper
-  { extName = LCSA.AtomName "overflows"
-  , extArgTypes = Ctx.empty Ctx.:> LCT.BVRepr wRepr
-                            Ctx.:> LCT.BVRepr wRepr
-                            Ctx.:> LCT.BoolRepr
-  , extWrapper = \args ->
-      let overflows lhs rhs carry =
-            LCCR.EvalApp (LCE.ExtensionApp (DMS.MacawOverflows op wRepr lhs rhs carry))
-      in Ctx.uncurryAssignment (\lhs rhs carry -> pure (overflows lhs rhs carry)) args }
+wrapMacawOverflows op wRepr = mkUncurriedWrapper $ \lhs rhs carry ->
+  pure $ LCCR.EvalApp $ LCE.ExtensionApp $ DMS.MacawOverflows op wRepr lhs rhs carry
 
 -- | Wrapper for 'DMS.MacawGlobalPtr' that converts a memory address to a pointer.
 --
@@ -958,16 +902,12 @@ buildMacawGlobalPtrWrapper
   => Integer
   -> Natural
   -> ExtensionWrapper arch Ctx.EmptyCtx (LCLM.LLVMPointerType w)
-buildMacawGlobalPtrWrapper region offset = ExtensionWrapper
-  { extName = LCSA.AtomName "global-ptr"
-  , extArgTypes = Ctx.empty
-  , extWrapper = \_ ->
-      let addr = DMM.MemAddr
-            { DMM.addrBase = fromInteger region
-            , DMM.addrOffset = fromIntegral offset
-            }
-      in return (LCCR.EvalExt (DMS.MacawGlobalPtr (DMM.addrWidthRepr (Proxy :: Proxy w)) addr))
-  }
+buildMacawGlobalPtrWrapper region offset = mkKnownWrapper $ \_ ->
+  let addr = DMM.MemAddr
+        { DMM.addrBase = fromInteger region
+        , DMM.addrOffset = fromIntegral offset
+        }
+  in return (LCCR.EvalExt (DMS.MacawGlobalPtr (DMM.addrWidthRepr (Proxy :: Proxy w)) addr))
 
 -- | Syntax extension wrappers
 extensionWrappers
