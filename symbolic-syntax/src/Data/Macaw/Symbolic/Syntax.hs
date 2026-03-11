@@ -1,3 +1,4 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -27,6 +28,7 @@ import           Control.Applicative ( Alternative((<|>), empty) )
 import           Control.Monad.IO.Class ( MonadIO(..) )
 import           Control.Monad.State.Class ( MonadState )
 import           Control.Monad.Writer.Class ( MonadWriter )
+import           Data.Bifunctor ( first )
 import qualified Data.Map.Strict as Map
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.NatRepr as PN
@@ -109,6 +111,7 @@ mkUncurriedWrapper f = ExtensionWrapper
             => Ctx.Assignment (LCCR.Atom s) args
             -> m (LCCR.AtomValue (DMS.MacawExt arch) s ret)
     wrapper args = Ctx.uncurryAssignment (f @s @m) args
+
 
 -- | Check that a 'WI.NatRepr' containing a value in bits is a multiple of 8.
 -- If so, pass the result of the value divided by 8 (i.e., as bytes) to the
@@ -327,6 +330,43 @@ binop :: (KnownNat w, Monad m)
 binop op lhs rhs =
   return (LCCR.EvalExt (op WI.knownNat lhs rhs))
 
+-- | Helper to create a SomeExtensionWrapper from a pointer binary operation.
+someBinop
+  :: forall arch w ret
+   . ( KnownNat w
+     , DMC.MemWidth w
+     , w ~ DMC.ArchAddrWidth arch )
+  => (forall s.
+      DMM.AddrWidthRepr (DMC.ArchAddrWidth arch)
+      -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
+      -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
+      -> DMS.MacawStmtExtension arch (LCCR.Atom s) ret)
+  -> SomeExtensionWrapper arch
+someBinop op = SomeExtensionWrapper
+  (mkUncurriedWrapper @arch
+     @(Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w Ctx.::> LCLM.LLVMPointerType w)
+     @ret
+     (binop (op . DMM.addrWidthRepr)))
+
+-- | Helper to create a SomeExtensionWrapper from a pointer + bitvector operation.
+someBinopBv
+  :: forall arch w
+   . ( KnownNat w
+     , DMC.MemWidth w
+     , w ~ DMC.ArchAddrWidth arch )
+  => (forall s.
+      WI.NatRepr w
+      -> LCCR.Atom s (LCLM.LLVMPointerType w)
+      -> LCCR.Atom s (LCLM.LLVMPointerType w)
+      -> DMS.MacawStmtExtension arch (LCCR.Atom s) (LCLM.LLVMPointerType w))
+  -> SomeExtensionWrapper arch
+someBinopBv op = SomeExtensionWrapper
+  (mkUncurriedWrapper @arch
+     @(Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w Ctx.::> LCT.BVType w)
+     @(LCLM.LLVMPointerType w)
+     (binopRhsBvToPtr op))
+
+
 
 -- | Wrap a syntax extension binary operator, converting a bitvector in the
 -- right-hand side position to an 'LLVMPointerType' before wrapping.
@@ -350,39 +390,7 @@ binopRhsBvToPtr op p1 p2 = do
   toPtrAtom <- LCSC.freshAtom WP.InternalPos (LCCR.EvalApp (LCE.ExtensionApp (DMS.BitsToPtr WI.knownNat p2)))
   binop op p1 toPtrAtom
 
--- | Wrapper for the 'DMS.PtrAdd' syntax extension that enables users to add
--- integer offsets to pointers:
---
--- > pointer-add ptr offset
---
--- Note that the underlying macaw primitive allows the offset to be in either
--- position. This user-facing interface is more restrictive.
-wrapPointerAdd
-  :: ( KnownNat w
-     , DMC.MemWidth w
-     , w ~ DMC.ArchAddrWidth arch )
-  => ExtensionWrapper arch
-                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
-                                    Ctx.::> LCT.BVType w)
-                      (LCLM.LLVMPointerType w)
-wrapPointerAdd = mkUncurriedWrapper $ binopRhsBvToPtr DMS.PtrAdd
 
--- | Wrapper for the 'DMS.PtrSub' syntax extension that enables users to
--- subtract integer offsets from pointers:
---
--- > pointer-sub ptr offset
---
--- Note that the underlying macaw primitive allows the offset to be in either
--- position. This user-facing interface is more restrictive.
-wrapPointerSub
-  :: ( KnownNat w
-     , DMC.MemWidth w
-     , w ~ DMC.ArchAddrWidth arch )
-  => ExtensionWrapper arch
-                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
-                                    Ctx.::> LCT.BVType w)
-                      (LCLM.LLVMPointerType w)
-wrapPointerSub = mkUncurriedWrapper $ binopRhsBvToPtr (DMS.PtrSub . DMM.addrWidthRepr)
 
 -- | Compute the difference between two pointers in bytes using 'DMS.PtrSub'
 pointerDiff :: ( w ~ DMC.ArchAddrWidth arch
@@ -400,10 +408,6 @@ pointerDiff lhs rhs = do
   -- 0) so 'DMS.PtrToBits' is safe here.
   return (LCCR.EvalApp (LCE.ExtensionApp (DMS.PtrToBits LCT.knownNat ptrAtom)))
 
--- | Wrapper for the 'DMS.PtrSub' syntax extension that enables users to
--- subtract pointers from pointers:
---
--- > pointer-diff ptr1 ptr2
 wrapPointerDiff
   :: ( w ~ DMC.ArchAddrWidth arch
      , KnownNat w
@@ -414,43 +418,6 @@ wrapPointerDiff
                       (LCT.BVType w)
 wrapPointerDiff = mkUncurriedWrapper pointerDiff
 
-wrapPointerBinop
-  :: ( KnownNat w
-     , DMC.MemWidth w
-     , w ~ DMC.ArchAddrWidth arch )
-  => (forall s.
-      DMM.AddrWidthRepr (DMC.ArchAddrWidth arch)
-      -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
-      -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
-      -> DMS.MacawStmtExtension arch (LCCR.Atom s) (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch)))
-  -> ExtensionWrapper arch
-                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
-                                    Ctx.::> LCLM.LLVMPointerType w)
-                      (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
-wrapPointerBinop op = mkUncurriedWrapper $ binop (op . DMM.addrWidthRepr)
-
-wrapPointerAnd
-  :: ( w ~ DMC.ArchAddrWidth arch
-     , KnownNat w
-     , DMC.MemWidth w )
-  => ExtensionWrapper arch
-                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
-                                    Ctx.::> LCLM.LLVMPointerType w )
-                      (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
-wrapPointerAnd =
-  wrapPointerBinop DMS.PtrAnd
-
-wrapPointerXor
-  :: ( w ~ DMC.ArchAddrWidth arch
-     , KnownNat w
-     , DMC.MemWidth w )
-  => ExtensionWrapper arch
-                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
-                                    Ctx.::> LCLM.LLVMPointerType w )
-                      (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
-wrapPointerXor =
-  wrapPointerBinop DMS.PtrXor
-
 wrapPointerMux
   :: ( w ~ DMC.ArchAddrWidth arch
      , KnownNat w
@@ -459,13 +426,10 @@ wrapPointerMux
                       (Ctx.EmptyCtx Ctx.::> LCT.BoolType
                                     Ctx.::> LCLM.LLVMPointerType w
                                     Ctx.::> LCLM.LLVMPointerType w )
-                      (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
+                      (LCLM.LLVMPointerType w)
 wrapPointerMux = mkUncurriedWrapper $ \b l r ->
   pure $ LCCR.EvalExt $ DMS.PtrMux (DMM.addrWidthRepr WI.knownNat) b l r
 
--- | Wrapper for 'DMS.MacawNullPtr' to construct a null pointer.
---
--- > pointer-make-null
 wrapMakeNull
   :: ( w ~ DMC.ArchAddrWidth arch
      , KnownNat w
@@ -474,13 +438,8 @@ wrapMakeNull
                       Ctx.EmptyCtx
                       (LCLM.LLVMPointerType w)
 wrapMakeNull = mkKnownWrapper $ \_ ->
-  let nullptr = DMS.MacawNullPtr (DMC.addrWidthRepr WI.knownNat)
-  in return (LCCR.EvalApp (LCE.ExtensionApp nullptr))
+  return $ LCCR.EvalApp $ LCE.ExtensionApp $ DMS.MacawNullPtr (DMC.addrWidthRepr WI.knownNat)
 
--- | Wrapper for the 'DMS.BitsToPtr' syntax extension that enables users to
--- convert a bitvector to a pointer.
---
--- > bits-to-pointer bv
 wrapBitsToPointer
   :: ( w ~ DMC.ArchAddrWidth arch
      , KnownNat w
@@ -491,10 +450,6 @@ wrapBitsToPointer
 wrapBitsToPointer = mkUncurriedWrapper $ \bv ->
   pure $ LCCR.EvalApp $ LCE.ExtensionApp $ DMS.BitsToPtr WI.knownNat bv
 
--- | Wrapper for the 'DMS.PtrToBits' syntax extension that enables users to
--- convert a pointer to a bitvector by extracting the pointer offset.
---
--- > pointer-to-bits bv
 wrapPointerToBits
   :: ( w ~ DMC.ArchAddrWidth arch
      , KnownNat w
@@ -504,63 +459,6 @@ wrapPointerToBits
                       (LCT.BVType w)
 wrapPointerToBits = mkUncurriedWrapper $ \ptr ->
   pure $ LCCR.EvalApp $ LCE.ExtensionApp $ DMS.PtrToBits WI.knownNat ptr
-
-wrapPointerCmp
-  :: ( KnownNat w
-     , DMC.MemWidth w
-     , w ~ DMC.ArchAddrWidth arch )
-  => (forall s.
-      DMM.AddrWidthRepr (DMC.ArchAddrWidth arch)
-      -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
-      -> LCCR.Atom s (LCLM.LLVMPointerType (DMC.ArchAddrWidth arch))
-      -> DMS.MacawStmtExtension arch (LCCR.Atom s) LCT.BoolType)
-  -> ExtensionWrapper arch
-                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
-                                    Ctx.::> LCLM.LLVMPointerType w)
-                      LCT.BoolType
-wrapPointerCmp op = mkUncurriedWrapper $ binop (op . DMM.addrWidthRepr)
-
--- | Wrapper for the 'DMS.PtrEq' syntax extension that enables users to test
--- the equality of two pointers.
---
--- > pointer-eq ptr1 ptr2
-wrapPointerEq
-  :: ( KnownNat w
-     , DMC.MemWidth w
-     , w ~ DMC.ArchAddrWidth arch )
-  => ExtensionWrapper arch
-                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
-                                    Ctx.::> LCLM.LLVMPointerType w)
-                      LCT.BoolType
-wrapPointerEq = wrapPointerCmp DMS.PtrEq
-
--- | Wrapper for the 'DMS.PtrLeq' syntax extension that enables users to compare
--- two pointers.
---
--- > pointer-leq ptr1 ptr2
-wrapPointerLeq
-  :: ( KnownNat w
-     , DMC.MemWidth w
-     , w ~ DMC.ArchAddrWidth arch )
-  => ExtensionWrapper arch
-                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
-                                    Ctx.::> LCLM.LLVMPointerType w)
-                      LCT.BoolType
-wrapPointerLeq =  wrapPointerCmp DMS.PtrLeq
-
--- | Wrapper for the 'DMS.PtrLt' syntax extension that enables users to compare
--- two pointers.
---
--- > pointer-lt ptr1 ptr2
-wrapPointerLt
-  :: ( KnownNat w
-     , DMC.MemWidth w
-     , w ~ DMC.ArchAddrWidth arch )
-  => ExtensionWrapper arch
-                      (Ctx.EmptyCtx Ctx.::> LCLM.LLVMPointerType w
-                                    Ctx.::> LCLM.LLVMPointerType w)
-                      LCT.BoolType
-wrapPointerLt =  wrapPointerCmp DMS.PtrLt
 
 -- | Wrapper for the 'DMS.MacawReadMem' syntax extension that enables users to
 -- read through a pointer to retrieve data at the underlying memory location.
@@ -913,19 +811,19 @@ buildMacawGlobalPtrWrapper region offset = mkKnownWrapper $ \_ ->
 extensionWrappers
   :: (w ~ DMC.ArchAddrWidth arch, KnownNat w, DMC.MemWidth w)
   => Map.Map LCSA.AtomName (SomeExtensionWrapper arch)
-extensionWrappers = Map.fromList
-  [ (LCSA.AtomName "pointer-add", SomeExtensionWrapper wrapPointerAdd)
-  , (LCSA.AtomName "pointer-diff", SomeExtensionWrapper wrapPointerDiff)
-  , (LCSA.AtomName "pointer-sub", SomeExtensionWrapper wrapPointerSub)
-  , (LCSA.AtomName "pointer-and", SomeExtensionWrapper wrapPointerAnd)
-  , (LCSA.AtomName "pointer-xor", SomeExtensionWrapper wrapPointerXor)
-  , (LCSA.AtomName "pointer-mux", SomeExtensionWrapper wrapPointerMux)
-  , (LCSA.AtomName "pointer-eq", SomeExtensionWrapper wrapPointerEq)
-  , (LCSA.AtomName "pointer-leq", SomeExtensionWrapper wrapPointerLeq)
-  , (LCSA.AtomName "pointer-lt", SomeExtensionWrapper wrapPointerLt)
-  , (LCSA.AtomName "pointer-make-null", SomeExtensionWrapper wrapMakeNull)
-  , (LCSA.AtomName "pointer-to-bits", SomeExtensionWrapper wrapPointerToBits)
-  , (LCSA.AtomName "bits-to-pointer", SomeExtensionWrapper wrapBitsToPointer)
+extensionWrappers = Map.fromList $ fmap (first LCSA.AtomName)
+  [ ("pointer-add", someBinopBv DMS.PtrAdd)
+  , ("pointer-diff", SomeExtensionWrapper wrapPointerDiff)
+  , ("pointer-sub", someBinopBv (DMS.PtrSub . DMM.addrWidthRepr))
+  , ("pointer-and", someBinop DMS.PtrAnd)
+  , ("pointer-xor", someBinop DMS.PtrXor)
+  , ("pointer-mux", SomeExtensionWrapper wrapPointerMux)
+  , ("pointer-eq", someBinop DMS.PtrEq)
+  , ("pointer-leq", someBinop DMS.PtrLeq)
+  , ("pointer-lt", someBinop DMS.PtrLt)
+  , ("pointer-make-null", SomeExtensionWrapper wrapMakeNull)
+  , ("pointer-to-bits", SomeExtensionWrapper wrapPointerToBits)
+  , ("bits-to-pointer", SomeExtensionWrapper wrapBitsToPointer)
   ]
 
 ptrTypeParser :: LCSM.MonadSyntax LCSA.Atomic m => m (Some LCT.TypeRepr)
