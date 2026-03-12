@@ -31,13 +31,13 @@ The extra operations are:
 - `pointer-leq :: Pointer -> Pointer -> Bool`
 - `pointer-lt :: Pointer -> Pointer -> Bool`
 - `pointer-mux :: Bool -> Pointer -> Pointer -> Pointer`
-- `pointer-trunc :: Bitvector w -> Bitvector r -> Pointer w -> Pointer r` truncates a pointer from width `w` to smaller width `r`, where `(r + 1) <= w`.
-- `pointer-uext :: Bitvector w -> Bitvector r -> Pointer w -> Pointer r` unsigned extends a pointer from width `w` to larger width `r`, where `(w + 1) <= r`.
+- `pointer-trunc :: forall (w :: Natural) -> forall (r :: Natural) -> Pointer w -> Pointer r` truncates a pointer from width `w` to smaller width `r`, where `(r + 1) <= w`.
+- `pointer-uext :: forall (w :: Natural) -> forall (r :: Natural) -> Pointer w -> Pointer r` unsigned extends a pointer from width `w` to larger width `r`, where `(w + 1) <= r`.
 - `pointer-read :: forall (t :: Type) -> Endianness -> Pointer -> t` where the first argument is the type of the value to read and the second argument is `le` or `be`. `Type` must either be `Bitvector (8 * w)` (for some positive number `w`) or one of the type aliases listed above.
 - `pointer-write :: forall (t :: Type) -> Endianness -> Pointer -> t -> Unit` where the first argument is the type of the value to write and the second argument is `le` or `be`. `Type` must either be `Bitvector (8 * w)` (for some positive number `w`) or one of the type aliases listed above.
 - `pointer-cond-read :: forall (t :: Type) -> Endianness -> Bool -> Pointer -> t -> t` conditionally reads memory based on a boolean condition. If the condition is true, reads from the pointer; otherwise returns the default value.
 - `pointer-cond-write :: forall (t :: Type) -> Endianness -> Bool -> Pointer -> t -> Unit` conditionally writes memory based on a boolean condition. Only writes if the condition is true.
-- `overflows :: OverflowOp -> Bitvector w -> Bitvector w -> Bitvector w -> Bool -> Bool` tests whether an arithmetic operation overflows. `OverflowOp` can be one of: `uadc` (unsigned add with carry), `sadc` (signed add with carry), `usbb` (unsigned subtract with borrow), or `ssbb` (signed subtract with borrow).
+- `overflows :: OverflowOp -> forall (w :: Natural) -> Bitvector w -> Bitvector w -> Bool -> Bool` tests whether an arithmetic operation overflows. `OverflowOp` can be one of: `uadc` (unsigned add with carry), `sadc` (signed add with carry), `usbb` (unsigned subtract with borrow), or `ssbb` (signed subtract with borrow).
 - `fresh-symbolic :: MacawType -> t` generates a fresh symbolic variable of the given Macaw type. `MacawType` can be `MacawBool` or `(MacawBV n)` for an `n`-bit bitvector.
 
 [syn]: https://github.com/GaloisInc/crucible/tree/master/crucible-syntax

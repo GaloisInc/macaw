@@ -19,16 +19,12 @@
       (let bv1 (bv-typed-literal (Bitvector 64) 100))
       (let bv2 (bv-typed-literal (Bitvector 64) 200))
       (let carry #f)
-      (let uadc_overflow
-           (overflows uadc (Bitvector 64) bv1 bv2 carry))
-      (let sadc_overflow
-           (overflows sadc (Bitvector 64) bv1 bv2 carry))
-      (let usbb_overflow
-           (overflows usbb (Bitvector 64) bv1 bv2 carry))
-      (let ssbb_overflow
-           (overflows ssbb (Bitvector 64) bv1 bv2 carry))
-      (let p32 (pointer-trunc (Bitvector 64) (Bitvector 32) p))
-      (let p128 (pointer-uext (Bitvector 32) (Bitvector 128) p32))
+      (let uadc_overflow (overflows uadc 64 bv1 bv2 carry))
+      (let sadc_overflow (overflows sadc 64 bv1 bv2 carry))
+      (let usbb_overflow (overflows usbb 64 bv1 bv2 carry))
+      (let ssbb_overflow (overflows ssbb 64 bv1 bv2 carry))
+      (let p32 (pointer-trunc 64 32 p))
+      (let p128 (pointer-uext 32 128 p32))
       (let fresh_bool (fresh-symbolic MacawBool))
       (let fresh_bv (fresh-symbolic (MacawBV 64)))
       (let default_val (bv-typed-literal Int 0))
