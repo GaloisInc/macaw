@@ -229,12 +229,15 @@ extensionParser wrappers hooks =
             _ -> empty
       LCSA.AtomName "overflows" -> do
         LCSM.depCons overflowOp $ \op ->
-          LCSM.depCons LCSC.isType $ \(Some tp) ->
-            case tp of
-              LCT.BVRepr bvWidth ->
-                WI.withKnownNat bvWidth $
-                  go (SomeExtensionWrapper (wrapMacawOverflows op bvWidth))
-              _ -> empty
+          LCSM.depCons LCSC.nat $ \width ->
+            case PN.someNat width of
+              Just (Some widthRepr) ->
+                case PN.isZeroOrGT1 widthRepr of
+                  Left PN.Refl -> empty  -- width must be >= 1
+                  Right PN.LeqProof ->
+                    WI.withKnownNat widthRepr $
+                      go (SomeExtensionWrapper (wrapMacawOverflows op widthRepr))
+              Nothing -> empty
       LCSA.AtomName "fresh-symbolic" -> do
         LCSM.depCons parseMacawType $ \(Some macawTp) ->
           go (SomeExtensionWrapper (buildMacawFreshSymbolicWrapper macawTp))
@@ -243,28 +246,34 @@ extensionParser wrappers hooks =
           LCSM.depCons LCSC.nat $ \offset ->
             go (SomeExtensionWrapper (buildMacawGlobalPtrWrapper (fromIntegral region) offset))
       LCSA.AtomName "pointer-trunc" -> do
-        LCSM.depCons LCSC.isType $ \(Some srcTp) ->
-          LCSM.depCons LCSC.isType $ \(Some tgtTp) ->
-            case (srcTp, tgtTp) of
-              (LCT.BVRepr srcWidth, LCT.BVRepr tgtWidth) ->
-                case PN.testLeq (PN.addNat tgtWidth (PN.knownNat @1)) srcWidth of
-                  Just PN.LeqProof ->
-                    WI.withKnownNat srcWidth $
-                      WI.withKnownNat tgtWidth $
-                        go (SomeExtensionWrapper (buildPointerTruncWrapper srcWidth tgtWidth))
-                  Nothing -> empty
+        LCSM.depCons LCSC.nat $ \srcW ->
+          LCSM.depCons LCSC.nat $ \tgtW ->
+            case (PN.someNat srcW, PN.someNat tgtW) of
+              (Just (Some srcWidth), Just (Some tgtWidth)) ->
+                case (PN.isZeroOrGT1 srcWidth, PN.isZeroOrGT1 tgtWidth) of
+                  (Right PN.LeqProof, Right PN.LeqProof) ->
+                    case PN.testLeq (PN.addNat tgtWidth (PN.knownNat @1)) srcWidth of
+                      Just PN.LeqProof ->
+                        WI.withKnownNat srcWidth $
+                          WI.withKnownNat tgtWidth $
+                            go (SomeExtensionWrapper (buildPointerTruncWrapper srcWidth tgtWidth))
+                      Nothing -> empty
+                  _ -> empty
               _ -> empty
       LCSA.AtomName "pointer-uext" -> do
-        LCSM.depCons LCSC.isType $ \(Some srcTp) ->
-          LCSM.depCons LCSC.isType $ \(Some tgtTp) ->
-            case (srcTp, tgtTp) of
-              (LCT.BVRepr srcWidth, LCT.BVRepr tgtWidth) ->
-                case PN.testLeq (PN.addNat srcWidth (PN.knownNat @1)) tgtWidth of
-                  Just PN.LeqProof ->
-                    WI.withKnownNat srcWidth $
-                      WI.withKnownNat tgtWidth $
-                        go (SomeExtensionWrapper (buildPointerUExtWrapper srcWidth tgtWidth))
-                  Nothing -> empty
+        LCSM.depCons LCSC.nat $ \srcW ->
+          LCSM.depCons LCSC.nat $ \tgtW ->
+            case (PN.someNat srcW, PN.someNat tgtW) of
+              (Just (Some srcWidth), Just (Some tgtWidth)) ->
+                case (PN.isZeroOrGT1 srcWidth, PN.isZeroOrGT1 tgtWidth) of
+                  (Right PN.LeqProof, Right PN.LeqProof) ->
+                    case PN.testLeq (PN.addNat srcWidth (PN.knownNat @1)) tgtWidth of
+                      Just PN.LeqProof ->
+                        WI.withKnownNat srcWidth $
+                          WI.withKnownNat tgtWidth $
+                            go (SomeExtensionWrapper (buildPointerUExtWrapper srcWidth tgtWidth))
+                      Nothing -> empty
+                  _ -> empty
               _ -> empty
       _ ->
         case Map.lookup name wrappers of
@@ -708,7 +717,7 @@ parseMacawType = LCSM.describe "Macaw type" $
 
 -- | Build a wrapper for 'DMS.PtrTrunc' with explicit source and target widths.
 --
--- > pointer-trunc (Bitvector source-width) (Bitvector target-width) ptr
+-- > pointer-trunc source-width target-width ptr
 buildPointerTruncWrapper
   :: forall arch w r
    . ( KnownNat w
@@ -727,7 +736,7 @@ buildPointerTruncWrapper _wRepr rRepr = mkUncurriedWrapper $
 
 -- | Build a wrapper for 'DMS.PtrUExt' with explicit source and target widths.
 --
--- > pointer-uext (Bitvector source-width) (Bitvector target-width) ptr
+-- > pointer-uext source-width target-width ptr
 buildPointerUExtWrapper
   :: forall arch w r
    . ( KnownNat w
