@@ -48,7 +48,7 @@ The `ParserHooks` support the following types and operations:
   - `s9 :: RISCV{32,64}Reg`, AKA `x25`
   - `s10 :: RISCV{32,64}Reg`, AKA `x26`
   - `s11 :: RISCV{32,64}Reg`, AKA `x27`
-  - `t3 :: RISCV{32,64}Reg`, AKA `x29`
+  - `t3 :: RISCV{32,64}Reg`, AKA `x28`
   - `t4 :: RISCV{32,64}Reg`, AKA `x29`
   - `t5 :: RISCV{32,64}Reg`, AKA `x30`
   - `t6 :: RISCV{32,64}Reg`, AKA `x31`
@@ -103,7 +103,7 @@ The `ParserHooks` support the following types and operations:
   - `fa7 :: RISCV{32,64}Reg`, AKA `f17`
   - `fs2 :: RISCV{32,64}Reg`, AKA `f18`
   - `fs3 :: RISCV{32,64}Reg`, AKA `f19`
-  - `fs4 :: RISCV{32,64}Reg`, AKA `f2`
+  - `fs4 :: RISCV{32,64}Reg`, AKA `f20`
   - `fs5 :: RISCV{32,64}Reg`, AKA `f21`
   - `fs6 :: RISCV{32,64}Reg`, AKA `f22`
   - `fs7 :: RISCV{32,64}Reg`, AKA `f23`
