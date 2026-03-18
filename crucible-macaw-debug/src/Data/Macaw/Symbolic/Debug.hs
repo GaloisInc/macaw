@@ -96,10 +96,10 @@ detail =
 help :: MacawCommand -> Text
 help =
   \case
-    MDwarfGlobals -> "print DWARF globals"
-    MMem -> "display LLVM memory"
-    MRegister -> "display machine registers"
-    MTrace -> "print executed machine instructions"
+    MDwarfGlobals -> "Print DWARF globals"
+    MMem -> "Display LLVM memory"
+    MRegister -> "Display machine registers"
+    MTrace -> "Print executed machine instructions"
 
 name :: MacawCommand -> Text
 name =
@@ -178,18 +178,22 @@ instance PP.Pretty MacawResponse where
         let warnings = if List.null errs
                        then PP.emptyDoc
                        else "Warnings while processing DWARF: " <> PP.line <> (PP.indent 4 $ PP.align (PP.vsep $ List.map PP.pretty errs))
-        -- TODO(#468): replace the pretty-printing of globals inherited from Data.Macaw.Dwarf with more user-friendly output
-        in PP.vsep $
-           (warnings :) $
-             List.map
+            globalDocs = List.map
                 (\(nm, d) -> PP.pretty (Text.decodeUtf8Lenient nm) PP.<> ":" PP.<+> PP.align (fmap absurd d))
                 globals
+        -- TODO(#468): replace the pretty-printing of globals inherited from Data.Macaw.Dwarf with more user-friendly output
+        in if List.null errs && List.null globals
+           then PP.emptyDoc
+           else PP.vsep (warnings : globalDocs)
       RMRegister regs ->
         PP.vsep $
           List.map
             (\(nm, d) -> PP.pretty nm PP.<> ":" PP.<+> PP.align (fmap absurd d))
             regs
-      RMTrace t -> PP.vcat (PP.punctuate PP.line (map (PP.vcat . map PP.pretty) t))
+      RMTrace t ->
+        if List.null t || all List.null t
+        then PP.emptyDoc
+        else PP.vcat (PP.punctuate PP.line (map (PP.vcat . map PP.pretty) t))
 
 type instance Debug.ResponseExt MacawCommand = MacawResponse
 

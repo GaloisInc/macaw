@@ -15,10 +15,10 @@ frame (fr): Print information about the active stack frame
 help (h): Display help text
 load (l): Load a Crucible S-expression program from a file
 location (loc): Print the current program location
-mglobals (mglob): print DWARF globals
-mmemory (mmem): display LLVM memory
-mregister (mreg): display machine registers
-mtrace (mtr): print executed machine instructions
+mglobals (mglob): Print DWARF globals
+mmemory (mmem): Display LLVM memory
+mregister (mreg): Display machine registers
+mtrace (mtr): Print executed machine instructions
 obligation (o): Print the current proof obligations
 path-condition (pcond): Print the current path condition
 prove (p): Prove the current goals
@@ -36,7 +36,7 @@ usage (u): Display command usage hint
 
 mglobals TEXT*
 
-print DWARF globals.
+Print DWARF globals.
 
 When given no arguments, prints all globals described in DWARF. Otherwise, prints the globals with the given names, one per line.
 
@@ -44,13 +44,13 @@ When given no arguments, prints all globals described in DWARF. Otherwise, print
 
 mmemory 
 
-display LLVM memory.
+Display LLVM memory.
 
 > help mregister
 
 mregister ((rip|(rax|(rcx|(rdx|(rbx|(rsp|(rbp|(rsi|(rdi|(r8|(r9|(r10|(r11|(r12|(r13|(r14|(r15|(cf|(pf|(af|(zf|(sf|(tf|(if|(df|(of|(ie|(de|(ze|(oe|(ue|(pe|(ef|(es|(c0|(c1|(c2|(c3|(x87top|(tag0|(tag1|(tag2|(tag3|(tag4|(tag5|(tag6|(tag7|(mm0|(mm1|(mm2|(mm3|(mm4|(mm5|(mm6|(mm7|(zmm0|(zmm1|(zmm2|(zmm3|(zmm4|(zmm5|(zmm6|(zmm7|(zmm8|(zmm9|(zmm10|(zmm11|(zmm12|(zmm13|(zmm14|(zmm15|∅))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))*
 
-display machine registers.
+Display machine registers.
 
 When given no arguments, prints all machine registers. Otherwise, prints the registers with the given names, one per line.
 
@@ -60,7 +60,7 @@ The values printed may be slightly out of date. See https://github.com/GaloisInc
 
 mtrace INT?
 
-print executed machine instructions.
+Print executed machine instructions.
 
 Prints the machine instructions in the N most recent basic blocks.The default value for N is 2.The trace does not include any overrides that may have been executed.It will be empty for S-expression programs.
 
