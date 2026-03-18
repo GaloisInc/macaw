@@ -34,6 +34,9 @@ This `ParserHooks` supports the following types and operations:
   - `sp :: AArch32Reg`, AKA `r13`
   - `r14 :: AArch32Reg`, AKA `lr`
   - `lr :: AArch32Reg`, AKA `r14`
+  - `r15 :: AArch32Reg`, AKA `pc`
+  - `pc :: AArch32Reg`, AKA `r15`
+  - `pstateT :: AArch32Reg`: PSTATE_T flag
   - `v0 :: AArch32Reg`
   - `v1 :: AArch32Reg`
   - `v2 :: AArch32Reg`
