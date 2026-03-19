@@ -30,6 +30,7 @@ module Data.Macaw.Symbolic.Memory.Common
 import           GHC.TypeLits
 
 import qualified Control.Lens as L
+import           Control.Exception ( evaluate )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
@@ -291,7 +292,8 @@ populateMemChunkBytes bak hooks mem seg addr memChunk =
       -- For large binaries this saves gigabytes of heap.
       cache <- Vec.generateM 256 $ \i ->
         WI.bvLit sym w8 (BV.word8 (fromIntegral i))
-      pure $ map (\b -> cache Vec.! fromIntegral b) $ BS.unpack bytes
+      -- Force to prevent thunk buildup, which would otherwise be considerable.
+      traverse (evaluate . (cache Vec.!) . fromIntegral) (BS.unpack bytes)
   where
     sym = CB.backendGetSym bak
     w8 = WI.knownNat @8
