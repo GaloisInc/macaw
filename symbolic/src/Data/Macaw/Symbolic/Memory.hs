@@ -134,6 +134,8 @@ module Data.Macaw.Symbolic.Memory (
 import           GHC.TypeLits
 
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
+import qualified Data.BitVector.Sized as BV
+import qualified Data.ByteString as BS
 import           Data.Functor.Identity ( Identity(Identity) )
 import qualified Data.IntervalMap.Strict as IM
 
@@ -362,8 +364,40 @@ populateMemory proxy cache hooks bak mmc mems symArray0 =
   MSMC.pleatM (symArray0, IM.empty) mems $ \allocs0 mem ->
     MSMC.pleatM allocs0 (MC.memSegments mem) $ \allocs1 seg -> do
       MSMC.pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, allocs2) (addr, memChunk) -> do
-        concreteBytes <- MSMC.populateMemChunkBytes cache bak hooks mem seg addr memChunk
+        concreteBytes <- populateMemChunkBytes cache bak hooks mem seg addr memChunk
         populateSegmentChunk proxy bak mmc mem symArray seg addr concreteBytes allocs2
+
+-- | Convert each byte in a 'MC.MemChunk' to the corresponding bytes. These
+-- can possibly be symbolic bytes depending on the behavior of the
+-- 'GlobalMemoryHooks'.
+populateMemChunkBytes ::
+     ( MonadIO m
+     , CB.IsSymBackend sym bak
+     , MC.MemWidth w
+     )
+  => MBC.ByteCache sym
+  -> bak
+  -> MSMC.GlobalMemoryHooks w
+  -> MC.Memory w
+  -> MC.MemSegment w
+  -> MC.MemAddr w
+  -> MC.MemChunk w
+  -> m [WI.SymBV sym 8]
+populateMemChunkBytes cache bak hooks mem seg addr memChunk =
+  liftIO $
+  case memChunk of
+    MC.RelocationRegion reloc ->
+      MSMC.populateRelocation hooks bak mem seg addr reloc
+    MC.BSSRegion sz ->
+      replicate (fromIntegral sz) <$> WI.bvLit sym w8 (BV.zero w8)
+    MC.ByteRegion bytes -> do
+      -- Use the shared byte cache to avoid allocating fresh SemiRingLiteral
+      -- terms for each byte. For large binaries this saves gigabytes of heap.
+      -- Force evaluation to prevent thunk buildup.
+      traverse (MBC.indexByteCacheM cache) (BS.unpack bytes)
+  where
+    sym = CB.backendGetSym bak
+    w8 = WI.knownNat @8
 
 -- | If we want to treat the contents of this chunk of memory (the bytes at the
 -- 'MemAddr') as concrete, assert that the bytes from the symbolic array backing
