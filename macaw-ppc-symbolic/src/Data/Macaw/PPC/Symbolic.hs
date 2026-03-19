@@ -25,6 +25,7 @@ import           Control.Monad ( void )
 import           Control.Monad.IO.Class ( liftIO )
 import qualified Data.Functor.Identity as I
 import qualified Data.Kind as DK
+import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FC
@@ -41,6 +42,7 @@ import qualified Data.Macaw.Symbolic.Backend as MSB
 import qualified Lang.Crucible.Simulator.RegMap as MCR
 import qualified Lang.Crucible.Simulator.RegValue as MCRV
 import qualified Data.Macaw.PPC as MP
+import qualified Data.Macaw.PPC.PPCReg as MR
 import qualified SemMC.Architecture.PPC as SP
 
 import qualified Data.Macaw.PPC.Symbolic.AtomWrapper as A
@@ -51,6 +53,7 @@ import qualified Data.Macaw.PPC.Symbolic.Regs as Regs
 ppcMacawSymbolicFns :: ( SP.KnownVariant v
                        , 1 <= SP.AddrWidth v
                        , MC.MemWidth (SP.AddrWidth v)
+                       , KnownNat (SP.AddrWidth v)
                        ) => MS.MacawSymbolicArchFunctions (SP.AnyPPC v)
 ppcMacawSymbolicFns =
   MSB.MacawSymbolicArchFunctions
@@ -138,33 +141,29 @@ archUpdateReg regEntry reg val =
                  "archUpdateReg"
                  ["unexpected register: " ++ show (MC.prettyF reg)]
 
+regStateToAssignment :: forall v ids ppc.
+                        (ppc ~ MP.AnyPPC v, SP.KnownVariant v)
+                     => MC.RegState (MR.PPCReg v) (MC.Value ppc ids)
+                     -> Ctx.Assignment (MC.Value ppc ids) (MS.ArchRegContext ppc)
+regStateToAssignment regState = FC.fmapFC lookupReg (Regs.ppcRegAssignment @v)
+  where
+    lookupReg :: MR.PPCReg v tp -> MC.Value ppc ids tp
+    lookupReg reg = MC.getBoundValue reg regState
+
 ppcGenFn :: forall ids s tp v ppc
           . ( ppc ~ MP.AnyPPC v
             , 1 <= SP.AddrWidth v
+            , SP.KnownVariant v
+            , KnownNat (SP.AddrWidth v)
             )
          => MP.PPCPrimFn v (MC.Value ppc ids) tp
          -> MSB.CrucGen ppc ids s (C.Atom s (MS.ToCrucibleType tp))
 ppcGenFn fn =
   case fn of
-    MP.PPCSyscall w v0 v3 v4 v5 v6 v7 v8 v9 -> do
-      a0 <- MSB.valueToCrucible v0
-      a3 <- MSB.valueToCrucible v3
-      a4 <- MSB.valueToCrucible v4
-      a5 <- MSB.valueToCrucible v5
-      a6 <- MSB.valueToCrucible v6
-      a7 <- MSB.valueToCrucible v7
-      a8 <- MSB.valueToCrucible v8
-      a9 <- MSB.valueToCrucible v9
-
-      let syscallArgs = Ctx.Empty Ctx.:> a0 Ctx.:> a3 Ctx.:> a4 Ctx.:> a5 Ctx.:> a6 Ctx.:> a7 Ctx.:> a8 Ctx.:> a9
-      let argTypes = Ctx.Empty Ctx.:> Mem.LLVMPointerRepr w
-                               Ctx.:> Mem.LLVMPointerRepr w
-                               Ctx.:> Mem.LLVMPointerRepr w
-                               Ctx.:> Mem.LLVMPointerRepr w
-                               Ctx.:> Mem.LLVMPointerRepr w
-                               Ctx.:> Mem.LLVMPointerRepr w
-                               Ctx.:> Mem.LLVMPointerRepr w
-                               Ctx.:> Mem.LLVMPointerRepr w
+    MP.PPCSyscall w regState -> do
+      let rassign = regStateToAssignment regState
+      syscallArgs <- MS.macawAssignToCrucM MSB.valueToCrucible rassign
+      let argTypes = knownRepr
       -- `retTypes` is a tuple of form (R0, R3) [on PPC32] or (CR, R3) [on PPC64].
       -- Note that this is reversed from the return type of PPCSyscall, which
       -- uses the opposite order. This is because Macaw tuples have the order

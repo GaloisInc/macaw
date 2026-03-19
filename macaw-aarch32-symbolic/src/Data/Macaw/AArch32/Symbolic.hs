@@ -4,6 +4,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -56,6 +57,7 @@ import qualified Data.Macaw.AArch32.Symbolic.AtomWrapper as AA
 import qualified Data.Macaw.AArch32.Symbolic.Functions as AF
 import qualified Data.Macaw.AArch32.Symbolic.Panic as AP
 import qualified Data.Macaw.AArch32.Symbolic.Regs as AR
+import Data.Macaw.Symbolic (ArchRegContext)
 
 aarch32MacawSymbolicFns :: MS.MacawSymbolicArchFunctions SA.AArch32
 aarch32MacawSymbolicFns =
@@ -139,28 +141,28 @@ instance CE.PrettyApp AArch32StmtExtension where
 type instance MSB.MacawArchStmtExtension SA.AArch32 =
   AArch32StmtExtension
 
+regStateToAssignment :: forall ids.
+                        MC.RegState MAR.ARMReg (MC.Value SA.AArch32 ids)
+                     -> Ctx.Assignment (MC.Value SA.AArch32 ids) (ArchRegContext SA.AArch32)
+regStateToAssignment regState = FC.fmapFC lookupReg AR.aarch32RegAssignment
+  where
+    lookupReg :: MAR.ARMReg tp -> MC.Value SA.AArch32 ids tp
+    lookupReg reg = MC.getBoundValue reg regState
+
 aarch32GenFn :: MAA.ARMPrimFn (MC.Value SA.AArch32 ids) tp
              -> MSB.CrucGen SA.AArch32 ids s (CR.Atom s (MS.ToCrucibleType tp))
 aarch32GenFn fn =
   case fn of
-    MAA.ARMSyscall _imm v0 v1 v2 v3 v4 v5 v6 v7 -> do
-      a0 <- MSB.valueToCrucible v0
-      a1 <- MSB.valueToCrucible v1
-      a2 <- MSB.valueToCrucible v2
-      a3 <- MSB.valueToCrucible v3
-      a4 <- MSB.valueToCrucible v4
-      a5 <- MSB.valueToCrucible v5
-      a6 <- MSB.valueToCrucible v6
-      a7 <- MSB.valueToCrucible v7
-
-      let syscallArgs = Ctx.Empty Ctx.:> a0 Ctx.:> a1 Ctx.:> a2 Ctx.:> a3 Ctx.:> a4 Ctx.:> a5 Ctx.:> a6 Ctx.:> a7
+    MAA.ARMSyscall _imm regState -> do
+      let rassign = regStateToAssignment regState
+      crucibleAssign <- MS.macawAssignToCrucM MSB.valueToCrucible rassign
       let argTypes = PC.knownRepr
       let retTypes = Ctx.Empty Ctx.:> LCLM.LLVMPointerRepr (PN.knownNat @32) Ctx.:> LCLM.LLVMPointerRepr (PN.knownNat @32)
       let retRepr = CT.StructRepr retTypes
-      syscallArgStructAtom <- MSB.evalAtom (CR.EvalApp (LCE.MkStruct argTypes syscallArgs))
+      syscallArgStructAtom <- MSB.evalAtom (CR.EvalApp (LCE.MkStruct argTypes crucibleAssign))
       let lookupHdlStmt = MS.MacawLookupSyscallHandle argTypes retTypes syscallArgStructAtom
       hdlAtom <- MSB.evalMacawStmt lookupHdlStmt
-      MSB.evalAtom $! CR.Call hdlAtom syscallArgs retRepr
+      MSB.evalAtom $! CR.Call hdlAtom crucibleAssign retRepr
     _ -> do
       let f x = AA.AtomWrapper <$> MSB.valueToCrucible x
       r <- FC.traverseFC f fn
