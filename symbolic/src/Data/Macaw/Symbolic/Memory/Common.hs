@@ -21,7 +21,6 @@ module Data.Macaw.Symbolic.Memory.Common
   , MacawError(..)
   , defaultProcessMacawAssertion
   , mapRegionPointersCommon
-  , populateMemChunkBytes
   , memArrEqualityAssumption
   , pleatM
   , ipleatM
@@ -32,14 +31,12 @@ import           GHC.TypeLits
 import qualified Control.Lens as L
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.BitVector.Sized as BV
-import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.Foldable.WithIndex as FWI
 import qualified Data.IntervalMap.Strict as IM
 
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Macaw.CFG as MC
-import qualified Data.Macaw.Symbolic.Memory.ByteCache as MBC
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.LLVM.DataLayout as CLD
 import qualified Lang.Crucible.LLVM.MemModel as CL
@@ -262,38 +259,6 @@ mapRegionPointersCommon ptr = MS.GlobalMap $ \bak mem regionNum offsetVal ->
       -- The pointer mapped to global memory (if the region number is zero)
       globalPtr <- CL.doPtrAddOffset bak mem ptr offsetVal
       CL.muxLLVMPtr sym isZeroRegion globalPtr (CL.LLVMPointer regionNum offsetVal)
-
--- | Convert each byte in a 'MC.MemChunk' to the corresponding bytes. These
--- can possibly be symbolic bytes depending on the behavior of the
--- 'GlobalMemoryHooks'.
-populateMemChunkBytes ::
-     ( MonadIO m
-     , CB.IsSymBackend sym bak
-     , MC.MemWidth w
-     )
-  => MBC.ByteCache sym
-  -> bak
-  -> GlobalMemoryHooks w
-  -> MC.Memory w
-  -> MC.MemSegment w
-  -> MC.MemAddr w
-  -> MC.MemChunk w
-  -> m [WI.SymBV sym 8]
-populateMemChunkBytes cache bak hooks mem seg addr memChunk =
-  liftIO $
-  case memChunk of
-    MC.RelocationRegion reloc ->
-      populateRelocation hooks bak mem seg addr reloc
-    MC.BSSRegion sz ->
-      replicate (fromIntegral sz) <$> WI.bvLit sym w8 (BV.zero w8)
-    MC.ByteRegion bytes -> do
-      -- Use the shared byte cache to avoid allocating fresh SemiRingLiteral
-      -- terms for each byte. For large binaries this saves gigabytes of heap.
-      -- Force evaluation to prevent thunk buildup.
-      traverse (MBC.indexByteCacheM cache) (BS.unpack bytes)
-  where
-    sym = CB.backendGetSym bak
-    w8 = WI.knownNat @8
 
 -- | Generate an 'AB.Assumption' that particular elements of the array backing
 -- global memory are equal to the appropriate bytes. This function does not add

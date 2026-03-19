@@ -24,7 +24,6 @@ library
     panic,
     parameterized-utils,
     prettyprinter >= 1.7.0,
-    split,
     text,
     vector >= 0.13.2,
     bytestring,
@@ -87,6 +86,7 @@ test-suite macaw-symbolic-tests
     hedgehog >= 1.0.2,
     tasty >= 1.2.3 && < 1.6,
     tasty-hedgehog >= 1.2 && < 1.5,
-    tasty-hunit
+    tasty-hunit,
+    vector
 
 
