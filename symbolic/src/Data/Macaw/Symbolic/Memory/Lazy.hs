@@ -61,6 +61,7 @@ import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Vector as PV
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory.Permissions as MMP
+import qualified Data.Macaw.Symbolic.Memory.ByteCache as MBC
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.Backend.Online as CBO
 import qualified Lang.Crucible.Backend.ProofGoals as CBP
@@ -161,6 +162,8 @@ data MemPtrTable sym w = MemPtrTable
   , memModelContents :: MSMC.MemoryModelContents
   -- ^ How to populate bytes in writable regions of static memory in the
   -- 'memPtrArray'.
+  , byteCache :: MBC.ByteCache sym
+  -- ^ See "Data.Macaw.Symbolic.Memory.ByteCache"
   }
 
 -- | A discrete chunk of a memory segment within global memory. Memory is
@@ -546,13 +549,17 @@ newMergedGlobalMemoryWith hooks _proxy bak endian mmc mems = do
                          "Global memory for macaw-symbolic"
                          memImpl1 sizeBV CLD.noAlignment
 
-  tbl <- mergedMemorySymbolicMemChunks bak hooks mems
+  cache <- liftIO $ MBC.mkByteCache sym
+
+  tbl <- mergedMemorySymbolicMemChunks cache bak hooks mems
+
   memImpl3 <- liftIO $ CL.doArrayStore bak memImpl2 ptr CLD.noAlignment symArray sizeBV
   let ptrTable = MemPtrTable
                    { memPtrTable = tbl
                    , memPtr = ptr
                    , memPtrArray = symArray
                    , memModelContents = mmc
+                   , byteCache = cache
                    }
 
   return (memImpl3, ptrTable)
@@ -568,11 +575,12 @@ mergedMemorySymbolicMemChunks ::
   , Traversable t
   , MonadIO m
   ) =>
+  MBC.ByteCache sym ->
   bak ->
   MSMC.GlobalMemoryHooks w ->
   t (MC.Memory w) ->
   m (IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym))
-mergedMemorySymbolicMemChunks bak hooks mems =
+mergedMemorySymbolicMemChunks cache bak hooks mems =
   fmap (IM.fromList . concat) $ traverse memorySymbolicMemChunks mems
   where
     memorySymbolicMemChunks ::
@@ -588,7 +596,7 @@ mergedMemorySymbolicMemChunks bak hooks mems =
     segmentSymbolicMemChunks mem seg = concat <$>
       traverse
         (\(addr, chunk) -> do
-          allBytes <- MSMC.populateMemChunkBytes bak hooks mem seg addr chunk
+          allBytes <- MSMC.populateMemChunkBytes cache bak hooks mem seg addr chunk
           let mut | MMP.isReadonly (MC.segmentFlags seg) = CL.Immutable
                   | otherwise                            = CL.Mutable
           let absAddr =

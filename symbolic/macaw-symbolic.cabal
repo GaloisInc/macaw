@@ -26,7 +26,7 @@ library
     prettyprinter >= 1.7.0,
     split,
     text,
-    vector,
+    vector >= 0.13.2,
     bytestring,
     what4 >= 1.1 && < 1.8
 
@@ -46,6 +46,7 @@ library
   other-modules:
     Data.Macaw.Symbolic.Bitcast
     Data.Macaw.Symbolic.CrucGen
+    Data.Macaw.Symbolic.Memory.ByteCache
     Data.Macaw.Symbolic.Memory.Common
     Data.Macaw.Symbolic.Panic
     Data.Macaw.Symbolic.PersistentState
