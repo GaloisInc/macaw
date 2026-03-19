@@ -139,6 +139,7 @@ import qualified Data.IntervalMap.Strict as IM
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory.Permissions as MMP
+import qualified Data.Macaw.Symbolic.Memory.ByteCache as MBC
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.LLVM.DataLayout as CLD
 import qualified Lang.Crucible.LLVM.MemModel as CL
@@ -280,7 +281,10 @@ newMergedGlobalMemoryWith hooks proxy bak endian mmc mems = do
                          "Global memory for macaw-symbolic"
                          memImpl1 sizeBV CLD.noAlignment
 
-  (symArray2, tbl) <- populateMemory proxy hooks bak mmc mems symArray1
+  -- Create the shared byte cache once (all 256 possible byte values)
+  cache <- liftIO $ MBC.mkByteCache sym
+
+  (symArray2, tbl) <- populateMemory proxy cache hooks bak mmc mems symArray1
   memImpl3 <- liftIO $ CL.doArrayStore bak memImpl2 ptr CLD.noAlignment symArray2 sizeBV
   let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr }
 
@@ -340,6 +344,8 @@ populateMemory :: ( CB.IsSymBackend sym bak
                   )
                => proxy arch
                -- ^ A proxy to fix the architecture
+               -> MBC.ByteCache sym
+               -- ^ Shared cache of all 256 possible byte literals
                -> MSMC.GlobalMemoryHooks (MC.ArchAddrWidth arch)
                -- ^ Hooks controlling how memory should be initialized
                -> bak
@@ -352,11 +358,11 @@ populateMemory :: ( CB.IsSymBackend sym bak
                -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
                     , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) CL.Mutability
                     )
-populateMemory proxy hooks bak mmc mems symArray0 =
+populateMemory proxy cache hooks bak mmc mems symArray0 =
   MSMC.pleatM (symArray0, IM.empty) mems $ \allocs0 mem ->
     MSMC.pleatM allocs0 (MC.memSegments mem) $ \allocs1 seg -> do
       MSMC.pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, allocs2) (addr, memChunk) -> do
-        concreteBytes <- MSMC.populateMemChunkBytes bak hooks mem seg addr memChunk
+        concreteBytes <- MSMC.populateMemChunkBytes cache bak hooks mem seg addr memChunk
         populateSegmentChunk proxy bak mmc mem symArray seg addr concreteBytes allocs2
 
 -- | If we want to treat the contents of this chunk of memory (the bytes at the

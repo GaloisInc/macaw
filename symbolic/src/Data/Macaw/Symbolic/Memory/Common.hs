@@ -41,6 +41,7 @@ import qualified Data.Vector as Vec
 
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Symbolic.Memory.ByteCache as MBC
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.LLVM.DataLayout as CLD
 import qualified Lang.Crucible.LLVM.MemModel as CL
@@ -272,14 +273,15 @@ populateMemChunkBytes ::
      , CB.IsSymBackend sym bak
      , MC.MemWidth w
      )
-  => bak
+  => MBC.ByteCache sym
+  -> bak
   -> GlobalMemoryHooks w
   -> MC.Memory w
   -> MC.MemSegment w
   -> MC.MemAddr w
   -> MC.MemChunk w
   -> m [WI.SymBV sym 8]
-populateMemChunkBytes bak hooks mem seg addr memChunk =
+populateMemChunkBytes cache bak hooks mem seg addr memChunk =
   liftIO $
   case memChunk of
     MC.RelocationRegion reloc ->
@@ -287,13 +289,10 @@ populateMemChunkBytes bak hooks mem seg addr memChunk =
     MC.BSSRegion sz ->
       replicate (fromIntegral sz) <$> WI.bvLit sym w8 (BV.zero w8)
     MC.ByteRegion bytes -> do
-      -- Cache all 256 possible byte literals to avoid allocating a fresh
-      -- SemiRingLiteral (+ SemiRingBVRepr + Integer + ProgramLoc) per byte.
-      -- For large binaries this saves gigabytes of heap.
-      cache <- Vec.generateM 256 $ \i ->
-        WI.bvLit sym w8 (BV.word8 (fromIntegral i))
-      -- Force to prevent thunk buildup, which would otherwise be considerable.
-      traverse (evaluate . (cache Vec.!) . fromIntegral) (BS.unpack bytes)
+      -- Use the shared byte cache to avoid allocating fresh SemiRingLiteral
+      -- terms for each byte. For large binaries this saves gigabytes of heap.
+      -- Force evaluation to prevent thunk buildup.
+      traverse (MBC.indexByteCacheM cache) (BS.unpack bytes)
   where
     sym = CB.backendGetSym bak
     w8 = WI.knownNat @8
