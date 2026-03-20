@@ -48,7 +48,7 @@ import           GHC.TypeLits
 import qualified Control.Exception as X
 import qualified Control.Lens as L
 import           Control.Lens ((^.))
-import           Control.Monad ( guard )
+import           Control.Monad ( guard, void )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
@@ -195,6 +195,8 @@ data SymbolicMemChunk sym = SymbolicMemChunk
   }
 
 -- | Get the number of bytes in a 'MemChunkBytes'.
+--
+-- At most 'chunkSize'.
 memChunkBytesLength :: MemChunkBytes sym -> Int
 memChunkBytesLength = \case
   ConcreteBytes bs -> BS.length bs
@@ -288,8 +290,9 @@ extendUpperBound i extendBy =
     IMI.OpenInterval   lo hi -> IMI.OpenInterval   lo (hi + extendBy)
     IMI.ClosedInterval lo hi -> IMI.ClosedInterval lo (hi + extendBy)
 
--- | Given a read address, a number of bytes, and a list of memory regions
--- with backing bytes, extract exactly the requested bytes in a single pass.
+-- | Given a read address, a number of bytes, and a list of memory regions with
+-- backing bytes, extract the requested bytes.
+--
 -- Returns 'Just' if the chunks are contiguous, all immutable, and cover the
 -- full read window. Returns 'Nothing' otherwise.
 sliceContiguousChunks ::
@@ -302,31 +305,66 @@ sliceContiguousChunks ::
   -- ^ Number of bytes to read
   [(IMI.Interval a, SymbolicMemChunk sym)] ->
   Maybe [WI.SymBV sym 8]
-sliceContiguousChunks _cache _addr _numBytes [] = Nothing
-sliceContiguousChunks cache addr numBytes ichunks = go Nothing numBytes ichunks
+sliceContiguousChunks cache addr numBytes =
+  \case
+    [] -> Nothing
+    ichunks -> go Nothing numBytes ichunks
   where
-    go :: Maybe (IMI.Interval a) -> Int -> [(IMI.Interval a, SymbolicMemChunk sym)] -> Maybe [WI.SymBV sym 8]
-    go _prevInterval remaining _
-      | remaining <= 0 = Just []
-    go _prevInterval _remaining [] = Nothing
-    go prevInterval remaining ((i, chunk) : rest) = do
-      -- Check contiguity with previous interval
-      case prevInterval of
-        Nothing -> pure ()
-        Just prev -> combineIfContiguous prev i >> pure ()
-      -- Check immutability
-      guard (smcMutability chunk == CL.Immutable)
-      let chunkLo  = IMI.lowerBound i
-          chunkLen = memChunkBytesLength (smcBytes chunk)
-          -- How far into this chunk the read starts
-          skip     = max 0 (fromIntegral (addr - chunkLo))
-          -- How many bytes we can take from this chunk
-          avail    = chunkLen - skip
-          take_    = min remaining avail
-      guard (take_ > 0)
-      let theseBytes = sliceBytes (smcBytes chunk) skip take_
-      restBytes <- go (Just i) (remaining - take_) rest
-      Just (theseBytes ++ restBytes)
+    go ::
+      Maybe (IMI.Interval a) ->
+      Int ->
+      [(IMI.Interval a, SymbolicMemChunk sym)] ->
+      Maybe [WI.SymBV sym 8]
+    go prevInterval remaining = \case
+      _ | remaining <= 0 -> Just []
+      [] -> Nothing
+      (i, chunk) : rest -> do
+        guard (smcMutability chunk == CL.Immutable)
+        case prevInterval of
+          Nothing -> pure ()
+          Just prev -> void $ combineIfContiguous prev i
+        -- Visualization of the following variables:
+        -- 
+        -- * renaming: How many more bytes we need to satisfy the read
+        -- * chunkLo: Starting address of chunk
+        -- * chunkLen: Size of chunk
+        -- * skip: How far into this chunk the read starts
+        -- * avail: Bytes in this chunk after skip
+        -- * take_: How many bytes we should take from this chunk
+        --
+        -- Two cases:
+        --
+        --   addr >= chunkLo:
+        --
+        --     chunkLo                      chunkLo + chunkLen
+        --        |------------ chunk --------------|
+        --                 addr                      addr + numBytes
+        --        |-- skip --|----------- read -----------|
+        --                   |-------- avail -------|
+        --
+        --   addr < chunkLo:
+        --
+        --            chunkLo          chunkLo + chunkLen
+        --               |------- chunk -------|
+        --     addr                  addr + numBytes
+        --      |--------- read ----------|
+        --      (skip=0) |                 
+        --               |------ avail --------|
+        --
+        let chunkLo  = IMI.lowerBound i
+            chunkLen = memChunkBytesLength (smcBytes chunk)
+            skip     = max 0 (fromIntegral @a @Int (addr - chunkLo))
+            avail    = chunkLen - skip
+            take_    = min remaining avail
+        -- The chunk was returned by IM.intersectiong, so we have
+        --
+        --   [chunkLo, chunkLo + chunkLen) /\ [addr, addr + numBytes] /= {}
+        -- 
+        -- take_ > 0 because remaining > 0 (checked above) and avail > 0.
+        X.assert (take_ > 0) $ guard (take_ > 0)
+        let theseBytes = sliceBytes (smcBytes chunk) skip take_
+        restBytes <- go (Just i) (remaining - take_) rest
+        Just (theseBytes ++ restBytes)
 
     sliceBytes :: MemChunkBytes sym -> Int -> Int -> [WI.SymBV sym 8]
     sliceBytes (ConcreteBytes bs) off len =
@@ -491,7 +529,7 @@ bsToSymBV sym w endianness bs =
 -- In little-endian mode, the first byte is the least significant.
 bsToInteger :: MC.Endianness -> BS.ByteString -> Integer
 bsToInteger endianness bs =
-  BS.foldl' (\acc b -> acc * 256 + fromIntegral b) 0 ordered
+  BS.foldl' (\acc b -> acc * 256 + fromIntegral @Word8 @Integer b) 0 ordered
   where
     ordered = case endianness of
       MC.BigEndian    -> bs
@@ -695,7 +733,8 @@ mergedMemorySymbolicMemChunks bak hooks mems =
       MC.ByteRegion bs ->
         pure (ConcreteBytes bs, BS.length bs)
       MC.BSSRegion sz ->
-        pure (ConcreteBytes (BS.replicate (fromIntegral sz) 0), fromIntegral sz)
+        pure (ConcreteBytes (BS.replicate (fromIntegral @(MC.MemWord w) @Int sz) 0),
+              fromIntegral @(MC.MemWord w) @Int sz)
       MC.RelocationRegion reloc -> do
         symBytes <- liftIO $
           MSMC.populateRelocation hooks bak mem seg addr reloc
@@ -712,7 +751,7 @@ mergedMemorySymbolicMemChunks bak hooks mems =
     tryPackConcrete symBytes = BS.pack <$> traverse asConcreteByte symBytes
 
     asConcreteByte :: WI.SymBV sym 8 -> Maybe Word8
-    asConcreteByte bv = fromIntegral . BV.asUnsigned <$> WI.asBV bv
+    asConcreteByte bv = fromIntegral @Integer @Word8 . BV.asUnsigned <$> WI.asBV bv
 
 -- Return @Just val@ if we can be absolutely sure that this is a concrete
 -- read from a contiguous region of immutable, global memory, where the type of
@@ -743,10 +782,10 @@ concreteImmutableGlobalRead sym mpt memRep ptr
   , [(interval, smc)] <-
       IM.toAscList $
       memPtrTable mpt `IM.intersecting`
-        IMI.ClosedInterval addr (addr + fromIntegral numBytes)
+        IMI.ClosedInterval addr (addr + fromIntegral @Int @(MC.MemWord w) numBytes)
   , smcMutability smc == CL.Immutable
   , ConcreteBytes bs <- smcBytes smc
-  , let off = fromIntegral $ addr - IMI.lowerBound interval
+  , let off = fromIntegral @(MC.MemWord w) @Int $ addr - IMI.lowerBound interval
   , off >= 0
   , off + numBytes <= BS.length bs
   = do let slice = BS.take numBytes (BS.drop off bs)
@@ -765,7 +804,7 @@ concreteImmutableGlobalRead sym mpt memRep ptr
   , Just bytes <-
       sliceContiguousChunks (byteCache mpt) addr numBytes $ IM.toAscList $
       memPtrTable mpt `IM.intersecting`
-        IMI.ClosedInterval addr (addr + fromIntegral numBytes)
+        IMI.ClosedInterval addr (addr + fromIntegral @Int @(MC.MemWord w) numBytes)
   = do readVal <- readBytesAsRegValue sym memRep bytes
        pure $ Just readVal
 
