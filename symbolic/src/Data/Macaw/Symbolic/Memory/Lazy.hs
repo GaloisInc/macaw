@@ -6,6 +6,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeOperators #-}
 -- | This module provides a drop-in replacement for
 -- "Data.Macaw.Symbolic.Memory". Unlike the memory model configuration in that
@@ -39,7 +40,9 @@ module Data.Macaw.Symbolic.Memory.Lazy (
   MSMC.MacawError(..),
   MSMC.defaultProcessMacawAssertion,
   mkGlobalPointerValidityPred,
-  mapRegionPointers
+  mapRegionPointers,
+  -- * Testing
+  slicePlan
   ) where
 
 import           GHC.TypeLits
@@ -47,8 +50,11 @@ import           GHC.TypeLits
 import qualified Control.Exception as X
 import qualified Control.Lens as L
 import           Control.Lens ((^.))
+import           Control.Monad ( guard, void )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.BitVector.Sized as BV
+import qualified Data.ByteString as BS
+import           Data.Word ( Word8 )
 import qualified Data.Foldable as F
 import           Data.Functor.Identity ( Identity(Identity) )
 import qualified Data.IntervalMap.Interval as IMI
@@ -166,36 +172,35 @@ data MemPtrTable sym w = MemPtrTable
   -- ^ See "Data.Macaw.Symbolic.Memory.ByteCache"
   }
 
+-- | The backing bytes for a 'SymbolicMemChunk'. For the common case of
+-- concrete byte data from the binary, we store the raw 'BS.ByteString' to avoid
+-- materializing What4 expressions upfront. Expressions are only created on
+-- demand when a chunk is actually accessed, using the shared 'MBC.ByteCache'.
+data MemChunkBytes sym
+  = ConcreteBytes !BS.ByteString
+    -- ^ Raw bytes from the binary (e.g., from 'MC.ByteRegion'). Symbolic
+    --   expressions are created on demand during lazy population via the
+    --   shared 'MBC.ByteCache'.
+  | SymbolicBytes !(Seq.Seq (WI.SymBV sym 8))
+    -- ^ Truly symbolic bytes (e.g., from relocations) that cannot be
+    --   represented as a raw 'BS.ByteString'.
+
 -- | A discrete chunk of a memory segment within global memory. Memory is
 -- lazily initialized one 'SymbolicMemChunk' at a time. See
 -- @Note [Lazy memory model]@.
 data SymbolicMemChunk sym = SymbolicMemChunk
-  { smcBytes :: Seq.Seq (WI.SymBV sym 8)
+  { smcBytes :: MemChunkBytes sym
     -- ^ A contiguous region of symbolic bytes backing global memory.
-    --   The size of this region is no larger than 'chunkSize'. We represent
-    --   this as a 'Seq.Seq' since we frequently need to append it to other
-    --   regions (see 'combineSymbolicMemChunks').
+    --   The size of this region is no larger than 'chunkSize'.
   , smcMutability :: CL.Mutability
     -- ^ Whether the region of memory is mutable or immutable.
   }
 
--- | If two 'SymbolicMemChunk's have the same 'LCLM.Mutability', then return
--- @'Just' chunk@, where @chunk@ contains the two arguments' bytes concatenated
--- together. Otherwise, return 'Nothing'.
-combineSymbolicMemChunks ::
-  SymbolicMemChunk sym ->
-  SymbolicMemChunk sym ->
-  Maybe (SymbolicMemChunk sym)
-combineSymbolicMemChunks
-  (SymbolicMemChunk{smcBytes = bytes1, smcMutability = mutability1})
-  (SymbolicMemChunk{smcBytes = bytes2, smcMutability = mutability2})
-  | mutability1 == mutability2
-  = Just $ SymbolicMemChunk
-             { smcBytes = bytes1 <> bytes2
-             , smcMutability = mutability1
-             }
-  | otherwise
-  = Nothing
+-- | Split a 'BS.ByteString' into chunks of at most @n@ bytes.
+bsChunksOf :: Int -> BS.ByteString -> [BS.ByteString]
+bsChunksOf n bs
+  | BS.null bs = []
+  | otherwise  = let (h, t) = BS.splitAt n bs in h : bsChunksOf n t
 
 -- | @'combineIfContiguous' i1 i2@ returns 'Just' an interval with the lower
 -- bound of @i1@ and the upper bound of @i2@ when one of the following criteria
@@ -279,29 +284,110 @@ extendUpperBound i extendBy =
     IMI.OpenInterval   lo hi -> IMI.OpenInterval   lo (hi + extendBy)
     IMI.ClosedInterval lo hi -> IMI.ClosedInterval lo (hi + extendBy)
 
--- | Given a list of memory regions and the symbolic bytes backing them,
--- attempt to combine them into a single region. Return 'Just' if the memory
--- can be combined into a single, contiguous region with no overlap and the
--- backing memory has the same 'LCLM.Mutability. Return 'Nothing' otherwise.
-combineChunksIfContiguous ::
+-- | Exported for testing purposes only, do not use!
+--
+-- Given a read address, a number of bytes, and a list of contiguous
+-- 'IMI.IntervalCO' intervals, compute the @(skip, take)@ slice needed from each
+-- chunk to satisfy the read.
+--
+-- Returns 'Nothing' if the chunks are not contiguous or don't fully cover the
+-- read window.
+slicePlan ::
+  forall a.
+  (Eq a, Integral a) =>
+  a ->
+  -- ^ The address being read from
+  Int ->
+  -- ^ Number of bytes to read
+  [IMI.Interval a] ->
+  Maybe [(Int, Int)]
+  -- ^ (skip, take) per chunk
+slicePlan addr numBytes =
+  \case
+    [] -> Nothing
+    ichunks -> go Nothing numBytes ichunks
+  where
+    go :: Maybe (IMI.Interval a) -> Int -> [IMI.Interval a] -> Maybe [(Int, Int)]
+    go prevInterval remaining = \case
+      _ | remaining <= 0 -> Just []
+      [] -> Nothing
+      (i : rest) -> do
+        case prevInterval of
+          Nothing -> pure ()
+          Just prev -> void $ combineIfContiguous prev i
+        -- Variables (per chunk):
+        --
+        -- * remaining: How many more bytes we need to satisfy the read
+        -- * chunkLo: Starting address of chunk
+        -- * chunkLen: Size of chunk (chunkHi - chunkLo)
+        -- * skip: How far into this chunk the read starts
+        -- * avail: Bytes in this chunk after skip
+        -- * take_: How many bytes we take from this chunk
+        --
+        -- Two cases:
+        --
+        --   addr >= chunkLo:
+        --
+        --     chunkLo                           chunkHi
+        --        |------------ chunk --------------|
+        --                 addr                      addr + numBytes
+        --        |-- skip --|----------- read -----------|
+        --                   |-------- avail -------|
+        --
+        --   addr < chunkLo:
+        --
+        --            chunkLo               chunkHi
+        --               |------- chunk -------|
+        --     addr                  addr + numBytes
+        --      |--------- read ----------|
+        --      (skip=0) |
+        --               |------ avail --------|
+        --
+        -- The interval must be half-open [lo, hi):
+        let (chunkLo, chunkHi) = case i of
+              IMI.IntervalCO lo hi -> (lo, hi)
+              _ -> X.assert False (IMI.lowerBound i, IMI.upperBound i)
+            chunkLen = fromIntegral @a @Int (chunkHi - chunkLo)
+            skip  = max 0 (fromIntegral @a @Int (addr - chunkLo))
+            avail = chunkLen - skip
+            take_ = min remaining avail
+        -- The chunk was returned by IM.intersecting, so it overlaps the
+        -- read window. Therefore avail > 0 and (since remaining > 0)
+        -- take_ > 0.
+        X.assert (take_ > 0) $ guard (take_ > 0)
+        ((skip, take_) :) <$> go (Just i) (remaining - take_) rest
+
+-- | Given a read address, a number of bytes, and a list of memory regions with
+-- backing bytes, extract the requested bytes.
+--
+-- Returns 'Just' if the chunks are contiguous, all immutable, and cover the
+-- full read window. Returns 'Nothing' otherwise.
+sliceContiguousChunks ::
   forall a sym.
   (Eq a, Integral a) =>
+  MBC.ByteCache sym ->
+  a ->
+  -- ^ The address being read from
+  Int ->
+  -- ^ Number of bytes to read
   [(IMI.Interval a, SymbolicMemChunk sym)] ->
-  Maybe (IMI.Interval a, SymbolicMemChunk sym)
-combineChunksIfContiguous ichunks =
-  case L.uncons ichunks of
-    Nothing -> Nothing
-    Just (ichunkHead, ichunkTail) -> F.foldl' f (Just ichunkHead) ichunkTail
+  Maybe [WI.SymBV sym 8]
+sliceContiguousChunks cache addr numBytes ichunks = do
+  plan <- slicePlan addr numBytes (map fst ichunks)
+  result <- F.foldlM applySlice [] (zip ichunks plan)
+  X.assert (length result == numBytes) $ Just result
   where
-    f ::
-      Maybe (IMI.Interval a, SymbolicMemChunk sym) ->
-      (IMI.Interval a, SymbolicMemChunk sym) ->
-      Maybe (IMI.Interval a, SymbolicMemChunk sym)
-    f acc (i2, chunk2) = do
-      (i1, chunk1) <- acc
-      combinedI <- combineIfContiguous i1 i2
-      combinedChunk <- combineSymbolicMemChunks chunk1 chunk2
-      pure (combinedI, combinedChunk)
+    applySlice acc ((_, chunk), (off, len)) = do
+      guard (smcMutability chunk == CL.Immutable)
+      -- Note: (++) is O(n^2), but the reads are generally less than 8 bytes or
+      -- less so we won't have many chunks.
+      Just $ acc ++ sliceBytes (smcBytes chunk) off len
+
+    sliceBytes :: MemChunkBytes sym -> Int -> Int -> [WI.SymBV sym 8]
+    sliceBytes (ConcreteBytes bs) off len =
+      [ MBC.indexByteCache cache (BS.index bs (off + i)) | i <- [0 .. len - 1] ]
+    sliceBytes (SymbolicBytes s) off len =
+      F.toList $ Seq.take len $ Seq.drop off s
 
 -- | The maximum size of a 'SymbolicMemChunk', which determines the granularity
 -- at which the regions of memory in a 'memPtrTable' are chunked up.
@@ -442,6 +528,31 @@ concatBytes sym endianness byte bytes =
       WI.Refl <- return $ WI.plusComm (WI.bvWidth byte) (WI.bvWidth bytes)
       WI.bvConcat sym bytes byte
 
+-- | Convert a 'BS.ByteString' directly to a 'WI.SymBV' of the given width,
+-- respecting endianness. The caller must ensure that the byte length of the
+-- 'BS.ByteString' matches the bit width (i.e., @8 * BS.length bs == natValue w@).
+bsToSymBV ::
+  (CB.IsSymInterface sym, 1 WI.<= w) =>
+  sym ->
+  WI.NatRepr w ->
+  MC.Endianness ->
+  BS.ByteString ->
+  IO (WI.SymBV sym w)
+bsToSymBV sym w endianness bs =
+  X.assert (fromIntegral (BS.length bs) * 8 == WI.natValue w) $
+  WI.bvLit sym w (BV.mkBV w (bsToInteger endianness bs))
+
+-- | Convert a 'BS.ByteString' to an 'Integer' respecting endianness.
+-- In big-endian mode, the first byte is the most significant.
+-- In little-endian mode, the first byte is the least significant.
+bsToInteger :: MC.Endianness -> BS.ByteString -> Integer
+bsToInteger endianness bs =
+  BS.foldl' (\acc b -> acc * 256 + fromIntegral @Word8 @Integer b) 0 ordered
+  where
+    ordered = case endianness of
+      MC.BigEndian    -> bs
+      MC.LittleEndian -> BS.reverse bs
+
 -- | Create a new LLVM memory model instance ('CL.MemImpl') and an index that
 -- enables pointer translation ('MemPtrTable').
 --
@@ -549,9 +660,10 @@ newMergedGlobalMemoryWith hooks _proxy bak endian mmc mems = do
                          "Global memory for macaw-symbolic"
                          memImpl1 sizeBV CLD.noAlignment
 
-  cache <- liftIO $ MBC.mkByteCache sym
+  tbl <- mergedMemorySymbolicMemChunks bak hooks mems
 
-  tbl <- mergedMemorySymbolicMemChunks cache bak hooks mems
+  -- Create the shared byte cache once (all 256 possible byte values)
+  cache <- liftIO $ MBC.mkByteCache sym
 
   memImpl3 <- liftIO $ CL.doArrayStore bak memImpl2 ptr CLD.noAlignment symArray sizeBV
   let ptrTable = MemPtrTable
@@ -575,12 +687,11 @@ mergedMemorySymbolicMemChunks ::
   , Traversable t
   , MonadIO m
   ) =>
-  MBC.ByteCache sym ->
   bak ->
   MSMC.GlobalMemoryHooks w ->
   t (MC.Memory w) ->
   m (IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym))
-mergedMemorySymbolicMemChunks cache bak hooks mems =
+mergedMemorySymbolicMemChunks bak hooks mems =
   fmap (IM.fromList . concat) $ traverse memorySymbolicMemChunks mems
   where
     memorySymbolicMemChunks ::
@@ -596,7 +707,6 @@ mergedMemorySymbolicMemChunks cache bak hooks mems =
     segmentSymbolicMemChunks mem seg = concat <$>
       traverse
         (\(addr, chunk) -> do
-          allBytes <- MSMC.populateMemChunkBytes cache bak hooks mem seg addr chunk
           let mut | MMP.isReadonly (MC.segmentFlags seg) = CL.Immutable
                   | otherwise                            = CL.Mutable
           let absAddr =
@@ -605,14 +715,22 @@ mergedMemorySymbolicMemChunks cache bak hooks mems =
                   Nothing -> error $
                     "segmentSymbolicMemChunks: Failed to resolve function address: " ++
                     show addr
-          let size = length allBytes
+          (chunkBytes, size) <- memChunkToBytes mem seg addr chunk
           let interval = IM.IntervalCO absAddr (absAddr + fromIntegral size)
           let intervalChunks = chunksOfInterval (fromIntegral chunkSize) interval
-          let smcChunks = map (\bytes -> SymbolicMemChunk
-                                           { smcBytes = Seq.fromList bytes
-                                           , smcMutability = mut
-                                           })
-                              (Split.chunksOf chunkSize allBytes)
+          let smcChunks = case chunkBytes of
+                ConcreteBytes bs ->
+                  map (\bsChunk -> SymbolicMemChunk
+                        { smcBytes = ConcreteBytes bsChunk
+                        , smcMutability = mut
+                        })
+                    (bsChunksOf chunkSize bs)
+                SymbolicBytes s ->
+                  map (\seqChunk -> SymbolicMemChunk
+                        { smcBytes = SymbolicBytes (Seq.fromList seqChunk)
+                        , smcMutability = mut
+                        })
+                    (Split.chunksOf chunkSize (F.toList s))
           -- The length of these two lists should be the same, as
           -- @chunksOfInterval size@ should return a list of the same
           -- size as @Split.chunksOf size@.
@@ -620,11 +738,47 @@ mergedMemorySymbolicMemChunks cache bak hooks mems =
                $ zip intervalChunks smcChunks)
         (MC.relativeSegmentContents [seg])
 
+    -- Convert a MemChunk to MemChunkBytes without creating What4 expressions
+    -- for the common concrete cases (ByteRegion and BSSRegion).
+    -- For RelocationRegion, we must call the hook and store symbolic bytes.
+    memChunkToBytes ::
+      MC.Memory w ->
+      MC.MemSegment w ->
+      MC.MemAddr w ->
+      MC.MemChunk w ->
+      m (MemChunkBytes sym, Int)
+    memChunkToBytes mem seg addr = \case
+      MC.ByteRegion bs ->
+        pure (ConcreteBytes bs, BS.length bs)
+      MC.BSSRegion sz ->
+        pure (ConcreteBytes (BS.replicate (fromIntegral @(MC.MemWord w) @Int sz) 0),
+              fromIntegral @(MC.MemWord w) @Int sz)
+      MC.RelocationRegion reloc -> do
+        symBytes <- liftIO $
+          MSMC.populateRelocation hooks bak mem seg addr reloc
+        let len = length symBytes
+            mbConcrete | len <= 64 = tryPackConcrete symBytes
+                       | otherwise = Nothing
+        pure $ case mbConcrete of
+                 Just concBytes ->
+                   X.assert (BS.length concBytes == len)
+                   (ConcreteBytes concBytes, len)
+                 Nothing -> (SymbolicBytes (Seq.fromList symBytes), len)
+
+    -- If every symbolic byte is actually a concrete BV literal, pack them
+    -- into a 'BS.ByteString' so the chunk can use the fast concrete paths.
+    tryPackConcrete :: [WI.SymBV sym 8] -> Maybe BS.ByteString
+    tryPackConcrete symBytes = BS.pack <$> traverse asConcreteByte symBytes
+
+    asConcreteByte :: WI.SymBV sym 8 -> Maybe Word8
+    asConcreteByte bv = fromIntegral @Integer @Word8 . BV.asUnsigned <$> WI.asBV bv
+
 -- Return @Just val@ if we can be absolutely sure that this is a concrete
 -- read from a contiguous region of immutable, global memory, where the type of
 -- @val@ is determined by the @'MC.MemRepr' ty@ argument.
 -- Return @Nothing@ otherwise. See @Note [Lazy memory model]@.
 concreteImmutableGlobalRead ::
+  forall sym w.
   (CB.IsSymInterface sym, MC.MemWidth w) =>
   sym ->
   MemPtrTable sym w ->
@@ -640,25 +794,39 @@ concreteImmutableGlobalRead sym mpt memRep ptr
   , Just memPtrBlkNat <- WI.asNat memPtrBlk
   , ptrBlkNat == memPtrBlkNat
 
-    -- Next, check that we are attempting to read from a contiguous region
-    -- of memory.
-  , let addr = fromInteger $ BV.asUnsigned addrBV
-  , Just (addrBaseInterval, smc) <-
-      combineChunksIfContiguous $ IM.toAscList $
+    -- Fast path: if the read falls entirely within a single concrete chunk
+    -- and the representation is BVMemRepr, construct a bvLit directly from
+    -- the raw bytes without creating intermediate symbolic byte values.
+  , let addr = fromInteger @(MC.MemWord w) $ BV.asUnsigned addrBV
+  , MC.BVMemRepr byteWidth endianness <- memRep
+  , [(interval, smc)] <-
+      IM.toAscList $
       memPtrTable mpt `IM.intersecting`
-        IMI.ClosedInterval addr (addr + fromIntegral numBytes)
-
-    -- Next, check that the memory is immutable.
+        IMI.ClosedInterval addr (addr + fromIntegral @Int @(MC.MemWord w) numBytes)
   , smcMutability smc == CL.Immutable
+  , ConcreteBytes bs <- smcBytes smc
+  , let off = fromIntegral @(MC.MemWord w) @Int $ addr - IMI.lowerBound interval
+  , off >= 0
+  , off + numBytes <= BS.length bs
+  = do let slice = BS.take numBytes (BS.drop off bs)
+           bitWidth = WI.natMultiply (WI.knownNat @8) byteWidth
+       WI.LeqProof <- pure $ mulMono (WI.knownNat @8) byteWidth
+       bv <- X.assert (BS.length slice == numBytes) $
+              bsToSymBV sym bitWidth endianness slice
+       llvmPtr <- CL.llvmPointer_bv sym bv
+       pure $ Just llvmPtr
 
-    -- Finally, check that the region of memory is large enough to cover
-    -- the number of bytes we are attempting to read.
-  , let addrOffset = fromIntegral $ addr - IMI.lowerBound addrBaseInterval
-  , numBytes <= (length (smcBytes smc) - addrOffset)
-  = do let bytes = Seq.take numBytes $
-                   Seq.drop addrOffset $
-                   smcBytes smc
-       readVal <- readBytesAsRegValue sym memRep $ F.toList bytes
+    -- General path: extract bytes from potentially multiple contiguous chunks.
+  | Just ptrBlkNat <- WI.asNat ptrBlk
+  , Just addrBV    <- WI.asBV ptrOff
+  , Just memPtrBlkNat <- WI.asNat memPtrBlk
+  , ptrBlkNat == memPtrBlkNat
+  , let addr = fromInteger @(MC.MemWord w) $ BV.asUnsigned addrBV
+  , Just bytes <-
+      sliceContiguousChunks (byteCache mpt) addr numBytes $ IM.toAscList $
+      memPtrTable mpt `IM.intersecting`
+        IMI.ClosedInterval addr (addr + fromIntegral @Int @(MC.MemWord w) numBytes)
+  = do readVal <- readBytesAsRegValue sym memRep bytes
        pure $ Just readVal
 
   | otherwise
@@ -667,6 +835,7 @@ concreteImmutableGlobalRead sym mpt memRep ptr
     numBytes = fromIntegral $ MC.memReprBytes memRep
     (ptrBlk, ptrOff) = CL.llvmPointerView ptr
     memPtrBlk = CLP.llvmPointerBlock (memPtr mpt)
+
 
 -- | Prior to accessing global memory, initialize the region of memory in the
 -- SMT array that backs global memory. See @Note [Lazy memory model]@.
@@ -696,7 +865,7 @@ lazilyPopulateGlobalMemArr bak mpt memRep ptr state
                 not (smcMutability smc == CL.Mutable &&
                      memModelContents mpt == MSMC.SymbolicMutable)
            then do bytesAssmp <-
-                     MSMC.memArrEqualityAssumption sym (memPtrArray mpt)
+                     populateChunkAssumption (byteCache mpt) sym (memPtrArray mpt)
                        (IMI.lowerBound addr) (smcBytes smc)
                    -- See @Note [Top-level assumptions]@.
                    gc <- CB.saveAssumptionState bak
@@ -753,6 +922,29 @@ its assumptions (`saveAssumptionState`), add a "top-level" assumption
 For online backends, this will result in resetting the solver process and
 re-asserting all of the in-scope assumptions.
 -}
+
+-- | Build an assumption that constrains the SMT array backing global memory
+-- to have the given bytes at the given address.
+--
+-- For concrete bytes, we map through the shared 'MBC.ByteCache' to obtain
+-- symbolic byte literals without allocating fresh What4 expressions.
+populateChunkAssumption ::
+  forall sym t st fs w.
+  ( sym ~ WEB.ExprBuilder t st fs
+  , MC.MemWidth w
+  ) =>
+  MBC.ByteCache sym ->
+  sym ->
+  WI.SymArray sym (Ctx.SingleCtx (WI.BaseBVType w)) (WI.BaseBVType 8) ->
+  MC.MemWord w ->
+  MemChunkBytes sym ->
+  IO (CB.Assumption sym)
+populateChunkAssumption cache sym symArray absAddr = \case
+  ConcreteBytes bs ->
+    MSMC.memArrEqualityAssumption sym symArray absAddr
+      (map (MBC.indexByteCache cache) (BS.unpack bs))
+  SymbolicBytes s ->
+    MSMC.memArrEqualityAssumption sym symArray absAddr s
 
 -- | Return an 'IMI.Interval' representing the possible range of addresses that
 -- a 'WI.SymBV' can lie between. If this is a concrete bitvector, the interval
