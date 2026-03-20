@@ -6,6 +6,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeOperators #-}
 -- | This module provides a drop-in replacement for
 -- "Data.Macaw.Symbolic.Memory". Unlike the memory model configuration in that
@@ -74,8 +75,6 @@ import qualified Lang.Crucible.LLVM.MemModel.Pointer as CLP
 import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.Types as CT
 import qualified What4.Expr as WE
-import qualified What4.Expr.App as WEA
-import qualified What4.Expr.BoolMap as BoolMap
 import qualified What4.Expr.Builder as WEB
 import qualified What4.Interface as WI
 import qualified What4.Protocol.Online as WPO
@@ -197,17 +196,9 @@ data SymbolicMemChunk sym = SymbolicMemChunk
 
 -- | Get the number of bytes in a 'MemChunkBytes'.
 memChunkBytesLength :: MemChunkBytes sym -> Int
-memChunkBytesLength (ConcreteBytes bs) = BS.length bs
-memChunkBytesLength (SymbolicBytes s) = Seq.length s
-
--- | Extract a slice of bytes from 'MemChunkBytes', creating symbolic
--- expressions on demand for concrete bytes via the shared byte cache.
-sliceMemChunkBytes ::
-  MBC.ByteCache sym -> MemChunkBytes sym -> Int -> Int -> [WI.SymBV sym 8]
-sliceMemChunkBytes cache (ConcreteBytes bs) off len =
-  [ MBC.indexByteCache cache (BS.index bs (off + i)) | i <- [0 .. len - 1] ]
-sliceMemChunkBytes _cache (SymbolicBytes s) off len =
-  F.toList $ Seq.take len $ Seq.drop off s
+memChunkBytesLength = \case
+  ConcreteBytes bs -> BS.length bs
+  SymbolicBytes s  -> Seq.length s
 
 -- | Split a 'BS.ByteString' into chunks of at most @n@ bytes.
 bsChunksOf :: Int -> BS.ByteString -> [BS.ByteString]
@@ -333,9 +324,15 @@ sliceContiguousChunks cache addr numBytes ichunks = go Nothing numBytes ichunks
           avail    = chunkLen - skip
           take_    = min remaining avail
       guard (take_ > 0)
-      let theseBytes = sliceMemChunkBytes cache (smcBytes chunk) skip take_
+      let theseBytes = sliceBytes (smcBytes chunk) skip take_
       restBytes <- go (Just i) (remaining - take_) rest
       Just (theseBytes ++ restBytes)
+
+    sliceBytes :: MemChunkBytes sym -> Int -> Int -> [WI.SymBV sym 8]
+    sliceBytes (ConcreteBytes bs) off len =
+      [ MBC.indexByteCache cache (BS.index bs (off + i)) | i <- [0 .. len - 1] ]
+    sliceBytes (SymbolicBytes s) off len =
+      F.toList $ Seq.take len $ Seq.drop off s
 
 -- | The maximum size of a 'SymbolicMemChunk', which determines the granularity
 -- at which the regions of memory in a 'memPtrTable' are chunked up.
@@ -694,19 +691,20 @@ mergedMemorySymbolicMemChunks bak hooks mems =
       MC.MemAddr w ->
       MC.MemChunk w ->
       m (MemChunkBytes sym, Int)
-    memChunkToBytes _mem _seg _addr (MC.ByteRegion bs) =
-      pure (ConcreteBytes bs, BS.length bs)
-    memChunkToBytes _mem _seg _addr (MC.BSSRegion sz) =
-      pure (ConcreteBytes (BS.replicate (fromIntegral sz) 0), fromIntegral sz)
-    memChunkToBytes mem seg addr (MC.RelocationRegion reloc) = do
-      symBytes <- liftIO $
-        MSMC.populateRelocation hooks bak mem seg addr reloc
-      let len = length symBytes
-          mbConcrete | len <= 64 = tryPackConcrete symBytes
-                     | otherwise = Nothing
-      pure $ case mbConcrete of
-               Just concBytes -> (ConcreteBytes concBytes, len)
-               Nothing        -> (SymbolicBytes (Seq.fromList symBytes), len)
+    memChunkToBytes mem seg addr = \case
+      MC.ByteRegion bs ->
+        pure (ConcreteBytes bs, BS.length bs)
+      MC.BSSRegion sz ->
+        pure (ConcreteBytes (BS.replicate (fromIntegral sz) 0), fromIntegral sz)
+      MC.RelocationRegion reloc -> do
+        symBytes <- liftIO $
+          MSMC.populateRelocation hooks bak mem seg addr reloc
+        let len = length symBytes
+            mbConcrete | len <= 64 = tryPackConcrete symBytes
+                       | otherwise = Nothing
+        pure $ case mbConcrete of
+                 Just concBytes -> (ConcreteBytes concBytes, len)
+                 Nothing        -> (SymbolicBytes (Seq.fromList symBytes), len)
 
     -- If every symbolic byte is actually a concrete BV literal, pack them
     -- into a 'BS.ByteString' so the chunk can use the fast concrete paths.
@@ -868,10 +866,8 @@ re-asserting all of the in-scope assumptions.
 -- | Build an assumption that constrains the SMT array backing global memory
 -- to have the given bytes at the given address.
 --
--- For concrete bytes, this builds per-byte equality assertions directly from
--- the 'BS.ByteString', avoiding the cost of materializing a @Seq (SymBV sym 8)@.
--- For symbolic bytes (e.g., from relocations), this falls back to
--- 'MSMC.memArrEqualityAssumption'.
+-- For concrete bytes, we map through the shared 'MBC.ByteCache' to obtain
+-- symbolic byte literals without allocating fresh What4 expressions.
 populateChunkAssumption ::
   forall sym t st fs w.
   ( sym ~ WEB.ExprBuilder t st fs
@@ -883,39 +879,12 @@ populateChunkAssumption ::
   MC.MemWord w ->
   MemChunkBytes sym ->
   IO (CB.Assumption sym)
-populateChunkAssumption cache sym symArray absAddr (ConcreteBytes bs) =
-  populateConcreteChunkViaEq cache sym symArray absAddr bs
-populateChunkAssumption _cache sym symArray absAddr (SymbolicBytes s) =
-  MSMC.memArrEqualityAssumption sym symArray absAddr s
-
--- | Populate a concrete chunk using per-byte equality assertions:
--- @(and (= (select arr addr_0) byte_0) ...)@
---
--- Uses a shared byte cache to avoid allocating fresh symbolic byte literals.
-populateConcreteChunkViaEq ::
-  forall sym t st fs w.
-  ( sym ~ WEB.ExprBuilder t st fs
-  , MC.MemWidth w
-  ) =>
-  MBC.ByteCache sym ->
-  sym ->
-  WI.SymArray sym (Ctx.SingleCtx (WI.BaseBVType w)) (WI.BaseBVType 8) ->
-  MC.MemWord w ->
-  BS.ByteString ->
-  IO (CB.Assumption sym)
-populateConcreteChunkViaEq cache sym symArray absAddr bs = do
-  let w = MC.memWidthNatRepr @w
-  initVals <- MSMC.ipleatM [] (BS.unpack bs) $ \idx bmvals byte -> do
-    let absByteAddr = fromIntegral idx + absAddr
-    index_bv <- WI.bvLit sym w (BV.mkBV w (toInteger absByteAddr))
-    eq_pred <- WI.bvEq sym (MBC.indexByteCache cache byte)
-                 =<< WI.arrayLookup sym symArray (Ctx.singleton index_bv)
-    return (eq_pred : bmvals)
-  prog_loc <- WI.getCurrentProgramLoc sym
-  let desc = "Bytes@[addr=" ++ show absAddr ++ ",nbytes=" ++ show (BS.length bs) ++ "]"
-  let conj = WEA.ConjPred (BoolMap.ConjMap (BoolMap.fromVars [(e, BoolMap.Positive) | e <- initVals]))
-  byteEqualityAssertion <- WEB.sbMakeExpr sym conj
-  pure $ CB.GenericAssumption prog_loc desc byteEqualityAssertion
+populateChunkAssumption cache sym symArray absAddr = \case
+  ConcreteBytes bs ->
+    MSMC.memArrEqualityAssumption sym symArray absAddr
+      (map (MBC.indexByteCache cache) (BS.unpack bs))
+  SymbolicBytes s ->
+    MSMC.memArrEqualityAssumption sym symArray absAddr s
 
 -- | Return an 'IMI.Interval' representing the possible range of addresses that
 -- a 'WI.SymBV' can lie between. If this is a concrete bitvector, the interval
