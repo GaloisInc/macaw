@@ -63,7 +63,6 @@ jobs:
     - name: Copy cabal project files
       run: |
         cp cabal.project.dist cabal.project
-        cp cabal.project.werror cabal.project.local
         cp cabal.project.freeze.ghc-${{ matrix.ghc-ver }} cabal.project.freeze
 
     # WARNING: Make sure this step remains after the step that creates
@@ -86,6 +85,7 @@ jobs:
     - name: Cabal dependencies
       run: |
         cabal configure --enable-tests all
+        cat cabal.project.werror >> cabal.project.local
         cabal build -j --only-dependencies pkg:macaw-base
         cabal build -j pkg:crucible-llvm pkg:dismantle-ppc pkg:dismantle-arm-xml
     - name: Install Solvers
@@ -95,6 +95,12 @@ jobs:
         Z3_VERSION: "4.8.8"
         YICES_VERSION: "2.6.2"
         CVC4_VERSION: "4.1.8"
+
+    - name: Build macaw-symbolic
+      run: cabal build pkg:macaw-symbolic
+
+    - name: Test macaw-symbolic
+      run: cabal test macaw-symbolic-tests
 
     - name: Build macaw-symbolic-syntax
       run: cabal build pkg:macaw-symbolic-syntax
