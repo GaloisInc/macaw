@@ -47,9 +47,11 @@ import           GHC.TypeLits
 import qualified Control.Exception as X
 import qualified Control.Lens as L
 import           Control.Lens ((^.))
+import           Control.Monad ( guard )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
+import           Data.Word ( Word8 )
 import qualified Data.Foldable as F
 import           Data.Functor.Identity ( Identity(Identity) )
 import qualified Data.IntervalMap.Interval as IMI
@@ -322,7 +324,7 @@ sliceContiguousChunks cache addr numBytes ichunks = go Nothing numBytes ichunks
         Nothing -> pure ()
         Just prev -> combineIfContiguous prev i >> pure ()
       -- Check immutability
-      if smcMutability chunk /= CL.Immutable then Nothing else Just ()
+      guard (smcMutability chunk == CL.Immutable)
       let chunkLo  = IMI.lowerBound i
           chunkLen = memChunkBytesLength (smcBytes chunk)
           -- How far into this chunk the read starts
@@ -330,7 +332,7 @@ sliceContiguousChunks cache addr numBytes ichunks = go Nothing numBytes ichunks
           -- How many bytes we can take from this chunk
           avail    = chunkLen - skip
           take_    = min remaining avail
-      if take_ <= 0 then Nothing else Just ()
+      guard (take_ > 0)
       let theseBytes = sliceMemChunkBytes cache (smcBytes chunk) skip take_
       restBytes <- go (Just i) (remaining - take_) rest
       Just (theseBytes ++ restBytes)
@@ -699,7 +701,20 @@ mergedMemorySymbolicMemChunks bak hooks mems =
     memChunkToBytes mem seg addr (MC.RelocationRegion reloc) = do
       symBytes <- liftIO $
         MSMC.populateRelocation hooks bak mem seg addr reloc
-      pure (SymbolicBytes (Seq.fromList symBytes), length symBytes)
+      let len = length symBytes
+          mbConcrete | len <= 64 = tryPackConcrete symBytes
+                     | otherwise = Nothing
+      pure $ case mbConcrete of
+               Just concBytes -> (ConcreteBytes concBytes, len)
+               Nothing        -> (SymbolicBytes (Seq.fromList symBytes), len)
+
+    -- If every symbolic byte is actually a concrete BV literal, pack them
+    -- into a 'BS.ByteString' so the chunk can use the fast concrete paths.
+    tryPackConcrete :: [WI.SymBV sym 8] -> Maybe BS.ByteString
+    tryPackConcrete symBytes = BS.pack <$> traverse asConcreteByte symBytes
+
+    asConcreteByte :: WI.SymBV sym 8 -> Maybe Word8
+    asConcreteByte bv = fromIntegral . BV.asUnsigned <$> WI.asBV bv
 
 -- Return @Just val@ if we can be absolutely sure that this is a concrete
 -- read from a contiguous region of immutable, global memory, where the type of
