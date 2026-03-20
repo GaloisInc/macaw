@@ -1,7 +1,8 @@
 -- This adds -Wall and -Werror for runs where we want to catch warnings.
 
+-- For -fno-ignore-asserts, see Note [Asserts]
 package macaw-base
-  ghc-options: -Wall -Werror
+  ghc-options: -Wall -Werror -fno-ignore-asserts
 -- Macaw-semmc has warnings
 package macaw-semmc
   ghc-options: -Wall
@@ -13,6 +14,7 @@ package macaw-symbolic-syntax
 -- Macaw-ppc has warnings.
 package macaw-ppc
   ghc-options: -Wall -Werror
+-- For -fno-ignore-asserts, see Note [Asserts]
 package macaw-aarch32
   ghc-options: -Wall -Werror
 -- Macaw-aarch32-symbolic has warnings.
@@ -20,8 +22,9 @@ package macaw-aarch32-symbolic
   ghc-options: -Wall
 package macaw-ppc-symbolic
   ghc-options: -Wall -Werror
+-- For -fno-ignore-asserts, see Note [Asserts]
 package macaw-x86
-  ghc-options: -Wall -Werror
+  ghc-options: -Wall -Werror -fno-ignore-asserts
 package macaw-x86-symbolic
   ghc-options: -Wall -Werror
 package macaw-refinement
