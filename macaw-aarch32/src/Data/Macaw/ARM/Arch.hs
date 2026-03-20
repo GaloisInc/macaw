@@ -40,7 +40,6 @@ import qualified Data.Word.Indexed as WI
 import qualified Dismantle.ARM.A32 as ARMDis
 import qualified Dismantle.ARM.T32 as ThumbDis
 import           GHC.TypeLits
-import qualified Language.ASL.Globals as ASL
 import qualified Prettyprinter as PP
 import qualified SemMC.Architecture.AArch32 as ARM
 
