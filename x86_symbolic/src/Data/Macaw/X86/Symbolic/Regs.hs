@@ -18,6 +18,7 @@ This module is meant to be imported qualified, as it exports many terse names.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Data.Macaw.X86.Symbolic.Regs
   ( RegAssign

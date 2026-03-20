@@ -30,14 +30,12 @@ module Data.Macaw.Symbolic.Memory.Common
 import           GHC.TypeLits
 
 import qualified Control.Lens as L
-import           Control.Exception ( evaluate )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.Foldable.WithIndex as FWI
 import qualified Data.IntervalMap.Strict as IM
-import qualified Data.Vector as Vec
 
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Macaw.CFG as MC
