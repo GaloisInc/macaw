@@ -10,6 +10,8 @@
 -- | Internal module for "Data.Macaw.Symbolic.Memory.Lazy".
 --
 -- This module exposes all internals for testing purposes.
+-- Mainly, we want to test 'concreteImmutableGlobalRead'.
+--
 -- The public API is re-exported by "Data.Macaw.Symbolic.Memory.Lazy".
 module Data.Macaw.Symbolic.Memory.Lazy.Internal (
   -- * Public API
