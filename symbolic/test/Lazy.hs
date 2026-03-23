@@ -22,7 +22,6 @@ import           Numeric.Natural (Natural)
 
 import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.Types (BVType)
-import qualified Data.Macaw.Symbolic.Memory.ByteCache as MBC
 import           Data.Macaw.Symbolic.Memory.Lazy.Internal
 import qualified Lang.Crucible.LLVM.MemModel as CL
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as CLP
@@ -102,28 +101,28 @@ bv32 :: MC.MemRepr (BVType 256)
 bv32 = MC.BVMemRepr (WI.knownNat @32) MC.LittleEndian
 
 -- | Existential wrapper for a BVMemRepr with some width.
-data SomeMemRepr where
-  SomeMemRepr :: (1 WI.<= w) => MC.MemRepr (BVType w) -> SomeMemRepr
+data SomeBVMemRepr where
+  SomeBVMemRepr :: (1 WI.<= w) => MC.MemRepr (BVType w) -> SomeBVMemRepr
 
 -- | Get the appropriate MemRepr for a given size in bytes.
-memReprForSize :: Int -> Maybe SomeMemRepr
-memReprForSize = \case
-  1  -> Just (SomeMemRepr bv1)
-  2  -> Just (SomeMemRepr bv2)
-  4  -> Just (SomeMemRepr bv4)
-  8  -> Just (SomeMemRepr bv8)
-  16 -> Just (SomeMemRepr bv16)
-  32 -> Just (SomeMemRepr bv32)
+bvMemReprForSize :: Int -> Maybe SomeBVMemRepr
+bvMemReprForSize = \case
+  1  -> Just (SomeBVMemRepr bv1)
+  2  -> Just (SomeBVMemRepr bv2)
+  4  -> Just (SomeBVMemRepr bv4)
+  8  -> Just (SomeBVMemRepr bv8)
+  16 -> Just (SomeBVMemRepr bv16)
+  32 -> Just (SomeBVMemRepr bv32)
   _  -> Nothing
 
 -- | Build a SymbolicMemChunk from concrete bytes using a ByteCache.
 mkChunk ::
-  MBC.ByteCache sym ->
+  ByteCache sym ->
   [Word8] ->
   CL.Mutability ->
   SymbolicMemChunk sym
 mkChunk cache bytes mut = SymbolicMemChunk
-  { smcBytes = Seq.fromList (map (MBC.indexByteCache cache) bytes)
+  { smcBytes = Seq.fromList (map (indexByteCache cache) bytes)
   , smcMutability = mut
   }
 
@@ -140,15 +139,15 @@ mkIntervalMap entries = IM.fromList
 -- | Helper to test an immutable read operation and verify the result.
 -- Creates an interval map from the provided chunks, performs the read, and checks the result.
 testImmutableRead ::
-  String ->                       -- ^ Test name
-  [(Word32, [Word8])] ->         -- ^ Memory chunks (base address, bytes)
-  Word32 ->                       -- ^ Read address
-  MC.MemRepr (BVType w) ->       -- ^ Read size/type
-  Maybe [Word8] ->                -- ^ Expected result (Nothing = should fail)
+  String ->                 -- ^ Test name
+  [(Word32, [Word8])] ->    -- ^ Memory chunks (base address, bytes)
+  Word32 ->                 -- ^ Read address
+  MC.MemRepr (BVType w) ->  -- ^ Read size/type
+  Maybe [Word8] ->          -- ^ Expected result (Nothing = should fail)
   TestTree
 testImmutableRead name chunks readAddr repr expected = testCase name $ do
   result <- withSym $ \sym -> do
-    cache <- MBC.mkByteCache sym
+    cache <- mkByteCache sym
     let memChunks = [(base, mkChunk cache bytes CL.Immutable) | (base, bytes) <- chunks]
     let imap = mkIntervalMap memChunks
     globalBlk <- WI.natLit sym globalBlock
@@ -246,7 +245,7 @@ readNearMaxBound = testImmutableRead
 wrongBlockReturnsNothing :: TestTree
 wrongBlockReturnsNothing = testCase "Wrong block returns Nothing" $ do
   result <- withSym $ \sym -> do
-    cache <- MBC.mkByteCache sym
+    cache <- mkByteCache sym
     let chunk = mkChunk cache [0xAA, 0xBB] CL.Immutable
     let imap = mkIntervalMap [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
@@ -258,7 +257,7 @@ wrongBlockReturnsNothing = testCase "Wrong block returns Nothing" $ do
 symbolicOffsetReturnsNothing :: TestTree
 symbolicOffsetReturnsNothing = testCase "Symbolic offset returns Nothing" $ do
   result <- withSym $ \sym -> do
-    cache <- MBC.mkByteCache sym
+    cache <- mkByteCache sym
     let chunk = mkChunk cache [0xAA, 0xBB] CL.Immutable
     let imap = mkIntervalMap [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
@@ -272,7 +271,7 @@ symbolicOffsetReturnsNothing = testCase "Symbolic offset returns Nothing" $ do
 mutableRegionReturnsNothing :: TestTree
 mutableRegionReturnsNothing = testCase "Mutable region returns Nothing" $ do
   result <- withSym $ \sym -> do
-    cache <- MBC.mkByteCache sym
+    cache <- mkByteCache sym
     let chunk = mkChunk cache [0xAA, 0xBB] CL.Mutable
     let imap = mkIntervalMap [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
@@ -292,7 +291,7 @@ notEnoughBytesReturnsNothing = testImmutableRead
 nonContiguousRegionsReturnsNothing :: TestTree
 nonContiguousRegionsReturnsNothing = testCase "Non-contiguous regions returns Nothing" $ do
   result <- withSym $ \sym -> do
-    cache <- MBC.mkByteCache sym
+    cache <- mkByteCache sym
     let chunk1 = mkChunk cache [0xAA] CL.Immutable
     let chunk2 = mkChunk cache [0xBB] CL.Immutable
     let imap = IM.fromList
@@ -407,7 +406,7 @@ sliceBytes bs offset len = BS.unpack $ BS.take len $ BS.drop (fromIntegral offse
 -- | Build an IntervalMap from a MemorySpace.
 -- Extracts bytes from the ByteString and creates symbolic chunks.
 memorySpaceToIntervalMap ::
-  MBC.ByteCache sym ->
+  ByteCache sym ->
   MemorySpace ->
   IM.IntervalMap (MC.MemWord W) (SymbolicMemChunk sym)
 memorySpaceToIntervalMap cache memSpace =
@@ -491,14 +490,14 @@ prop_concreteImmutableGlobalRead = testPropertyNamed
     -- We do all assertion logic inside IO since the result type is sym-dependent.
     -- Return either Nothing (function declined) or Just (list of bytes).
     result <- evalIO $ withSym $ \sym -> do
-      cache <- MBC.mkByteCache sym
+      cache <- mkByteCache sym
       let imap = memorySpaceToIntervalMap cache memSpace
       globalBlk <- WI.natLit sym globalBlock
       ptr <- mkPtr sym (rrBlockNum req) (rrOffset req)
 
-      SomeMemRepr repr <-
-        case memReprForSize (rrSize req) of
-          Nothing -> fail $ "memReprForSize failed for size " ++ show (rrSize req) ++ " (generator bug)"
+      SomeBVMemRepr repr <-
+        case bvMemReprForSize (rrSize req) of
+          Nothing -> fail $ "bvMemReprForSize failed for size " ++ show (rrSize req) ++ " (generator bug)"
           Just r -> pure r
 
       r <- concreteImmutableGlobalRead sym imap globalBlk repr ptr
@@ -518,28 +517,34 @@ prop_concreteImmutableGlobalRead = testPropertyNamed
 
 tests :: TestTree
 tests = testGroup "Lazy memory model"
-  [ -- Basic reads
-    read1
-  , read2
-  , read4
-  , read8
-  , readFromOffset
-  , readSpanningContiguousChunks
-  -- Edge cases
-  , readFromAddressZero
-  , readAtChunkBoundary
-  , readLastByteOfChunk
-  , readNearMaxBound
-  -- Failure cases
-  , wrongBlockReturnsNothing
-  , symbolicOffsetReturnsNothing
-  , mutableRegionReturnsNothing
-  , notEnoughBytesReturnsNothing
-  , nonContiguousRegionsReturnsNothing
-  , overlappingRegionsReturnsNothing
-  , emptyMemoryReturnsNothing
-  , addressOverflowReturnsNothing
-  , addressOverflowAtZeroReturnsNothing
-  -- Property test
-  , prop_concreteImmutableGlobalRead
+  [ testGroup "Unit tests"
+      [ testGroup "Basic reads"
+          [ read1
+          , read2
+          , read4
+          , read8
+          , readFromOffset
+          , readSpanningContiguousChunks
+          ]
+      , testGroup "Edge cases"
+          [ readFromAddressZero
+          , readAtChunkBoundary
+          , readLastByteOfChunk
+          , readNearMaxBound
+          ]
+      , testGroup "Failure cases"
+          [ wrongBlockReturnsNothing
+          , symbolicOffsetReturnsNothing
+          , mutableRegionReturnsNothing
+          , notEnoughBytesReturnsNothing
+          , nonContiguousRegionsReturnsNothing
+          , overlappingRegionsReturnsNothing
+          , emptyMemoryReturnsNothing
+          , addressOverflowReturnsNothing
+          , addressOverflowAtZeroReturnsNothing
+          ]
+      ]
+  , testGroup "Property-based tests"
+      [ prop_concreteImmutableGlobalRead
+      ]
   ]
