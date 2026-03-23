@@ -71,11 +71,22 @@ test-suite macaw-symbolic-tests
   default-language: Haskell2010
   hs-source-dirs: test
   main-is: Main.hs
+  other-modules: Lazy
   ghc-options: -Wall -Wcompat -threaded
   build-depends:
     base,
-    tasty,
-    tasty-hunit,
-    macaw-symbolic
+    bv-sized,
+    bytestring,
+    containers,
+    IntervalMap >= 0.6 && < 0.7,
+    crucible-llvm,
+    macaw-base,
+    macaw-symbolic,
+    parameterized-utils,
+    what4,
+    hedgehog >= 1.0.2,
+    tasty >= 1.2.3 && < 1.6,
+    tasty-hedgehog >= 1.2 && < 1.5,
+    tasty-hunit
 
 
