@@ -139,7 +139,7 @@ memModelConfig bak mpt =
     , MS.lookupSyscallHandle = MS.unsupportedSyscalls origin
     , MS.mkGlobalPointerValidityAssertion = mkGlobalPointerValidityPred mpt
     , MS.resolvePointer = MSC.resolveLLVMPtr bak
-    , MS.concreteImmutableGlobalRead = concreteImmutableGlobalRead sym mpt
+    , MS.concreteImmutableGlobalRead = concreteImmutableGlobalRead sym (memPtrTable mpt) (CLP.llvmPointerBlock (memPtr mpt))
     , MS.lazilyPopulateGlobalMem = lazilyPopulateGlobalMemArr bak mpt
     }
   where
@@ -631,17 +631,19 @@ mergedMemorySymbolicMemChunks cache bak hooks mems =
 concreteImmutableGlobalRead ::
   (CB.IsSymInterface sym, MC.MemWidth w) =>
   sym ->
-  MemPtrTable sym w ->
-  -- ^ The global memory
+  IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym) ->
+  -- ^ The interval map of global memory chunks
+  WI.SymNat sym ->
+  -- ^ The global memory block number
   MS.ConcreteImmutableGlobalRead sym w
-concreteImmutableGlobalRead sym mpt memRep ptr
+concreteImmutableGlobalRead sym imap memPtrBlk memRep ptr
   | -- First, check that the pointer being read from is concrete.
     Just ptrBlkNat <- WI.asNat ptrBlk
   , Just addrBV    <- WI.asBV ptrOff
 
     -- Next, check that the pointer block is the same as the block of the
     -- pointer backing global memory.
-  , Just memPtrBlkNat <- WI.asNat (CLP.llvmPointerBlock (memPtr mpt))
+  , Just memPtrBlkNat <- WI.asNat memPtrBlk
   , ptrBlkNat == memPtrBlkNat
 
     -- Next, check that we are attempting to read from a contiguous region
@@ -649,7 +651,7 @@ concreteImmutableGlobalRead sym mpt memRep ptr
   , let addr = fromInteger $ BV.asUnsigned addrBV
   , Just (addrBaseInterval, smc) <-
       combineChunksIfContiguous $ IM.toAscList $
-      memPtrTable mpt `IM.intersecting`
+      imap `IM.intersecting`
         IMI.ClosedInterval addr (addr + fromIntegral numBytes)
 
     -- Next, check that the memory is immutable.
