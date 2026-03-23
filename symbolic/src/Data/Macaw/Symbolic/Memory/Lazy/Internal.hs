@@ -648,14 +648,20 @@ concreteImmutableGlobalRead sym imap memPtrBlk memRep ptr
   , Just memPtrBlkNat <- WI.asNat memPtrBlk
   , ptrBlkNat == memPtrBlkNat
 
-    -- Next, check that we are attempting to read from a contiguous region
-    -- of memory.
+    -- Next, look up the chunks that intersect the read range.
   , let addr = fromInteger $ BV.asUnsigned addrBV
   , let endAddr = addr + fromIntegral numBytes
+  , let matching = imap `IM.intersecting` IMI.IntervalCO addr endAddr
+
+    -- Next, check that the read starts within the first matching chunk.
+    -- The intersecting query can return chunks that start after addr,
+    -- and without this check addr - lowerBound underflows.
+  , Just (firstInterval, _) <- IM.lookupMin matching
+  , addr >= IMI.lowerBound firstInterval
+
+    -- Next, check that all matching chunks are contiguous.
   , Just (addrBaseInterval, smc) <-
-      combineChunksIfContiguous $
-        IM.toAscList $
-          imap `IM.intersecting` IMI.IntervalCO addr endAddr
+      combineChunksIfContiguous (IM.toAscList matching)
 
     -- Next, check that the memory is immutable.
   , smcMutability smc == CL.Immutable
