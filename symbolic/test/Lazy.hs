@@ -343,6 +343,14 @@ overlappingRegionsReturnsNothing = testImmutableRead MC.Addr32
   bv4
   Nothing
 
+readBeforeChunkLowerBoundReturnsNothing :: TestTree
+readBeforeChunkLowerBoundReturnsNothing = testImmutableRead MC.Addr64
+  "Read before chunk lower bound returns Nothing (64-bit)"
+  [(2, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22])]
+  0  -- read starts at 0, but chunk starts at 2
+  bv4
+  Nothing
+
 readAdjacentMutableChunkReturnsJust :: TestTree
 readAdjacentMutableChunkReturnsJust = testCase "Read with adjacent mutable chunk returns Just" $ do
   result <- withSym $ \sym -> do
@@ -590,6 +598,7 @@ tests = testGroup "Lazy memory model"
           , notEnoughBytesReturnsNothing
           , nonContiguousRegionsReturnsNothing
           , overlappingRegionsReturnsNothing
+          , readBeforeChunkLowerBoundReturnsNothing
           , readAdjacentMutableChunkReturnsJust
           , emptyMemoryReturnsNothing
           , addressOverflowReturnsNothing
