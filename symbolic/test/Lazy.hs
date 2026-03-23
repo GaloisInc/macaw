@@ -17,7 +17,7 @@ import qualified Data.IntervalMap.Strict as IM
 import qualified Data.IntervalMap.Interval as IMI
 import           Data.Maybe (isNothing)
 import qualified Data.Sequence as Seq
-import           Data.Word (Word8, Word32)
+import           Data.Word (Word8, Word32, Word64)
 import           Numeric.Natural (Natural)
 
 import qualified Data.Macaw.CFG as MC
@@ -42,8 +42,21 @@ import           Test.Tasty.HUnit ((@?=), assertBool, testCase)
 -- Helpers
 ------------------------------------------------------------------------
 
--- | Width used in tests (must have a MemWidth instance: 32 or 64)
-type W = 32
+-- | Safe widening from 'Word32' to 'Word64'.
+word32ToWord64 :: Word32 -> Word64
+word32ToWord64 = fromIntegral @Word32 @Word64
+
+-- | Checked narrowing into a 'MC.MemWord'. Calls 'error' if the value
+-- doesn't fit (i.e., when @w ~ 32@ and the value exceeds 'maxBound').
+checkedToMemWord ::
+  forall w. MC.MemWidth w => Word64 -> MC.MemWord w
+checkedToMemWord x
+  | result' == x = result
+  | otherwise    = error $
+      "checkedToMemWord: " ++ show x ++ " out of range for MemWord"
+  where
+    result  = fromIntegral @Word64 @(MC.MemWord w) x
+    result' = fromIntegral @(MC.MemWord w) @Word64 result
 
 -- | Global memory block number used in tests.
 globalBlock :: Natural
@@ -60,21 +73,26 @@ withSym f = do
 mkPtr ::
   WI.IsExprBuilder sym =>
   sym ->
+  MC.AddrWidthRepr w ->
   Natural ->
-  Word32 ->
-  IO (CL.LLVMPtr sym W)
-mkPtr sym blk off = do
+  Word64 ->
+  IO (CL.LLVMPtr sym w)
+mkPtr sym repr blk off = do
   blkSym <- WI.natLit sym blk
-  offSym <- WI.bvLit sym (WI.knownNat @W) (BV.word32 off)
+  offSym <- case repr of
+    MC.Addr32 -> WI.bvLit sym (WI.knownNat @32)
+                   (BV.mkBV (WI.knownNat @32) (fromIntegral @Word64 @Integer off))
+    MC.Addr64 -> WI.bvLit sym (WI.knownNat @64) (BV.word64 off)
   pure (CLP.LLVMPointer blkSym offSym)
 
 -- | Build an LLVMPointer in the global block with the given offset.
 mkGlobalPtr ::
   WI.IsExprBuilder sym =>
   sym ->
-  Word32 ->
-  IO (CL.LLVMPtr sym W)
-mkGlobalPtr sym off = mkPtr sym globalBlock off
+  MC.AddrWidthRepr w ->
+  Word64 ->
+  IO (CL.LLVMPtr sym w)
+mkGlobalPtr sym repr off = mkPtr sym repr globalBlock off
 
 -- | 1-byte BVMemRepr (little-endian)
 bv1 :: MC.MemRepr (BVType 8)
@@ -129,41 +147,50 @@ mkChunk cache bytes mut = SymbolicMemChunk
 -- | Build an IntervalMap from a list of (base, chunk) pairs.
 -- Uses IntervalCO (closed-open) intervals.
 mkIntervalMap ::
-  [(Word32, SymbolicMemChunk sym)] ->
-  IM.IntervalMap (MC.MemWord W) (SymbolicMemChunk sym)
+  forall w sym.
+  MC.MemWidth w =>
+  [(Word64, SymbolicMemChunk sym)] ->
+  IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym)
 mkIntervalMap entries = IM.fromList
-  [ (IMI.IntervalCO (fromIntegral lo) (fromIntegral lo + fromIntegral (Seq.length (smcBytes c))), c)
+  [ ( IMI.IntervalCO
+        (checkedToMemWord @w lo)
+        (checkedToMemWord @w lo
+          + checkedToMemWord @w (fromIntegral @Int @Word64 (Seq.length (smcBytes c))))
+    , c )
   | (lo, c) <- entries
   ]
 
 -- | Helper to test an immutable read operation and verify the result.
 -- Creates an interval map from the provided chunks, performs the read, and checks the result.
 testImmutableRead ::
+  MC.MemWidth w =>
+  MC.AddrWidthRepr w ->
   String ->                 -- ^ Test name
-  [(Word32, [Word8])] ->    -- ^ Memory chunks (base address, bytes)
-  Word32 ->                 -- ^ Read address
-  MC.MemRepr (BVType w) ->  -- ^ Read size/type
+  [(Word64, [Word8])] ->    -- ^ Memory chunks (base address, bytes)
+  Word64 ->                 -- ^ Read address
+  MC.MemRepr (BVType w') -> -- ^ Read size/type
   Maybe [Word8] ->          -- ^ Expected result (Nothing = should fail)
   TestTree
-testImmutableRead name chunks readAddr repr expected = testCase name $ do
+testImmutableRead repr name chunks readAddr memRepr expected = testCase name $ do
   result <- withSym $ \sym -> do
     cache <- mkByteCache sym
     let memChunks = [(base, mkChunk cache bytes CL.Immutable) | (base, bytes) <- chunks]
     let imap = mkIntervalMap memChunks
     globalBlk <- WI.natLit sym globalBlock
-    ptr <- mkGlobalPtr sym readAddr
-    r <- concreteImmutableGlobalRead sym imap globalBlk repr ptr
-    pure $ case r of
+    ptr <- mkGlobalPtr sym repr readAddr
+    res <- concreteImmutableGlobalRead sym imap globalBlk memRepr ptr
+    pure $ case res of
       Nothing -> Nothing
-      Just val -> extractLEBytes val (fromIntegral $ MC.memReprBytes repr)
+      Just val -> extractLEBytes val (fromIntegral $ MC.memReprBytes memRepr)
   result @?= expected
+
 
 ------------------------------------------------------------------------
 -- Unit tests
 ------------------------------------------------------------------------
 
 read1 :: TestTree
-read1 = testImmutableRead
+read1 = testImmutableRead MC.Addr32
   "One-byte read"
   [(100, [0xAA, 0xBB])]
   100
@@ -171,7 +198,7 @@ read1 = testImmutableRead
   (Just [0xAA])
 
 read2 :: TestTree
-read2 = testImmutableRead
+read2 = testImmutableRead MC.Addr32
   "Two-byte read"
   [(100, [0xAA, 0xBB, 0xCC])]
   100
@@ -179,7 +206,7 @@ read2 = testImmutableRead
   (Just [0xAA, 0xBB])
 
 read4 :: TestTree
-read4 = testImmutableRead
+read4 = testImmutableRead MC.Addr32
   "Four-byte read"
   [(200, [0x11, 0x22, 0x33, 0x44, 0x55])]
   200
@@ -187,7 +214,7 @@ read4 = testImmutableRead
   (Just [0x11, 0x22, 0x33, 0x44])
 
 readFromOffset :: TestTree
-readFromOffset = testImmutableRead
+readFromOffset = testImmutableRead MC.Addr32
   "Read from offset within chunk"
   [(300, [0x10, 0x20, 0x30, 0x40, 0x50])]
   302  -- offset 2 into the chunk
@@ -195,7 +222,7 @@ readFromOffset = testImmutableRead
   (Just [0x30, 0x40])
 
 readSpanningContiguousChunks :: TestTree
-readSpanningContiguousChunks = testImmutableRead
+readSpanningContiguousChunks = testImmutableRead MC.Addr32
   "Read spanning contiguous chunks"
   [(100, [0xAA, 0xBB]), (102, [0xCC, 0xDD])]  -- Two contiguous chunks
   101  -- start in first chunk, span into second
@@ -203,7 +230,7 @@ readSpanningContiguousChunks = testImmutableRead
   (Just [0xBB, 0xCC])
 
 read8 :: TestTree
-read8 = testImmutableRead
+read8 = testImmutableRead MC.Addr32
   "Eight-byte read"
   [(1000, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09])]
   1000
@@ -211,7 +238,7 @@ read8 = testImmutableRead
   (Just [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
 
 readFromAddressZero :: TestTree
-readFromAddressZero = testImmutableRead
+readFromAddressZero = testImmutableRead MC.Addr32
   "Read from address zero"
   [(0, [0xFF, 0xFE, 0xFD, 0xFC])]
   0
@@ -219,7 +246,7 @@ readFromAddressZero = testImmutableRead
   (Just [0xFF, 0xFE, 0xFD, 0xFC])
 
 readAtChunkBoundary :: TestTree
-readAtChunkBoundary = testImmutableRead
+readAtChunkBoundary = testImmutableRead MC.Addr32
   "Read ending exactly at chunk boundary"
   [(100, [0xAA, 0xBB, 0xCC, 0xDD])]
   100
@@ -227,7 +254,7 @@ readAtChunkBoundary = testImmutableRead
   (Just [0xAA, 0xBB, 0xCC, 0xDD])
 
 readLastByteOfChunk :: TestTree
-readLastByteOfChunk = testImmutableRead
+readLastByteOfChunk = testImmutableRead MC.Addr32
   "Read last byte of chunk"
   [(100, [0xAA, 0xBB, 0xCC])]
   102
@@ -235,21 +262,25 @@ readLastByteOfChunk = testImmutableRead
   (Just [0xCC])
 
 readNearMaxBound :: TestTree
-readNearMaxBound = testImmutableRead
+readNearMaxBound = testImmutableRead MC.Addr32
   "Read from near maxBound"
-  [(maxBound - 10, [0x01, 0x02, 0x03, 0x04, 0x05])]
-  (maxBound - 10)
+  [(w32Max - 10, [0x01, 0x02, 0x03, 0x04, 0x05])]
+  (w32Max - 10)
   bv4
   (Just [0x01, 0x02, 0x03, 0x04])
+
+-- | maxBound for Word32, as a Word64
+w32Max :: Word64
+w32Max = fromIntegral (maxBound :: Word32)
 
 wrongBlockReturnsNothing :: TestTree
 wrongBlockReturnsNothing = testCase "Wrong block returns Nothing" $ do
   result <- withSym $ \sym -> do
     cache <- mkByteCache sym
     let chunk = mkChunk cache [0xAA, 0xBB] CL.Immutable
-    let imap = mkIntervalMap [(100, chunk)]
+    let imap = mkIntervalMap @32 [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
-    ptr <- mkPtr sym 2 100  -- block 2, but global is block 1
+    ptr <- mkPtr sym MC.Addr32 2 100  -- block 2, but global is block 1
     r <- concreteImmutableGlobalRead sym imap globalBlk bv1 ptr
     pure (isNothing r)
   assertBool "wrong block should return Nothing" result
@@ -259,10 +290,10 @@ symbolicOffsetReturnsNothing = testCase "Symbolic offset returns Nothing" $ do
   result <- withSym $ \sym -> do
     cache <- mkByteCache sym
     let chunk = mkChunk cache [0xAA, 0xBB] CL.Immutable
-    let imap = mkIntervalMap [(100, chunk)]
+    let imap = mkIntervalMap @32 [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
     blkSym <- WI.natLit sym globalBlock
-    offSym <- WI.freshConstant sym (WI.safeSymbol "off") (WI.BaseBVRepr (WI.knownNat @W))
+    offSym <- WI.freshConstant sym (WI.safeSymbol "off") (WI.BaseBVRepr (WI.knownNat @32))
     let ptr = CLP.LLVMPointer blkSym offSym
     r <- concreteImmutableGlobalRead sym imap globalBlk bv1 ptr
     pure (isNothing r)
@@ -273,15 +304,15 @@ mutableRegionReturnsNothing = testCase "Mutable region returns Nothing" $ do
   result <- withSym $ \sym -> do
     cache <- mkByteCache sym
     let chunk = mkChunk cache [0xAA, 0xBB] CL.Mutable
-    let imap = mkIntervalMap [(100, chunk)]
+    let imap = mkIntervalMap @32 [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
-    ptr <- mkGlobalPtr sym 100
+    ptr <- mkGlobalPtr sym MC.Addr32 100
     r <- concreteImmutableGlobalRead sym imap globalBlk bv1 ptr
     pure (isNothing r)
   assertBool "mutable region should return Nothing" result
 
 notEnoughBytesReturnsNothing :: TestTree
-notEnoughBytesReturnsNothing = testImmutableRead
+notEnoughBytesReturnsNothing = testImmutableRead MC.Addr32
   "Not enough bytes returns Nothing"
   [(100, [0xAA, 0xBB])]
   100
@@ -295,17 +326,17 @@ nonContiguousRegionsReturnsNothing = testCase "Non-contiguous regions returns No
     let chunk1 = mkChunk cache [0xAA] CL.Immutable
     let chunk2 = mkChunk cache [0xBB] CL.Immutable
     let imap = IM.fromList
-          [ (IMI.IntervalCO 100 101, chunk1)
+          [ (IMI.IntervalCO (100 :: MC.MemWord 32) 101, chunk1)
           , (IMI.IntervalCO 102 103, chunk2)
           ]
     globalBlk <- WI.natLit sym globalBlock
-    ptr <- mkGlobalPtr sym 100
+    ptr <- mkGlobalPtr sym MC.Addr32 100
     r <- concreteImmutableGlobalRead sym imap globalBlk bv2 ptr
     pure (isNothing r)
   assertBool "non-contiguous regions should return Nothing" result
 
 overlappingRegionsReturnsNothing :: TestTree
-overlappingRegionsReturnsNothing = testImmutableRead
+overlappingRegionsReturnsNothing = testImmutableRead MC.Addr32
   "Overlapping regions returns Nothing"
   [(100, [0xAA, 0xBB, 0xCC]), (102, [0xDD, 0xEE])]  -- Intervals [100,103) and [102,104) overlap
   100
@@ -320,11 +351,11 @@ readAdjacentMutableChunkReturnsJust = testCase "Read with adjacent mutable chunk
     let mutChunk = mkChunk cache [0xCC, 0xDD] CL.Mutable
     -- [100, 102) immutable, [102, 104) mutable
     let imap = IM.fromList
-          [ (IMI.IntervalCO 100 102, immChunk)
+          [ (IMI.IntervalCO (100 :: MC.MemWord 32) 102, immChunk)
           , (IMI.IntervalCO 102 104, mutChunk)
           ]
     globalBlk <- WI.natLit sym globalBlock
-    ptr <- mkGlobalPtr sym 100
+    ptr <- mkGlobalPtr sym MC.Addr32 100
     r <- concreteImmutableGlobalRead sym imap globalBlk bv2 ptr
     pure $ case r of
       Nothing -> Nothing
@@ -332,7 +363,7 @@ readAdjacentMutableChunkReturnsJust = testCase "Read with adjacent mutable chunk
   result @?= Just [0xAA, 0xBB]
 
 emptyMemoryReturnsNothing :: TestTree
-emptyMemoryReturnsNothing = testImmutableRead
+emptyMemoryReturnsNothing = testImmutableRead MC.Addr32
   "Empty memory returns Nothing"
   []  -- no chunks
   100
@@ -340,18 +371,18 @@ emptyMemoryReturnsNothing = testImmutableRead
   Nothing
 
 addressOverflowReturnsNothing :: TestTree
-addressOverflowReturnsNothing = testImmutableRead
+addressOverflowReturnsNothing = testImmutableRead MC.Addr32
   "Address overflow returns Nothing"
-  [(maxBound - 2, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE])]  -- Enough bytes, but addr + 4 overflows
-  (maxBound - 2)
+  [(w32Max - 2, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE])]  -- Enough bytes, but addr + 4 overflows
+  (w32Max - 2)
   bv4
   Nothing
 
 addressOverflowAtZeroReturnsNothing :: TestTree
-addressOverflowAtZeroReturnsNothing = testImmutableRead
+addressOverflowAtZeroReturnsNothing = testImmutableRead MC.Addr32
   "Address overflow wrapping to zero returns Nothing"
-  [(0, [0x00, 0x01]), (maxBound - 2, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE])]
-  (maxBound - 1)  -- Reading 4 bytes would wrap to address 2
+  [(0, [0x00, 0x01]), (w32Max - 2, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE])]
+  (w32Max - 1)  -- Reading 4 bytes would wrap to address 2
   bv4
   Nothing
 
@@ -427,10 +458,11 @@ sliceBytes bs offset len = BS.unpack $ BS.take len $ BS.drop (fromIntegral offse
 memorySpaceToIntervalMap ::
   ByteCache sym ->
   MemorySpace ->
-  IM.IntervalMap (MC.MemWord W) (SymbolicMemChunk sym)
+  IM.IntervalMap (MC.MemWord 32) (SymbolicMemChunk sym)
 memorySpaceToIntervalMap cache memSpace =
   let chunks =
-        [ (mcsBaseAddr s, mkChunk cache chunkBytes (mcsMutability s))
+        [ ( word32ToWord64 (mcsBaseAddr s)
+          , mkChunk cache chunkBytes (mcsMutability s) )
         | s <- msChunks memSpace
         , let chunkBytes = sliceBytes (msBytes memSpace) (mcsBaseAddr s) (mcsLength s)
         ]
@@ -512,7 +544,7 @@ prop_concreteImmutableGlobalRead = testPropertyNamed
       cache <- mkByteCache sym
       let imap = memorySpaceToIntervalMap cache memSpace
       globalBlk <- WI.natLit sym globalBlock
-      ptr <- mkPtr sym (rrBlockNum req) (rrOffset req)
+      ptr <- mkPtr sym MC.Addr32 (rrBlockNum req) (word32ToWord64 (rrOffset req))
 
       SomeBVMemRepr repr <-
         case bvMemReprForSize (rrSize req) of
