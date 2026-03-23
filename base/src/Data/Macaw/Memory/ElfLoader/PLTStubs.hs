@@ -22,7 +22,7 @@ module Data.Macaw.Memory.ElfLoader.PLTStubs
 
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ElfEdit as EE
-import           Data.Foldable (Foldable(..))
+import qualified Data.Foldable as F
 import qualified Data.Map as Map
 import           Data.Maybe ( fromMaybe, listToMaybe )
 import           Data.Word ( Word32 )
@@ -158,7 +158,7 @@ pltStubSymbols pltStubInfo loadOptions ehi =
         Right (EE.PLTRela relas) -> return (SomeRel relas EE.relaSym)
         Right (EE.PLTRel rels) -> return (SomeRel rels EE.relSym)
         _ -> Nothing
-      let revNameRelaMap = foldl' (pltStubAddress dynSec vam vdefm vreqm getRelSymIdx) [] rels
+      let revNameRelaMap = F.foldl' (pltStubAddress dynSec vam vdefm vreqm getRelSymIdx) [] rels
       let nameRelaMap = zip [0..] (reverse revNameRelaMap)
       pltSec <- listToMaybe (EE.findSectionByName (BSC.pack ".plt") elf)
       let pltBase = EE.elfSectionAddr pltSec
@@ -178,7 +178,7 @@ pltStubSymbols pltStubInfo loadOptions ehi =
       relsGot <- case EE.dynRelaEntries @reloc dynSec vam of
         Right relas -> return relas
         Left _ -> Nothing
-      let revNameRelaMapGot = foldl' (pltStubAddress dynSec vam vdefm vreqm EE.relaSym) [] relsGot
+      let revNameRelaMapGot = F.foldl' (pltStubAddress dynSec vam vdefm vreqm EE.relaSym) [] relsGot
       let nameRelaMapGot = zip [0..] (reverse revNameRelaMapGot)
       pltGotSec <- listToMaybe (EE.findSectionByName (BSC.pack ".plt.got") elf)
       let pltGotBase = EE.elfSectionAddr pltGotSec

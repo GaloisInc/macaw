@@ -39,7 +39,7 @@ module Data.Macaw.AbsDomain.JumpBounds
 
 import           Control.Monad (unless, when)
 import           Data.Bits
-import           Data.Foldable
+import qualified Data.Foldable as F
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Monoid
@@ -300,7 +300,7 @@ blockEndBounds :: ( MemWidth (ArchAddrWidth arch)
                -> [Stmt arch ids] -- ^
                -> IntraJumpBounds arch ids
 blockEndBounds blockBnds stmts =
-   foldl' execStatement (mkIntraJumpBounds blockBnds) stmts
+   F.foldl' execStatement (mkIntraJumpBounds blockBnds) stmts
 
 ------------------------------------------------------------------------
 -- Operations
@@ -892,7 +892,7 @@ nextBlockBounds bnds brCns regs =
                                , erpiBranchConstraints = brCns
                                }
    in InitJumpBounds { initBndsMap     = stkCns
-                     , initRngPredMap  = foldl' (updateRangePredMap info) locMapEmpty reps
+                     , initRngPredMap  = F.foldl' (updateRangePredMap info) locMapEmpty reps
                      , initAddrPredMap = newAddrConstraints brCns
                      }
 
