@@ -651,10 +651,11 @@ concreteImmutableGlobalRead sym imap memPtrBlk memRep ptr
     -- Next, check that we are attempting to read from a contiguous region
     -- of memory.
   , let addr = fromInteger $ BV.asUnsigned addrBV
+  , let endAddr = addr + fromIntegral numBytes
   , Just (addrBaseInterval, smc) <-
-      combineChunksIfContiguous $ IM.toAscList $
-      imap `IM.intersecting`
-        IMI.ClosedInterval addr (addr + fromIntegral numBytes)
+      combineChunksIfContiguous $
+        IM.toAscList $
+          imap `IM.intersecting` IMI.IntervalCO addr endAddr
 
     -- Next, check that the memory is immutable.
   , smcMutability smc == CL.Immutable

@@ -312,6 +312,25 @@ overlappingRegionsReturnsNothing = testImmutableRead
   bv4
   Nothing
 
+readAdjacentMutableChunkReturnsJust :: TestTree
+readAdjacentMutableChunkReturnsJust = testCase "Read with adjacent mutable chunk returns Just" $ do
+  result <- withSym $ \sym -> do
+    cache <- mkByteCache sym
+    let immChunk = mkChunk cache [0xAA, 0xBB] CL.Immutable
+    let mutChunk = mkChunk cache [0xCC, 0xDD] CL.Mutable
+    -- [100, 102) immutable, [102, 104) mutable
+    let imap = IM.fromList
+          [ (IMI.IntervalCO 100 102, immChunk)
+          , (IMI.IntervalCO 102 104, mutChunk)
+          ]
+    globalBlk <- WI.natLit sym globalBlock
+    ptr <- mkGlobalPtr sym 100
+    r <- concreteImmutableGlobalRead sym imap globalBlk bv2 ptr
+    pure $ case r of
+      Nothing -> Nothing
+      Just val -> extractLEBytes val 2
+  result @?= Just [0xAA, 0xBB]
+
 emptyMemoryReturnsNothing :: TestTree
 emptyMemoryReturnsNothing = testImmutableRead
   "Empty memory returns Nothing"
@@ -539,6 +558,7 @@ tests = testGroup "Lazy memory model"
           , notEnoughBytesReturnsNothing
           , nonContiguousRegionsReturnsNothing
           , overlappingRegionsReturnsNothing
+          , readAdjacentMutableChunkReturnsJust
           , emptyMemoryReturnsNothing
           , addressOverflowReturnsNothing
           , addressOverflowAtZeroReturnsNothing
