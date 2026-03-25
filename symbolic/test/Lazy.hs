@@ -309,8 +309,9 @@ mutableRegionReturnsNothing :: TestTree
 mutableRegionReturnsNothing = testCase "Mutable region returns Nothing" $ do
   result <- withSym $ \sym -> do
     cache <- mkByteCache sym
-    let chunk = mkChunk [0xAA, 0xBB] CL.Mutable
-    let imap = mkIntervalMap @32 [(100, chunk)]
+    -- Mutable chunks live in memMutableTable, not the immutable map
+    -- passed to concreteImmutableGlobalRead, so we pass an empty map.
+    let imap = mkIntervalMap @32 []
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym MC.Addr32 100
     r <- concreteImmutableGlobalRead sym imap cache globalBlk bv1 ptr
@@ -362,11 +363,10 @@ readAdjacentMutableChunkReturnsJust = testCase "Read with adjacent mutable chunk
   result <- withSym $ \sym -> do
     cache <- mkByteCache sym
     let immChunk = mkChunk [0xAA, 0xBB] CL.Immutable
-    let mutChunk = mkChunk [0xCC, 0xDD] CL.Mutable
-    -- [100, 102) immutable, [102, 104) mutable
+    -- Only the immutable map is passed to concreteImmutableGlobalRead;
+    -- the mutable chunk at [102, 104) lives in memMutableTable.
     let imap = IM.fromList
           [ (IMI.IntervalCO (100 :: MC.MemWord 32) 102, immChunk)
-          , (IMI.IntervalCO 102 104, mutChunk)
           ]
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym MC.Addr32 100
@@ -467,19 +467,32 @@ data MemorySpace = MemorySpace
 sliceBytes :: BS.ByteString -> Word32 -> Int -> [Word8]
 sliceBytes bs offset len = BS.unpack $ BS.take len $ BS.drop (fromIntegral offset) bs
 
--- | Build an IntervalMap from a MemorySpace.
--- Extracts bytes from the ByteString and creates symbolic chunks.
-memorySpaceToIntervalMap ::
+-- | Build an IntervalMap containing only immutable chunks from a MemorySpace.
+-- This mirrors how concreteImmutableGlobalRead only receives memImmutableTable.
+memorySpaceToImmutableIntervalMap ::
   MemorySpace ->
   IM.IntervalMap (MC.MemWord 32) (SymbolicMemChunk sym)
-memorySpaceToIntervalMap memSpace =
+memorySpaceToImmutableIntervalMap memSpace =
   let chunks =
         [ ( word32ToWord64 (mcsBaseAddr s)
           , mkChunk chunkBytes (mcsMutability s) )
         | s <- msChunks memSpace
+        , mcsMutability s == CL.Immutable
         , let chunkBytes = sliceBytes (msBytes memSpace) (mcsBaseAddr s) (mcsLength s)
         ]
   in mkIntervalMap chunks
+
+-- | Build a mutability map from a MemorySpace (all chunks, with mutability).
+memorySpaceToMutabilityMap ::
+  MemorySpace ->
+  IM.IntervalMap (MC.MemWord 32) CL.Mutability
+memorySpaceToMutabilityMap memSpace = IM.fromList
+  [ ( IMI.IntervalCO
+        (checkedToMemWord @32 (word32ToWord64 (mcsBaseAddr s)))
+        (checkedToMemWord @32 (word32ToWord64 (mcsBaseAddr s) + fromIntegral (mcsLength s)))
+    , mcsMutability s )
+  | s <- msChunks memSpace
+  ]
 
 -- | Generate a memory space with random bytes and non-overlapping chunks.
 -- The ByteString is large enough that ByteString[i] corresponds to address i.
@@ -555,7 +568,7 @@ prop_concreteImmutableGlobalRead = testPropertyNamed
     -- Return either Nothing (function declined) or Just (list of bytes).
     result <- evalIO $ withSym $ \sym -> do
       cache <- mkByteCache sym
-      let imap = memorySpaceToIntervalMap memSpace
+      let imap = memorySpaceToImmutableIntervalMap memSpace
       globalBlk <- WI.natLit sym globalBlock
       ptr <- mkPtr sym MC.Addr32 (rrBlockNum req) (word32ToWord64 (rrOffset req))
 
@@ -598,7 +611,7 @@ prop_readValidityConsistency = testPropertyNamed
     (readSucceeded, validityResult) <- evalIO $ withSym $ \sym -> do
       let ?processMacawAssert = defaultProcessMacawAssertion
       cache <- mkByteCache sym
-      let imap = memorySpaceToIntervalMap memSpace
+      let imap = memorySpaceToImmutableIntervalMap memSpace
       let blk = 0 :: Natural
       globalBlk <- WI.natLit sym blk
       ptr <- mkPtr sym MC.Addr32 blk (word32ToWord64 off)
@@ -610,7 +623,9 @@ prop_readValidityConsistency = testPropertyNamed
 
       readResult <- concreteImmutableGlobalRead sym imap cache globalBlk repr ptr
 
-      let mutMap = fmap smcMutability imap
+      -- Build the combined mutability map from the MemorySpace
+      -- (matching how production code derives it)
+      let mutMap = memorySpaceToMutabilityMap memSpace
       let ptrEntry = CS.RegEntry (CL.LLVMPointerRepr WI.knownNat) ptr
       let puse = MS.PointerUse Nothing MS.PointerRead
       vResult <- mkGlobalPointerValidityPredCommon mutMap sym puse Nothing ptrEntry
