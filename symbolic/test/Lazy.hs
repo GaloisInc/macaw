@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
@@ -15,18 +16,25 @@ import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
 import qualified Data.IntervalMap.Strict as IM
 import qualified Data.IntervalMap.Interval as IMI
-import           Data.Maybe (isNothing)
+import           Data.Maybe (isJust, isNothing)
 import           Data.Word (Word8, Word32, Word64)
 import           Numeric.Natural (Natural)
 
 import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Symbolic as MS
 import           Data.Macaw.Types (BVType)
+import           Data.Macaw.Symbolic.Memory.Common
+                   ( mkGlobalPointerValidityPredCommon
+                   , defaultProcessMacawAssertion
+                   )
 import           Data.Macaw.Symbolic.Memory.Lazy.Internal
 import qualified Lang.Crucible.LLVM.MemModel as CL
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as CLP
+import qualified Lang.Crucible.Simulator as CS
 import qualified What4.Expr as WE
 import qualified What4.Expr.Builder as WEB
 import qualified What4.Interface as WI
+import           What4.LabeledPred (LabeledPred(..))
 import           Data.Parameterized.Nonce (newIONonceGenerator)
 import           Data.Parameterized.Some (Some(..))
 
@@ -567,6 +575,66 @@ prop_concreteImmutableGlobalRead = testPropertyNamed
         let expectedBytes = sliceBytes (msBytes memSpace) (rrOffset req) (rrSize req)
         actualBytes === expectedBytes
 
+-- | Property: concreteImmutableGlobalRead and mkGlobalPointerValidityPredCommon
+-- must be consistent:
+--
+-- * If the read succeeds, the validity predicate must say True.
+-- * If the validity predicate says False, the read must not succeed.
+--
+-- (These are contrapositives, but testing both catches different failure modes.)
+--
+-- Note: the validity predicate checks a single offset, while the read checks a
+-- range. So the read can fail even when validity is True (e.g., multi-byte read
+-- past end of region). We only test when the block number matches.
+prop_readValidityConsistency :: TestTree
+prop_readValidityConsistency = testPropertyNamed
+  "concreteImmutableGlobalRead consistent with validity predicate"
+  "prop_readValidityConsistency"
+  $ withTests 512 $ property $ do
+    memSpace <- forAll genMemorySpace
+    off <- forAll (Gen.frequency readOffsetDistribution)
+    sz <- forAll (Gen.frequency readSizeDistribution)
+
+    (readSucceeded, validityResult) <- evalIO $ withSym $ \sym -> do
+      let ?processMacawAssert = defaultProcessMacawAssertion
+      cache <- mkByteCache sym
+      let imap = memorySpaceToIntervalMap memSpace
+      let blk = 0 :: Natural
+      globalBlk <- WI.natLit sym blk
+      ptr <- mkPtr sym MC.Addr32 blk (word32ToWord64 off)
+
+      SomeBVMemRepr repr <-
+        case bvMemReprForSize sz of
+          Nothing -> fail $ "bvMemReprForSize failed for size " ++ show sz ++ " (generator bug)"
+          Just r -> pure r
+
+      readResult <- concreteImmutableGlobalRead sym imap cache globalBlk repr ptr
+
+      let mutMap = fmap smcMutability imap
+      let ptrEntry = CS.RegEntry (CL.LLVMPointerRepr WI.knownNat) ptr
+      let puse = MS.PointerUse Nothing MS.PointerRead
+      vResult <- mkGlobalPointerValidityPredCommon mutMap sym puse Nothing ptrEntry
+      let vr = case vResult of
+                 Nothing -> Nothing
+                 Just (LabeledPred p _) -> Just (WI.asConstantPred p)
+      pure (isJust readResult, vr)
+
+    case (readSucceeded, validityResult) of
+      -- Read succeeded → validity must be True
+      (True, Just (Just True)) -> success
+      (True, _) -> do
+        footnote "Read succeeded but validity predicate was not True"
+        failure
+      -- Validity False → read must not succeed
+      (False, Just (Just False)) -> success
+      -- Read failed, validity True → OK
+      (False, Just (Just True)) -> success
+      -- Anything else unexpected for concrete block-0 pointer
+      (_, _) -> do
+        footnote $ "Unexpected: readSucceeded=" ++ show readSucceeded
+                 ++ " validity=" ++ show validityResult
+        failure
+
 ------------------------------------------------------------------------
 -- Test tree
 ------------------------------------------------------------------------
@@ -604,5 +672,6 @@ tests = testGroup "Lazy memory model"
       ]
   , testGroup "Property-based tests"
       [ prop_concreteImmutableGlobalRead
+      , prop_readValidityConsistency
       ]
   ]
