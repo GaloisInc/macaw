@@ -27,7 +27,6 @@ module Data.Macaw.Symbolic.Memory.Lazy.Internal (
 
   -- * Internal (exported for testing)
   MemChunkBytes(..),
-  MemChunkBytes(..),
   memChunkBytesLen,
   checkContiguous,
   extendUpperBound,
@@ -177,10 +176,14 @@ data MemPtrTable sym w = MemPtrTable
   -- ^ See "Data.Macaw.Symbolic.Memory.ByteCache"
   }
 
--- | The backing bytes for a 'MemChunkBytes'. For the common case of
--- concrete byte data from the binary, we store the raw 'BS.ByteString' to avoid
--- materializing What4 expressions upfront. Expressions are only created on
--- demand when a chunk is actually accessed, using the shared 'MBC.ByteCache'.
+-- | A discrete chunk of a memory segment within global memory. Memory is
+-- lazily initialized one 'MemChunkBytes' at a time. See
+-- @Note [Lazy memory model]@.
+--
+-- For the common case of concrete byte data from the binary, we store the raw
+-- 'BS.ByteString' to avoid materializing What4 expressions upfront. Expressions
+-- are only created on demand when a chunk is actually accessed, using the
+-- shared 'MBC.ByteCache'.
 data MemChunkBytes sym
   = ConcreteBytes !BS.ByteString
     -- ^ Raw bytes from the binary (e.g., from 'MC.ByteRegion'). Symbolic
@@ -190,21 +193,11 @@ data MemChunkBytes sym
     -- ^ Truly symbolic bytes (e.g., from relocations) that cannot be
     --   represented as a raw 'BS.ByteString'.
 
+-- | The number of bytes in a 'MemChunkBytes'.
 memChunkBytesLen :: MemChunkBytes sym -> Int
 memChunkBytesLen = \case
   ConcreteBytes bs -> BS.length bs
   SymbolicBytes s  -> Vec.length s
-
--- | A discrete chunk of a memory segment within global memory. Memory is
--- lazily initialized one 'MemChunkBytes' at a time. See
--- @Note [Lazy memory model]@.
-data MemChunkBytes sym = MemChunkBytes
-  { smcBytes :: MemChunkBytes sym
-    -- ^ A contiguous region of symbolic bytes backing global memory.
-    --   The size of this region is no larger than 'chunkSize'.
-  , smcMutability :: CL.Mutability
-    -- ^ Whether the region of memory is mutable or immutable.
-  }
 
 -- | Split a 'BS.ByteString' into chunks of at most @n@ bytes.
 bsChunksOf :: Int -> BS.ByteString -> [BS.ByteString]
@@ -345,7 +338,7 @@ sliceContiguousChunks cache addr numBytes mutChunks immutChunks memContents popu
           firstLen = intervalLen firstI
           avail = firstLen - skip
           firstTake = min numBytes avail
-          trimmedFirst = sliceBytes skip firstTake (smcBytes firstC)
+          trimmedFirst = sliceBytes skip firstTake firstC
       X.assert (firstTake > 0) $ guard (firstTake > 0)
       let remaining = numBytes - firstTake
       go firstI remaining trimmedFirst rest
@@ -402,10 +395,10 @@ sliceContiguousChunks cache addr numBytes mutChunks immutChunks memContents popu
         let remaining' = remaining - chunkLen
         -- (++) is O(n^2), but these lists are a maximum of 8 elements (bytes)
         if remaining' < 0
-          then let result = acc ++ takeBytes remaining (smcBytes chunk)
+          then let result = acc ++ takeBytes remaining chunk
                in X.assert (length result == numBytes) $ Just result
           else go ival remaining'
-                  (acc ++ allBytes (smcBytes chunk)) rest
+                  (acc ++ allBytes chunk) rest
 
 -- | The maximum size of a 'MemChunkBytes', which determines the granularity
 -- at which the regions of memory in a 'memPtrTable' are chunked up.
@@ -718,7 +711,7 @@ mergedMemoryMemChunkBytes bak hooks mems = do
                   Nothing -> error $
                     "segmentMemChunkBytes: Failed to resolve function address: " ++
                     show addr
-          (smcChunks, size) <- memChunkToSymbolic mut mem seg addr chunk
+          (smcChunks, size) <- memChunkToSymbolic mem seg addr chunk
           let interval = IM.IntervalCO absAddr (absAddr + fromIntegral size)
           let intervalChunks = chunksOfInterval (fromIntegral chunkSize) interval
           let ichunks = X.assert (length intervalChunks == length smcChunks)
@@ -731,13 +724,12 @@ mergedMemoryMemChunkBytes bak hooks mems = do
       pure (foldMap id pairs)
 
     memChunkToSymbolic ::
-      CL.Mutability ->
       MC.Memory w ->
       MC.MemSegment w ->
       MC.MemAddr w ->
       MC.MemChunk w ->
       m ([MemChunkBytes sym], Int)
-    memChunkToSymbolic mut mem seg addr = \case
+    memChunkToSymbolic mem seg addr = \case
       MC.ByteRegion bs ->
         pure (concreteChunks bs, BS.length bs)
       MC.BSSRegion sz ->
@@ -751,14 +743,10 @@ mergedMemoryMemChunkBytes bak hooks mems = do
         pure (symbolicChunks (Vec.fromList symBytes), len)
       where
         concreteChunks :: BS.ByteString -> [MemChunkBytes sym]
-        concreteChunks bs =
-          map (\c -> MemChunkBytes (ConcreteBytes c) mut)
-              (bsChunksOf chunkSize bs)
+        concreteChunks bs = map ConcreteBytes (bsChunksOf chunkSize bs)
 
         symbolicChunks :: Vec.Vector (WI.SymBV sym 8) -> [MemChunkBytes sym]
-        symbolicChunks v =
-          map (\c -> MemChunkBytes (SymbolicBytes c) mut)
-              (vecChunksOf chunkSize v)
+        symbolicChunks v = map SymbolicBytes (vecChunksOf chunkSize v)
 
 
 -- Return @Just val@ if we can be absolutely sure that this is a concrete
@@ -851,58 +839,46 @@ lazilyPopulateGlobalMemArr bak mpt useTag memRep ptr state
     -- different pointer, there's no need to bother populating the array.
     WI.asNat (CLP.llvmPointerBlock (memPtr mpt)) ==
     WI.asNat (CLP.llvmPointerBlock ptr)
-  = do MSMC.pleatM state tbl $ \st (addr, smc) ->
-         if addr `IS.notMember` (st^.chunksL)
-             && -- If dealing with a writable region of memory and the
-                -- memModelContents are SymbolicMutable, then we skip populating
-                -- the SMT array, instead leaving the initial contents of the
-                -- memory region completely symbolic.
-                not (smcMutability smc == CL.Mutable &&
-                     memModelContents mpt == MSMC.SymbolicMutable)
-           then do bytesAssmp <-
-                     populateChunkAssumption (byteCache mpt) sym (memPtrArray mpt)
-                       (IMI.lowerBound addr) (smcBytes smc)
-                   -- See @Note [Top-level assumptions]@.
-                   gc <- CB.saveAssumptionState bak
-                   let gc' = CBP.gcAddTopLevelAssume (CB.singleAssumption bytesAssmp) gc
-                   CB.restoreAssumptionState bak gc'
-                   pure $ L.over chunksL (IS.insert addr) st
-           else pure st
+  = do -- Build the interval of global memory addresses that could be accessed.
+       -- If the pointer is concrete, this is a single point; if symbolic, it
+       -- can span multiple addresses.
+       let accessInterval =
+             symBVInterval sym (CLP.llvmPointerOffset ptr)
+               `extendUpperBound` fromIntegral (MC.memReprBytes memRep)
+           ivals tbl =
+             IM.toAscList $ tbl `IM.intersecting` accessInterval
+
+       -- Populate mutable chunks, unless memModelContents is SymbolicMutable
+       -- (in which case we leave mutable memory fully symbolic).
+       st1 <- if memModelContents mpt == MSMC.SymbolicMutable
+              then pure state
+              else MSMC.pleatM state (ivals (memMutableTable mpt)) populateChunk
+
+       -- For reads, also populate immutable chunks (needed in the SMT array
+       -- for symbolic reads that fall through concreteImmutableGlobalRead).
+       -- Writes don't need them since mkGlobalPointerValidityPred rejects
+       -- writes to immutable memory.
+       case useTag of
+         MS.PointerWrite -> pure st1
+         MS.PointerRead ->
+           MSMC.pleatM st1 (ivals (memImmutableTable mpt)) populateChunk
 
   | otherwise
   = pure state
   where
     sym = CB.backendGetSym bak
 
-    -- The regions of global memory that would need to be accessed as a result
-    -- of reading from/writing to the pointer.  We build an interval
-    -- [ptr, ptr+memRepSize] and load all of the chunks in global memory that
-    -- overlap with the interval.
-    --
-    -- For writes, only mutable chunks are populated (writes to immutable
-    -- regions are rejected by mkGlobalPointerValidityPred). For reads,
-    -- both mutable and immutable chunks are populated (immutable data may
-    -- be needed in the SMT array for symbolic reads that fall through
-    -- concreteImmutableGlobalRead).
-    tbl = let accessInterval = ptrInterval `extendUpperBound` memRepSize
-          in case useTag of
-               MS.PointerWrite ->
-                 IM.toAscList $ memMutableTable mpt `IM.intersecting` accessInterval
-               MS.PointerRead ->
-                 IM.toAscList (memMutableTable mpt `IM.intersecting` accessInterval)
-                 ++ IM.toAscList (memImmutableTable mpt `IM.intersecting` accessInterval)
-    memRepSize = fromIntegral $ MC.memReprBytes memRep
-
-    -- ptrInterval is an interval representing the possible values that ptr
-    -- could be, and memRepSize is the size of the global memory that would need
-    -- to be accessed. From these we can build an interval
-    -- (ptrInterval `extendUpperBound` memRepSize) that contains all possible
-    -- global memory addresses that could be accessed.
-    --
-    -- Note that if we have a concrete read or write, then ptrInterval will be
-    -- a single point in the address space. The only way that this interval can
-    -- span multiple addresses is if we have a symbolic read or write.
-    ptrInterval = symBVInterval sym (CLP.llvmPointerOffset ptr)
+    populateChunk st (addr, smc) =
+      if addr `IS.member` (st^.chunksL)
+        then pure st  -- already populated
+        else do bytesAssmp <-
+                  populateChunkAssumption (byteCache mpt) sym (memPtrArray mpt)
+                    (IMI.lowerBound addr) smc
+                -- See @Note [Top-level assumptions]@.
+                gc <- CB.saveAssumptionState bak
+                let gc' = CBP.gcAddTopLevelAssume (CB.singleAssumption bytesAssmp) gc
+                CB.restoreAssumptionState bak gc'
+                pure $ L.over chunksL (IS.insert addr) st
 
     chunksL :: forall rtp f args.
                L.Lens' (CS.SimState p sym ext rtp f args)
@@ -1000,11 +976,11 @@ mkGlobalPointerValidityPred mpt =
   \sym puse mcond ptr ->
     let tbl = case MS.pointerUseTag puse of
                 MS.PointerWrite ->
-                  fmap smcMutability (memMutableTable mpt)
+                  CL.Mutable <$ memMutableTable mpt
                 MS.PointerRead ->
-                  fmap smcMutability (memMutableTable mpt)
+                  (CL.Mutable <$ memMutableTable mpt)
                   `IM.union`
-                  fmap smcMutability (memImmutableTable mpt)
+                  (CL.Immutable <$ memImmutableTable mpt)
     in MSMC.mkGlobalPointerValidityPredCommon tbl sym puse mcond ptr
 
 -- | Construct a translator for machine addresses into LLVM memory model pointers.
