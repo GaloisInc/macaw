@@ -343,7 +343,7 @@ sliceContiguousChunks cache addr numBytes =
         | i <- [drop_ .. drop_ + take_ - 1]
         ]
       SymbolicBytes s ->
-        Vec.toList (Vec.slice take_ drop_ s)
+        Vec.toList (Vec.slice drop_ take_ s)
 
     takeBytes :: Int -> SymbolicMemChunk sym -> [WI.SymBV sym 8]
     takeBytes = sliceBytes 0

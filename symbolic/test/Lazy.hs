@@ -14,6 +14,7 @@ module Lazy (tests) where
 import           Data.Bits (shiftR, (.&.))
 import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
+import qualified Data.Vector as Vec
 import qualified Data.IntervalMap.Strict as IM
 import qualified Data.IntervalMap.Interval as IMI
 import           Data.Maybe (isJust, isNothing)
@@ -146,6 +147,18 @@ mkChunk ::
   SymbolicMemChunk sym
 mkChunk bytes = ConcreteBytes (BS.pack bytes)
 
+-- | Build a SymbolicBytes chunk from concrete byte values.
+-- Unlike 'mkChunk', this uses the 'SymbolicBytes' constructor
+-- (backed by a Vector of symbolic BV literals).
+mkSymbolicChunk ::
+  WI.IsExprBuilder sym =>
+  sym ->
+  [Word8] ->
+  IO (SymbolicMemChunk sym)
+mkSymbolicChunk sym bytes = do
+  symBytes <- traverse (\b -> WI.bvLit sym (WI.knownNat @8) (BV.mkBV (WI.knownNat @8) (fromIntegral b))) bytes
+  pure (SymbolicBytes (Vec.fromList symBytes))
+
 -- | Build an IntervalMap from a list of (base, chunk) pairs.
 -- Uses IntervalCO (closed-open) intervals.
 mkIntervalMap ::
@@ -222,6 +235,24 @@ readFromOffset = testImmutableRead MC.Addr32
   302  -- offset 2 into the chunk
   bv2
   (Just [0x30, 0x40])
+
+-- | Read from an offset within a SymbolicBytes chunk (as opposed to
+-- ConcreteBytes). This exercises the Vec.slice path in sliceBytes.
+readFromOffsetSymbolicBytes :: TestTree
+readFromOffsetSymbolicBytes = testCase "Read from offset within SymbolicBytes chunk" $ do
+  result <- withSym $ \sym -> do
+    cache <- mkByteCache sym
+    -- Create a 4-byte SymbolicBytes chunk at address 100: [0x10, 0x20, 0x30, 0x40]
+    chunk <- mkSymbolicChunk sym [0x10, 0x20, 0x30, 0x40]
+    let imap = mkIntervalMap @32 [(100, chunk)]
+    globalBlk <- WI.natLit sym globalBlock
+    -- Read 2 bytes starting at address 101 (offset 1 into the chunk)
+    ptr <- mkGlobalPtr sym MC.Addr32 101
+    res <- concreteImmutableGlobalRead sym imap cache globalBlk bv2 ptr
+    pure $ case res of
+      Nothing -> Nothing
+      Just val -> extractLEBytes val 2
+  result @?= Just [0x20, 0x30]
 
 readSpanningContiguousChunks :: TestTree
 readSpanningContiguousChunks = testImmutableRead MC.Addr32
@@ -664,6 +695,7 @@ tests = testGroup "Lazy memory model"
           , read4
           , read8
           , readFromOffset
+          , readFromOffsetSymbolicBytes
           , readSpanningContiguousChunks
           ]
       , testGroup "Edge cases"
