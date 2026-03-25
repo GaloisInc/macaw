@@ -28,15 +28,11 @@ import           Data.Macaw.Symbolic.Memory.Common
                    , defaultProcessMacawAssertion
                    )
 import           Data.Macaw.Symbolic.Memory.Lazy.Internal
+import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.LLVM.MemModel as CL
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as CLP
 import qualified Lang.Crucible.Simulator as CS
-import qualified What4.Expr as WE
-import qualified What4.Expr.Builder as WEB
 import qualified What4.Interface as WI
-import           What4.LabeledPred (LabeledPred(..))
-import           Data.Parameterized.Nonce (newIONonceGenerator)
-import           Data.Parameterized.Some (Some(..))
 
 import           Hedgehog
 import qualified Hedgehog.Gen as Gen
@@ -44,6 +40,8 @@ import qualified Hedgehog.Range as Range
 import           Test.Tasty (TestTree, testGroup)
 import           Test.Tasty.Hedgehog (testPropertyNamed)
 import           Test.Tasty.HUnit ((@?=), assertBool, testCase)
+
+import           Utils (withSym, mkPtr)
 
 ------------------------------------------------------------------------
 -- Helpers
@@ -68,29 +66,6 @@ checkedToMemWord x
 -- | Global memory block number used in tests.
 globalBlock :: Natural
 globalBlock = 1
-
--- | Set up a What4 expression builder for tests.
-withSym :: (forall t. WEB.ExprBuilder t WE.EmptyExprBuilderState (WEB.Flags WEB.FloatIEEE) -> IO a) -> IO a
-withSym f = do
-  Some ng <- newIONonceGenerator
-  sym <- WEB.newExprBuilder WEB.FloatIEEERepr WE.EmptyExprBuilderState ng
-  f sym
-
--- | Build an LLVMPointer from a concrete block number and offset.
-mkPtr ::
-  WI.IsExprBuilder sym =>
-  sym ->
-  MC.AddrWidthRepr w ->
-  Natural ->
-  Word64 ->
-  IO (CL.LLVMPtr sym w)
-mkPtr sym repr blk off = do
-  blkSym <- WI.natLit sym blk
-  offSym <- case repr of
-    MC.Addr32 -> WI.bvLit sym (WI.knownNat @32)
-                   (BV.mkBV (WI.knownNat @32) (fromIntegral @Word64 @Integer off))
-    MC.Addr64 -> WI.bvLit sym (WI.knownNat @64) (BV.word64 off)
-  pure (CLP.LLVMPointer blkSym offSym)
 
 -- | Build an LLVMPointer in the global block with the given offset.
 mkGlobalPtr ::
@@ -616,7 +591,7 @@ prop_readValidityConsistency = testPropertyNamed
       vResult <- mkGlobalPointerValidityPredCommon mutMap sym puse Nothing ptrEntry
       let vr = case vResult of
                  Nothing -> Nothing
-                 Just (LabeledPred p _) -> Just (WI.asConstantPred p)
+                 Just (CB.LabeledPred p _) -> Just (WI.asConstantPred p)
       pure (isJust readResult, vr)
 
     case (readSucceeded, validityResult) of

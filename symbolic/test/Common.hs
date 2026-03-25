@@ -22,16 +22,14 @@ import           Data.Macaw.Symbolic.Memory.Common
                    ( mkGlobalPointerValidityPredCommon
                    , defaultProcessMacawAssertion
                    )
+import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.LLVM.MemModel as CL
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as CLP
 import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.Types as CT
-import           Data.Parameterized.Nonce (newIONonceGenerator)
-import           Data.Parameterized.Some (Some(..))
 import qualified What4.Expr as WE
 import qualified What4.Expr.Builder as WEB
 import qualified What4.Interface as WI
-import           What4.LabeledPred (LabeledPred(..))
 
 import qualified Hedgehog as H
 import qualified Hedgehog.Gen as Gen
@@ -40,36 +38,40 @@ import           Test.Tasty (TestTree, testGroup)
 import           Test.Tasty.HUnit ((@?=), testCase)
 import           Test.Tasty.Hedgehog (testPropertyNamed)
 
+import           Utils (withSym, mkPtr)
+
 ------------------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------------------
 
--- | Set up a What4 expression builder for tests.
-withSym :: (forall t. WEB.ExprBuilder t WE.EmptyExprBuilderState (WEB.Flags WEB.FloatIEEE) -> IO a) -> IO a
-withSym f = do
-  Some ng <- newIONonceGenerator
-  sym <- WEB.newExprBuilder WEB.FloatIEEERepr WE.EmptyExprBuilderState ng
-  f sym
-
--- | Build an LLVMPointer from a concrete block number and offset.
-mkPtr ::
-  WI.IsExprBuilder sym =>
-  sym ->
-  MC.AddrWidthRepr w ->
-  Natural ->
-  Word64 ->
-  IO (CL.LLVMPtr sym w)
-mkPtr sym repr blk off = do
-  blkSym <- WI.natLit sym blk
-  offSym <- case repr of
-    MC.Addr32 -> WI.bvLit sym (WI.knownNat @32)
-                   (BV.mkBV (WI.knownNat @32) (fromIntegral @Word64 @Integer off))
-    MC.Addr64 -> WI.bvLit sym (WI.knownNat @64) (BV.word64 off)
-  pure (CLP.LLVMPointer blkSym offSym)
-
 -- | Wrap an LLVMPointer in a RegEntry.
 mkRegEntry :: (1 <= w, KnownNat w) => CL.LLVMPtr sym w -> CS.RegEntry sym (CL.LLVMPointerType w)
 mkRegEntry ptr = CS.RegEntry (CL.LLVMPointerRepr WI.knownNat) ptr
+
+-- | The result of evaluating a validity predicate on a pointer.
+data ValidityResult
+  = NonGlobalBlock
+    -- ^ The pointer's block ID is a known non-zero constant, so the
+    -- validity predicate does not apply (returns 'Nothing').
+  | ValidityTrue
+    -- ^ The predicate simplified to 'True' (access is valid).
+  | ValidityFalse
+    -- ^ The predicate simplified to 'False' (access is invalid).
+  | ValiditySymbolic
+    -- ^ The predicate could not be simplified to a constant
+    -- (e.g., because the pointer offset is symbolic).
+  deriving (Eq, Show)
+
+-- | Extract the validity result from the raw output of
+-- 'mkGlobalPointerValidityPredCommon'.
+extractValidityResult ::
+  Maybe (CB.LabeledPred (WEB.BoolExpr t) e) ->
+  ValidityResult
+extractValidityResult Nothing = NonGlobalBlock
+extractValidityResult (Just (CB.LabeledPred p _)) = case WI.asConstantPred p of
+  Just True  -> ValidityTrue
+  Just False -> ValidityFalse
+  Nothing    -> ValiditySymbolic
 
 -- | Build an IntervalMap from (lo, hi, mutability) triples using IntervalCO.
 mkMutabilityMap ::
@@ -83,12 +85,6 @@ mkMutabilityMap entries = IM.fromList
   ]
 
 -- | Parameterized test for mkGlobalPointerValidityPredCommon.
---
--- Expected result encoding:
---   Nothing          → function should return Nothing (non-global block)
---   Just Nothing     → function returns Just, but predicate is non-trivial (symbolic)
---   Just (Just True) → function returns Just, predicate simplifies to True
---   Just (Just False)→ function returns Just, predicate simplifies to False
 testValidityPred ::
   String ->
   [(Word64, Word64, CL.Mutability)] ->
@@ -96,7 +92,9 @@ testValidityPred ::
   Word64 ->
   MS.PointerUseTag ->
   Maybe Bool ->
-  Maybe (Maybe Bool) ->
+  -- ^ Optional condition (Nothing = unconditional, Just False = conditional
+  -- access with false condition)
+  ValidityResult ->
   TestTree
 testValidityPred name intervals blk off tag mcondVal expected =
   testCase name $ do
@@ -111,10 +109,8 @@ testValidityPred name intervals blk off tag mcondVal expected =
         Just b -> do
           let p = if b then WI.truePred sym else WI.falsePred sym
           pure (Just (CS.RegEntry CT.BoolRepr p))
-      res <- mkGlobalPointerValidityPredCommon tbl sym puse mcondEntry ptrEntry
-      pure $ case res of
-        Nothing -> Nothing
-        Just (LabeledPred p _) -> Just (WI.asConstantPred p)
+      extractValidityResult <$>
+        mkGlobalPointerValidityPredCommon tbl sym puse mcondEntry ptrEntry
     result @?= expected
 
 -- | Like testValidityPred but for a symbolic block ID.
@@ -123,7 +119,7 @@ testValidityPredSymbolicBlock ::
   [(Word64, Word64, CL.Mutability)] ->
   Word64 ->
   MS.PointerUseTag ->
-  Maybe (Maybe Bool) ->
+  ValidityResult ->
   TestTree
 testValidityPredSymbolicBlock name intervals off tag expected =
   testCase name $ do
@@ -136,10 +132,8 @@ testValidityPredSymbolicBlock name intervals off tag expected =
                   (BV.mkBV (WI.knownNat @32) (fromIntegral @Word64 @Integer off))
       let ptr = CLP.LLVMPointer blkSym offSym
       let ptrEntry = mkRegEntry ptr
-      res <- mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
-      pure $ case res of
-        Nothing -> Nothing
-        Just (LabeledPred p _) -> Just (WI.asConstantPred p)
+      extractValidityResult <$>
+        mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
     result @?= expected
 
 -- | Test with a symbolic offset that is an ite of two concrete values.
@@ -150,7 +144,7 @@ testValidityPredIteOffset ::
   Word64 ->
   Word64 ->
   MS.PointerUseTag ->
-  Maybe (Maybe Bool) ->
+  ValidityResult ->
   TestTree
 testValidityPredIteOffset name intervals off1 off2 tag expected =
   testCase name $ do
@@ -166,10 +160,8 @@ testValidityPredIteOffset name intervals off1 off2 tag expected =
       offSym <- WI.bvIte sym cond bv1 bv2
       let ptr = CLP.LLVMPointer blkSym offSym
       let ptrEntry = mkRegEntry ptr
-      res <- mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
-      pure $ case res of
-        Nothing -> Nothing
-        Just (LabeledPred p _) -> Just (WI.asConstantPred p)
+      extractValidityResult <$>
+        mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
     result @?= expected
 
 ------------------------------------------------------------------------
@@ -187,7 +179,7 @@ tests = testGroup "Shared memory model"
               150
               MS.PointerRead
               Nothing
-              (Just (Just True))
+              ValidityTrue
           , testValidityPred
               "Read from immutable region"
               [(100, 200, CL.Immutable)]
@@ -195,7 +187,7 @@ tests = testGroup "Shared memory model"
               150
               MS.PointerRead
               Nothing
-              (Just (Just True))
+              ValidityTrue
           , testValidityPred
               "Write to mutable region"
               [(100, 200, CL.Mutable)]
@@ -203,7 +195,7 @@ tests = testGroup "Shared memory model"
               150
               MS.PointerWrite
               Nothing
-              (Just (Just True))
+              ValidityTrue
           , testValidityPred
               "Write to immutable region (rejected)"
               [(100, 200, CL.Immutable)]
@@ -211,7 +203,7 @@ tests = testGroup "Shared memory model"
               150
               MS.PointerWrite
               Nothing
-              (Just (Just False))
+              ValidityFalse
           ]
       , testGroup "Unmapped access"
           [ testValidityPred
@@ -221,7 +213,7 @@ tests = testGroup "Shared memory model"
               300
               MS.PointerRead
               Nothing
-              (Just (Just False))
+              ValidityFalse
           , testValidityPred
               "Write to unmapped region"
               [(100, 200, CL.Mutable)]
@@ -229,7 +221,7 @@ tests = testGroup "Shared memory model"
               300
               MS.PointerWrite
               Nothing
-              (Just (Just False))
+              ValidityFalse
           , testValidityPred
               "Empty map"
               []
@@ -237,7 +229,7 @@ tests = testGroup "Shared memory model"
               100
               MS.PointerRead
               Nothing
-              (Just (Just False))
+              ValidityFalse
           ]
       , testGroup "Block ID"
           [ testValidityPred
@@ -247,19 +239,19 @@ tests = testGroup "Shared memory model"
               150
               MS.PointerRead
               Nothing
-              Nothing
+              NonGlobalBlock
           , testValidityPredSymbolicBlock
               "Symbolic block, in-range offset simplifies to True"
               [(100, 200, CL.Mutable)]
               150
               MS.PointerRead
-              (Just (Just True))  -- ite (blk==0) True True = True
+              ValidityTrue  -- ite (blk==0) True True = True
           , testValidityPredSymbolicBlock
               "Symbolic block, out-of-range offset is non-trivial"
               [(100, 200, CL.Mutable)]
               300
               MS.PointerRead
-              (Just Nothing)  -- ite (blk==0) False True — not simplifiable
+              ValiditySymbolic  -- ite (blk==0) False True — not simplifiable
           ]
       , testGroup "Boundary conditions"
           [ testValidityPred
@@ -269,7 +261,7 @@ tests = testGroup "Shared memory model"
               100
               MS.PointerRead
               Nothing
-              (Just (Just True))
+              ValidityTrue
           , testValidityPred
               "At upper bound (exclusive)"
               [(100, 200, CL.Mutable)]
@@ -277,7 +269,7 @@ tests = testGroup "Shared memory model"
               200
               MS.PointerRead
               Nothing
-              (Just (Just False))
+              ValidityFalse
           ]
       , testGroup "Conditional writes"
           [ testValidityPred
@@ -287,7 +279,7 @@ tests = testGroup "Shared memory model"
               150
               MS.PointerWrite
               (Just False)
-              (Just (Just True))
+              ValidityTrue
           ]
       , testGroup "Symbolic offsets (ite of two concrete values)"
           [ testValidityPredIteOffset
@@ -296,49 +288,49 @@ tests = testGroup "Shared memory model"
               150  -- in range
               160  -- in range
               MS.PointerRead
-              (Just (Just True))
+              ValidityTrue
           , testValidityPredIteOffset
               "Both branches out of range"
               [(100, 200, CL.Mutable)]
               50   -- out of range
               300  -- out of range
               MS.PointerRead
-              (Just Nothing)  -- non-trivial (What4 can't simplify through range checks)
+              ValiditySymbolic  -- non-trivial (What4 can't simplify through range checks)
           , testValidityPredIteOffset
               "One branch in range, one out"
               [(100, 200, CL.Mutable)]
               150  -- in range
               300  -- out of range
               MS.PointerRead
-              (Just Nothing)  -- non-trivial
+              ValiditySymbolic  -- non-trivial
           , testValidityPredIteOffset
               "Write with one branch in mutable, one in immutable"
               [(100, 200, CL.Mutable), (300, 400, CL.Immutable)]
               150  -- in mutable (write OK)
               350  -- in immutable (write rejected)
               MS.PointerWrite
-              (Just Nothing)  -- non-trivial
+              ValiditySymbolic  -- non-trivial
           , testValidityPredIteOffset
               "Read with one branch in mutable, one in immutable"
               [(100, 200, CL.Mutable), (300, 400, CL.Immutable)]
               150  -- in mutable
               350  -- in immutable
               MS.PointerRead
-              (Just Nothing)  -- non-trivial (What4 can't simplify through range checks)
+              ValiditySymbolic  -- non-trivial (What4 can't simplify through range checks)
           , testValidityPredIteOffset
               "Branches straddle lower bound"
               [(100, 200, CL.Mutable)]
               99   -- just below
               100  -- at bound (inclusive)
               MS.PointerRead
-              (Just Nothing)  -- non-trivial
+              ValiditySymbolic  -- non-trivial
           , testValidityPredIteOffset
               "Branches straddle upper bound"
               [(100, 200, CL.Mutable)]
               199  -- in range
               200  -- at bound (exclusive, out of range)
               MS.PointerRead
-              (Just Nothing)  -- non-trivial
+              ValiditySymbolic  -- non-trivial
           ]
       ]
   , testGroup "Property-based tests"
@@ -419,16 +411,14 @@ runValidityPred ::
   Word32 ->
   MS.PointerUseTag ->
   Maybe (CS.RegEntry (WEB.ExprBuilder t WE.EmptyExprBuilderState (WEB.Flags WEB.FloatIEEE)) CT.BoolType) ->
-  IO (Maybe (Maybe Bool))
+  IO ValidityResult
 runValidityPred sym tbl off tag mcondEntry = do
   let ?processMacawAssert = defaultProcessMacawAssertion
   let puse = MS.PointerUse Nothing tag
   ptr <- mkPtr sym MC.Addr32 0 (fromIntegral off)
   let ptrEntry = mkRegEntry ptr
-  res <- mkGlobalPointerValidityPredCommon tbl sym puse mcondEntry ptrEntry
-  pure $ case res of
-    Nothing -> Nothing
-    Just (LabeledPred p _) -> Just (WI.asConstantPred p)
+  extractValidityResult <$>
+    mkGlobalPointerValidityPredCommon tbl sym puse mcondEntry ptrEntry
 
 -- | Generate an offset that is likely to land in a mapped region.
 genOffsetInEntries :: [IntervalEntry] -> H.Gen Word32
@@ -448,7 +438,7 @@ runValidityPredIte ::
   Word32 ->
   Word32 ->
   MS.PointerUseTag ->
-  IO (Maybe (Maybe Bool))
+  IO ValidityResult
 runValidityPredIte sym tbl off1 off2 tag = do
   let ?processMacawAssert = defaultProcessMacawAssertion
   let puse = MS.PointerUse Nothing tag
@@ -460,10 +450,8 @@ runValidityPredIte sym tbl off1 off2 tag = do
   offSym <- WI.bvIte sym cond bv1 bv2
   let ptr = CLP.LLVMPointer blkSym offSym
   let ptrEntry = mkRegEntry ptr
-  res <- mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
-  pure $ case res of
-    Nothing -> Nothing
-    Just (LabeledPred p _) -> Just (WI.asConstantPred p)
+  extractValidityResult <$>
+    mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
 
 -- | If a write to a concrete block-0 pointer succeeds (pred = True),
 -- a read at the same pointer must also succeed.
@@ -479,13 +467,14 @@ prop_writeValidImpliesReadValid =
       pure (wr, rd)
     case (writeResult, readResult) of
       -- Write valid → read must be valid
-      (Just (Just True), Just (Just True)) -> H.success
-      (Just (Just True), _) -> do
+      (ValidityTrue, ValidityTrue) -> H.success
+      (ValidityTrue, _) -> do
         H.footnote "Write was valid but read was not"
         H.failure
       -- Write invalid → read may or may not be valid (immutable region)
-      (Just (Just False), Just (Just _)) -> H.success
-      (Just (Just False), _) -> do
+      (ValidityFalse, ValidityTrue)  -> H.success
+      (ValidityFalse, ValidityFalse) -> H.success
+      (ValidityFalse, _) -> do
         H.footnote "Write invalid but read not decidable"
         H.failure
       _ -> H.discard
@@ -506,11 +495,12 @@ prop_iteWriteValidImpliesReadValid =
       pure (wr, rd)
     case (writeResult, readResult) of
       -- Write valid → read must not be invalid
-      (Just (Just True), Just (Just False)) -> do
+      (ValidityTrue, ValidityFalse) -> do
         H.footnote "ite write was valid but ite read was invalid"
         H.failure
-      (Just _, Just _) -> H.success
-      _ -> H.discard
+      (_, NonGlobalBlock) -> H.discard
+      (NonGlobalBlock, _) -> H.discard
+      _ -> H.success
 
 -- | For any concrete block-0 pointer and any map, the predicate
 -- should always simplify to a constant (True or False).
@@ -524,12 +514,13 @@ prop_concreteBlock0Decidable =
     result <- H.evalIO $ withSym $ \sym ->
       runValidityPred sym tbl off tag Nothing
     case result of
-      Just (Just _) -> H.success
-      Just Nothing -> do
+      ValidityTrue  -> H.success
+      ValidityFalse -> H.success
+      ValiditySymbolic -> do
         H.footnote "Concrete block-0 pointer produced non-trivial predicate"
         H.failure
-      Nothing -> do
-        H.footnote "Concrete block-0 pointer returned Nothing"
+      NonGlobalBlock -> do
+        H.footnote "Concrete block-0 pointer returned NonGlobalBlock"
         H.failure
 
 -- | Any concrete non-zero block returns Nothing regardless of map or offset.
@@ -546,11 +537,9 @@ prop_nonZeroBlockNothing =
       let puse = MS.PointerUse Nothing tag
       ptr <- mkPtr sym MC.Addr32 blk (fromIntegral off)
       let ptrEntry = mkRegEntry ptr
-      res <- mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
-      pure $ case res of
-        Nothing -> Nothing
-        Just (LabeledPred p _) -> Just (WI.asConstantPred p)
-    result H.=== Nothing
+      extractValidityResult <$>
+        mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
+    result H.=== NonGlobalBlock
 
 -- | A conditional access with a false condition should always produce
 -- a trivially true predicate (the access doesn't happen).
@@ -564,7 +553,7 @@ prop_falseCondTriviallyTrue =
     result <- H.evalIO $ withSym $ \sym -> do
       let falseCond = CS.RegEntry CT.BoolRepr (WI.falsePred sym)
       runValidityPred sym tbl off tag (Just falseCond)
-    result H.=== Just (Just True)
+    result H.=== ValidityTrue
 
 -- | For an ite'd pointer (ite c off1 off2), if the validity predicate
 -- simplifies to a constant, it must be consistent with both branches.
@@ -586,15 +575,15 @@ prop_itePointerAgreesWhenBranchesAgree =
     -- If the ite result simplifies, it must be consistent with branches.
     case (conc1, conc2, iteResult) of
       -- If ite simplifies to True, both branches must be True
-      (Just (Just True), Just (Just True), Just (Just True)) -> H.success
-      (_, _, Just (Just True)) -> do
+      (ValidityTrue, ValidityTrue, ValidityTrue) -> H.success
+      (_, _, ValidityTrue) -> do
         H.footnote "ite simplified to True but not both branches are True"
         H.failure
       -- If ite simplifies to False, both branches must be False
-      (Just (Just False), Just (Just False), Just (Just False)) -> H.success
-      (_, _, Just (Just False)) -> do
+      (ValidityFalse, ValidityFalse, ValidityFalse) -> H.success
+      (_, _, ValidityFalse) -> do
         H.footnote "ite simplified to False but not both branches are False"
         H.failure
       -- Non-trivial ite result is always acceptable
-      (_, _, Just Nothing) -> H.success
+      (_, _, ValiditySymbolic) -> H.success
       _ -> H.discard
