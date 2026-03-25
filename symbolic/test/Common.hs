@@ -73,16 +73,21 @@ extractValidityResult (Just (CB.LabeledPred p _)) = case WI.asConstantPred p of
   Just False -> ValidityFalse
   Nothing    -> ValiditySymbolic
 
--- | Build an IntervalMap from (lo, hi, mutability) triples using IntervalCO.
-mkMutabilityMap ::
+-- | Split (lo, hi, mutability) triples into separate mutable and immutable
+-- IntervalMaps, matching the split-map API of mkGlobalPointerValidityPredCommon.
+mkSplitMaps ::
   forall w.
   MC.MemWidth w =>
   [(Word64, Word64, CL.Mutability)] ->
-  IM.IntervalMap (MC.MemWord w) CL.Mutability
-mkMutabilityMap entries = IM.fromList
-  [ (IMI.IntervalCO (fromIntegral lo) (fromIntegral hi), mut)
-  | (lo, hi, mut) <- entries
-  ]
+  ( IM.IntervalMap (MC.MemWord w) ()
+  , IM.IntervalMap (MC.MemWord w) ()
+  )
+mkSplitMaps entries =
+  ( IM.fromList [ (iv, ()) | (lo, hi, CL.Mutable)   <- entries
+                            , let iv = IMI.IntervalCO (fromIntegral lo) (fromIntegral hi) ]
+  , IM.fromList [ (iv, ()) | (lo, hi, CL.Immutable) <- entries
+                            , let iv = IMI.IntervalCO (fromIntegral lo) (fromIntegral hi) ]
+  )
 
 -- | Parameterized test for mkGlobalPointerValidityPredCommon.
 testValidityPred ::
@@ -100,7 +105,7 @@ testValidityPred name intervals blk off tag mcondVal expected =
   testCase name $ do
     result <- withSym $ \sym -> do
       let ?processMacawAssert = defaultProcessMacawAssertion
-      let tbl = mkMutabilityMap @32 intervals
+      let (mutMap, immutMap) = mkSplitMaps @32 intervals
       let puse = MS.PointerUse Nothing tag
       ptr <- mkPtr sym MC.Addr32 blk off
       let ptrEntry = mkRegEntry ptr
@@ -110,7 +115,7 @@ testValidityPred name intervals blk off tag mcondVal expected =
           let p = if b then WI.truePred sym else WI.falsePred sym
           pure (Just (CS.RegEntry CT.BoolRepr p))
       extractValidityResult <$>
-        mkGlobalPointerValidityPredCommon tbl sym puse mcondEntry ptrEntry
+        mkGlobalPointerValidityPredCommon mutMap immutMap sym puse mcondEntry ptrEntry
     result @?= expected
 
 -- | Like testValidityPred but for a symbolic block ID.
@@ -125,7 +130,7 @@ testValidityPredSymbolicBlock name intervals off tag expected =
   testCase name $ do
     result <- withSym $ \sym -> do
       let ?processMacawAssert = defaultProcessMacawAssertion
-      let tbl = mkMutabilityMap @32 intervals
+      let (mutMap, immutMap) = mkSplitMaps @32 intervals
       let puse = MS.PointerUse Nothing tag
       blkSym <- WI.freshNat sym (WI.safeSymbol "blk")
       offSym <- WI.bvLit sym (WI.knownNat @32)
@@ -133,7 +138,7 @@ testValidityPredSymbolicBlock name intervals off tag expected =
       let ptr = CLP.LLVMPointer blkSym offSym
       let ptrEntry = mkRegEntry ptr
       extractValidityResult <$>
-        mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
+        mkGlobalPointerValidityPredCommon mutMap immutMap sym puse Nothing ptrEntry
     result @?= expected
 
 -- | Test with a symbolic offset that is an ite of two concrete values.
@@ -150,7 +155,7 @@ testValidityPredIteOffset name intervals off1 off2 tag expected =
   testCase name $ do
     result <- withSym $ \sym -> do
       let ?processMacawAssert = defaultProcessMacawAssertion
-      let tbl = mkMutabilityMap @32 intervals
+      let (mutMap, immutMap) = mkSplitMaps @32 intervals
       let puse = MS.PointerUse Nothing tag
       blkSym <- WI.natLit sym 0
       let w32 = WI.knownNat @32
@@ -161,7 +166,7 @@ testValidityPredIteOffset name intervals off1 off2 tag expected =
       let ptr = CLP.LLVMPointer blkSym offSym
       let ptrEntry = mkRegEntry ptr
       extractValidityResult <$>
-        mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
+        mkGlobalPointerValidityPredCommon mutMap immutMap sym puse Nothing ptrEntry
     result @?= expected
 
 ------------------------------------------------------------------------
@@ -391,11 +396,17 @@ genIntervalEntries = do
         then pure (reverse acc)
         else go (remaining - 1) hi (IntervalEntry lo hi mut : acc)
 
-entriesToMap :: [IntervalEntry] -> IM.IntervalMap (MC.MemWord 32) CL.Mutability
-entriesToMap entries = IM.fromList
-  [ (IMI.IntervalCO (fromIntegral (ieLo e)) (fromIntegral (ieHi e)), ieMut e)
-  | e <- entries
-  ]
+entriesToSplitMaps ::
+  [IntervalEntry] ->
+  ( IM.IntervalMap (MC.MemWord 32) ()
+  , IM.IntervalMap (MC.MemWord 32) ()
+  )
+entriesToSplitMaps entries =
+  ( IM.fromList [ (iv, ()) | e <- entries, ieMut e == CL.Mutable
+                            , let iv = IMI.IntervalCO (fromIntegral (ieLo e)) (fromIntegral (ieHi e)) ]
+  , IM.fromList [ (iv, ()) | e <- entries, ieMut e == CL.Immutable
+                            , let iv = IMI.IntervalCO (fromIntegral (ieLo e)) (fromIntegral (ieHi e)) ]
+  )
 
 genOffset :: H.Gen Word32
 genOffset = Gen.word32 (Range.linearFrom 100 0 maxBound)
@@ -407,18 +418,19 @@ genOffset = Gen.word32 (Range.linearFrom 100 0 maxBound)
 -- | Helper to run mkGlobalPointerValidityPredCommon with concrete block-0 pointer.
 runValidityPred ::
   WEB.ExprBuilder t WE.EmptyExprBuilderState (WEB.Flags WEB.FloatIEEE) ->
-  IM.IntervalMap (MC.MemWord 32) CL.Mutability ->
+  IM.IntervalMap (MC.MemWord 32) () ->
+  IM.IntervalMap (MC.MemWord 32) () ->
   Word32 ->
   MS.PointerUseTag ->
   Maybe (CS.RegEntry (WEB.ExprBuilder t WE.EmptyExprBuilderState (WEB.Flags WEB.FloatIEEE)) CT.BoolType) ->
   IO ValidityResult
-runValidityPred sym tbl off tag mcondEntry = do
+runValidityPred sym mutMap immutMap off tag mcondEntry = do
   let ?processMacawAssert = defaultProcessMacawAssertion
   let puse = MS.PointerUse Nothing tag
   ptr <- mkPtr sym MC.Addr32 0 (fromIntegral off)
   let ptrEntry = mkRegEntry ptr
   extractValidityResult <$>
-    mkGlobalPointerValidityPredCommon tbl sym puse mcondEntry ptrEntry
+    mkGlobalPointerValidityPredCommon mutMap immutMap sym puse mcondEntry ptrEntry
 
 -- | Generate an offset that is likely to land in a mapped region.
 genOffsetInEntries :: [IntervalEntry] -> H.Gen Word32
@@ -434,12 +446,13 @@ genOffsetInEntries entries = Gen.choice
 -- | Helper to run mkGlobalPointerValidityPredCommon with an ite'd block-0 pointer.
 runValidityPredIte ::
   WEB.ExprBuilder t WE.EmptyExprBuilderState (WEB.Flags WEB.FloatIEEE) ->
-  IM.IntervalMap (MC.MemWord 32) CL.Mutability ->
+  IM.IntervalMap (MC.MemWord 32) () ->
+  IM.IntervalMap (MC.MemWord 32) () ->
   Word32 ->
   Word32 ->
   MS.PointerUseTag ->
   IO ValidityResult
-runValidityPredIte sym tbl off1 off2 tag = do
+runValidityPredIte sym mutMap immutMap off1 off2 tag = do
   let ?processMacawAssert = defaultProcessMacawAssertion
   let puse = MS.PointerUse Nothing tag
   let w32 = WI.knownNat @32
@@ -451,7 +464,7 @@ runValidityPredIte sym tbl off1 off2 tag = do
   let ptr = CLP.LLVMPointer blkSym offSym
   let ptrEntry = mkRegEntry ptr
   extractValidityResult <$>
-    mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
+    mkGlobalPointerValidityPredCommon mutMap immutMap sym puse Nothing ptrEntry
 
 -- | If a write to a concrete block-0 pointer succeeds (pred = True),
 -- a read at the same pointer must also succeed.
@@ -460,10 +473,10 @@ prop_writeValidImpliesReadValid =
   H.withTests 10000 $ H.property $ do
     entries <- H.forAll genIntervalEntries
     off <- H.forAll (genOffsetInEntries entries)
-    let tbl = entriesToMap entries
+    let (mutMap, immutMap) = entriesToSplitMaps entries
     (writeResult, readResult) <- H.evalIO $ withSym $ \sym -> do
-      wr <- runValidityPred sym tbl off MS.PointerWrite Nothing
-      rd <- runValidityPred sym tbl off MS.PointerRead Nothing
+      wr <- runValidityPred sym mutMap immutMap off MS.PointerWrite Nothing
+      rd <- runValidityPred sym mutMap immutMap off MS.PointerRead Nothing
       pure (wr, rd)
     case (writeResult, readResult) of
       -- Write valid → read must be valid
@@ -488,10 +501,10 @@ prop_iteWriteValidImpliesReadValid =
     entries <- H.forAll genIntervalEntries
     off1 <- H.forAll (genOffsetInEntries entries)
     off2 <- H.forAll (genOffsetInEntries entries)
-    let tbl = entriesToMap entries
+    let (mutMap, immutMap) = entriesToSplitMaps entries
     (writeResult, readResult) <- H.evalIO $ withSym $ \sym -> do
-      wr <- runValidityPredIte sym tbl off1 off2 MS.PointerWrite
-      rd <- runValidityPredIte sym tbl off1 off2 MS.PointerRead
+      wr <- runValidityPredIte sym mutMap immutMap off1 off2 MS.PointerWrite
+      rd <- runValidityPredIte sym mutMap immutMap off1 off2 MS.PointerRead
       pure (wr, rd)
     case (writeResult, readResult) of
       -- Write valid → read must not be invalid
@@ -510,9 +523,9 @@ prop_concreteBlock0Decidable =
     entries <- H.forAll genIntervalEntries
     off <- H.forAll genOffset
     tag <- H.forAll (Gen.element [MS.PointerRead, MS.PointerWrite])
-    let tbl = entriesToMap entries
+    let (mutMap, immutMap) = entriesToSplitMaps entries
     result <- H.evalIO $ withSym $ \sym ->
-      runValidityPred sym tbl off tag Nothing
+      runValidityPred sym mutMap immutMap off tag Nothing
     case result of
       ValidityTrue  -> H.success
       ValidityFalse -> H.success
@@ -531,14 +544,14 @@ prop_nonZeroBlockNothing =
     off <- H.forAll genOffset
     blk <- H.forAll (Gen.integral (Range.linear 1 100))
     tag <- H.forAll (Gen.element [MS.PointerRead, MS.PointerWrite])
-    let tbl = entriesToMap entries
+    let (mutMap, immutMap) = entriesToSplitMaps entries
     result <- H.evalIO $ withSym $ \sym -> do
       let ?processMacawAssert = defaultProcessMacawAssertion
       let puse = MS.PointerUse Nothing tag
       ptr <- mkPtr sym MC.Addr32 blk (fromIntegral off)
       let ptrEntry = mkRegEntry ptr
       extractValidityResult <$>
-        mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
+        mkGlobalPointerValidityPredCommon mutMap immutMap sym puse Nothing ptrEntry
     result H.=== NonGlobalBlock
 
 -- | A conditional access with a false condition should always produce
@@ -549,10 +562,10 @@ prop_falseCondTriviallyTrue =
     entries <- H.forAll genIntervalEntries
     off <- H.forAll genOffset
     tag <- H.forAll (Gen.element [MS.PointerRead, MS.PointerWrite])
-    let tbl = entriesToMap entries
+    let (mutMap, immutMap) = entriesToSplitMaps entries
     result <- H.evalIO $ withSym $ \sym -> do
       let falseCond = CS.RegEntry CT.BoolRepr (WI.falsePred sym)
-      runValidityPred sym tbl off tag (Just falseCond)
+      runValidityPred sym mutMap immutMap off tag (Just falseCond)
     result H.=== ValidityTrue
 
 -- | For an ite'd pointer (ite c off1 off2), if the validity predicate
@@ -566,11 +579,11 @@ prop_itePointerAgreesWhenBranchesAgree =
     off1 <- H.forAll (genOffsetInEntries entries)
     off2 <- H.forAll (genOffsetInEntries entries)
     tag <- H.forAll (Gen.element [MS.PointerRead, MS.PointerWrite])
-    let tbl = entriesToMap entries
+    let (mutMap, immutMap) = entriesToSplitMaps entries
     (conc1, conc2, iteResult) <- H.evalIO $ withSym $ \sym -> do
-      r1 <- runValidityPred sym tbl off1 tag Nothing
-      r2 <- runValidityPred sym tbl off2 tag Nothing
-      ri <- runValidityPredIte sym tbl off1 off2 tag
+      r1 <- runValidityPred sym mutMap immutMap off1 tag Nothing
+      r2 <- runValidityPred sym mutMap immutMap off2 tag Nothing
+      ri <- runValidityPredIte sym mutMap immutMap off1 off2 tag
       pure (r1, r2, ri)
     -- If the ite result simplifies, it must be consistent with branches.
     case (conc1, conc2, iteResult) of

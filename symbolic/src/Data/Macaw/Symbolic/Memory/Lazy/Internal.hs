@@ -973,15 +973,9 @@ mkGlobalPointerValidityPred ::
   => MemPtrTable sym w
   -> MS.MkGlobalPointerValidityAssertion sym w
 mkGlobalPointerValidityPred mpt =
-  \sym puse mcond ptr ->
-    let tbl = case MS.pointerUseTag puse of
-                MS.PointerWrite ->
-                  CL.Mutable <$ memMutableTable mpt
-                MS.PointerRead ->
-                  (CL.Mutable <$ memMutableTable mpt)
-                  `IM.union`
-                  (CL.Immutable <$ memImmutableTable mpt)
-    in MSMC.mkGlobalPointerValidityPredCommon tbl sym puse mcond ptr
+  MSMC.mkGlobalPointerValidityPredCommon
+    (memMutableTable mpt)
+    (memImmutableTable mpt)
 
 -- | Construct a translator for machine addresses into LLVM memory model pointers.
 --
