@@ -144,7 +144,8 @@ memModelConfig bak mpt =
     , MS.lookupSyscallHandle = MS.unsupportedSyscalls origin
     , MS.mkGlobalPointerValidityAssertion = mkGlobalPointerValidityPred mpt
     , MS.resolvePointer = MSC.resolveLLVMPtr bak
-    , MS.concreteUnmutatedGlobalRead = concreteUnmutatedGlobalRead sym (memPtrTable mpt) (byteCache mpt) (CLP.llvmPointerBlock (memPtr mpt)) (memModelContents mpt)
+    -- Pass both mutable and immutable tables separately
+    , MS.concreteUnmutatedGlobalRead = concreteUnmutatedGlobalRead sym (memMutableTable mpt) (memImmutableTable mpt) (byteCache mpt) (CLP.llvmPointerBlock (memPtr mpt)) (memModelContents mpt)
     , MS.lazilyPopulateGlobalMem = lazilyPopulateGlobalMemArr bak mpt
     }
   where
@@ -154,13 +155,14 @@ memModelConfig bak mpt =
 -- | An index of all of the (statically) mapped memory in a program, suitable
 -- for pointer translation.
 data MemPtrTable sym w = MemPtrTable
-  { memPtrTable :: IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym)
-  -- ^ The ranges of (static) allocations that are mapped. Unlike the
-  -- 'memPtrTable' in "Data.Macaw.Symbolic.Memory", for which the ranges of the
-  -- intervals precisely correspond to the boundaries of the 'MemChunk's in the
-  -- binary, this version of 'memPtrTable' has narrower intervals, each one no
-  -- longer than 'chunkSize'. (See @Note [Lazy memory model]@ for an explanation
-  -- of why we do this.)
+  { memMutableTable :: IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym)
+  -- ^ Mutable memory regions, chunked into intervals of at most 'chunkSize'
+  -- bytes for fine-grained lazy population.
+  -- See @Note [Lazy memory model]@.
+  , memImmutableTable :: IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym)
+  -- ^ Immutable (read-only) memory regions, also chunked to 'chunkSize'.
+  -- Used directly by 'concreteImmutableGlobalRead' for concrete reads, and
+  -- lazily populated into the SMT array for symbolic reads.
   , memPtr :: CL.LLVMPtr sym w
   -- ^ The pointer to the allocation backing all of memory.
   , memPtrArray :: WI.SymArray sym (Ctx.SingleCtx (WI.BaseBVType w)) (WI.BaseBVType 8)
@@ -319,19 +321,26 @@ sliceContiguousChunks ::
   -- ^ The address being read from
   Int ->
   -- ^ Number of bytes to read
+  [(IMI.Interval a, SymbolicMemChunk sym)] ->
+  -- ^ Mutable chunks
+  [(IMI.Interval a, SymbolicMemChunk sym)] ->
+  -- ^ Immutable chunks
   MSMC.MemoryModelContents ->
   -- ^ How mutable memory is modeled
   IS.IntervalSet (IMI.Interval a) ->
   -- ^ Populated chunks (we cannot use mutable chunks in this set)
-  [(IMI.Interval a, SymbolicMemChunk sym)] ->
   Maybe [WI.SymBV sym 8]
-sliceContiguousChunks cache addr numBytes memContents populatedChunks =
-  \case
+sliceContiguousChunks cache addr numBytes mutChunks immutChunks memContents populatedChunks =
+  let -- Tag chunks with mutability and merge
+      taggedMut = map (\(i, c) -> (i, c, True)) mutChunks
+      taggedImmut = map (\(i, c) -> (i, c, False)) immutChunks
+      allChunks = mergeSorted taggedMut taggedImmut
+  in case allChunks of
     _ | numBytes <= 0 -> Just []
     [] -> Nothing
-    ((firstI, firstC) : rest) -> do
+    ((firstI, firstC, isMutable) : rest) -> do
       guard (addr >= IMI.lowerBound firstI)
-      guard (validChunk firstI firstC)
+      guard (validChunk firstI isMutable)
       let skip = convert (addr - IMI.lowerBound firstI)
           firstLen = intervalLen firstI
           avail = firstLen - skip
@@ -343,12 +352,20 @@ sliceContiguousChunks cache addr numBytes memContents populatedChunks =
   where
     convert = fromIntegral @a @Int
 
-    validChunk :: IMI.Interval a -> SymbolicMemChunk sym -> Bool
-    validChunk interval chunk =
-      case smcMutability chunk of
-        CL.Immutable -> True
-        CL.Mutable -> memContents /= MSMC.SymbolicMutable
-                    && interval `IS.notMember` populatedChunks
+    -- Merge two sorted lists of intervals
+    mergeSorted :: [(IMI.Interval a, SymbolicMemChunk sym, Bool)]
+                -> [(IMI.Interval a, SymbolicMemChunk sym, Bool)]
+                -> [(IMI.Interval a, SymbolicMemChunk sym, Bool)]
+    mergeSorted [] ys = ys
+    mergeSorted xs [] = xs
+    mergeSorted (x@(ix, _, _) : xs) (y@(iy, _, _) : ys)
+      | IMI.lowerBound ix <= IMI.lowerBound iy = x : mergeSorted xs (y:ys)
+      | otherwise = y : mergeSorted (x:xs) ys
+
+    validChunk :: IMI.Interval a -> Bool -> Bool
+    validChunk interval isMutable =
+      not isMutable || (memContents /= MSMC.SymbolicMutable
+                    && interval `IS.notMember` populatedChunks)
 
     -- We expect IntervalCOs
     intervalLen :: IMI.Interval a -> Int
@@ -373,14 +390,14 @@ sliceContiguousChunks cache addr numBytes memContents populatedChunks =
 
     go ::
       IMI.Interval a -> Int -> [WI.SymBV sym 8] ->
-      [(IMI.Interval a, SymbolicMemChunk sym)] ->
+      [(IMI.Interval a, SymbolicMemChunk sym, Bool)] ->
       Maybe [WI.SymBV sym 8]
     go prev remaining acc = \case
       _ | remaining <= 0 -> X.assert (length acc == numBytes) $ Just acc
       [] -> Nothing
-      ((ival, chunk) : rest) -> do
+      ((ival, chunk, isMutable) : rest) -> do
         guard (checkContiguous prev ival)
-        guard (validChunk ival chunk)
+        guard (validChunk ival isMutable)
         let chunkLen = intervalLen ival
         let remaining' = remaining - chunkLen
         -- (++) is O(n^2), but these lists are a maximum of 8 elements (bytes)
@@ -636,14 +653,15 @@ newMergedGlobalMemoryWith hooks _proxy bak endian mmc mems = do
                          "Global memory for macaw-symbolic"
                          memImpl1 sizeBV CLD.noAlignment
 
-  tbl <- mergedMemorySymbolicMemChunks bak hooks mems
+  (mutTbl, immutTbl) <- mergedMemorySymbolicMemChunks bak hooks mems
 
   -- Create the shared byte cache once (all 256 possible byte values)
   cache <- liftIO $ MBC.mkByteCache sym
 
   memImpl3 <- liftIO $ CL.doArrayStore bak memImpl2 ptr CLD.noAlignment symArray sizeBV
   let ptrTable = MemPtrTable
-                   { memPtrTable = tbl
+                   { memMutableTable = mutTbl
+                   , memImmutableTable = immutTbl
                    , memPtr = ptr
                    , memPtrArray = symArray
                    , memModelContents = mmc
@@ -652,9 +670,9 @@ newMergedGlobalMemoryWith hooks _proxy bak endian mmc mems = do
 
   return (memImpl3, ptrTable)
 
--- | Construct an 'IM.IntervalMap' mapping regions of memory to their bytes,
--- representing as 'SymbolicMemChunk's. The regions of memory are split apart
--- to be in units no larger than 'chunkSize' bytes.
+-- | Construct two 'IM.IntervalMap's mapping regions of memory to their bytes,
+-- representing as 'SymbolicMemChunk's. Returns @(mutableMap, immutableMap)@.
+-- Both maps have intervals split into units no larger than 'chunkSize' bytes.
 -- See @Note [Lazy memory model]@.
 mergedMemorySymbolicMemChunks ::
   forall sym bak t w m.
@@ -666,22 +684,31 @@ mergedMemorySymbolicMemChunks ::
   bak ->
   MSMC.GlobalMemoryHooks w ->
   t (MC.Memory w) ->
-  m (IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym))
-mergedMemorySymbolicMemChunks bak hooks mems =
-  fmap (IM.fromList . concat) $ traverse memorySymbolicMemChunks mems
+  m ( IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym)
+    , IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym)
+    )
+mergedMemorySymbolicMemChunks bak hooks mems = do
+  pairs <- traverse memorySymbolicMemChunks mems
+  let (muts, immuts) = foldMap id pairs
+  pure (IM.fromList muts, IM.fromList immuts)
   where
     memorySymbolicMemChunks ::
       MC.Memory w ->
-      m [(IM.Interval (MC.MemWord w), SymbolicMemChunk sym)]
-    memorySymbolicMemChunks mem = concat <$>
-      traverse (segmentSymbolicMemChunks mem) (MC.memSegments mem)
+      m ( [(IM.Interval (MC.MemWord w), SymbolicMemChunk sym)]
+        , [(IM.Interval (MC.MemWord w), SymbolicMemChunk sym)]
+        )
+    memorySymbolicMemChunks mem = do
+      pairs <- traverse (segmentSymbolicMemChunks mem) (MC.memSegments mem)
+      pure (foldMap id pairs)
 
     segmentSymbolicMemChunks ::
       MC.Memory w ->
       MC.MemSegment w ->
-      m [(IM.Interval (MC.MemWord w), SymbolicMemChunk sym)]
-    segmentSymbolicMemChunks mem seg = concat <$>
-      traverse
+      m ( [(IM.Interval (MC.MemWord w), SymbolicMemChunk sym)]
+        , [(IM.Interval (MC.MemWord w), SymbolicMemChunk sym)]
+        )
+    segmentSymbolicMemChunks mem seg = do
+      pairs <- traverse
         (\(addr, chunk) -> do
           let mut | MMP.isReadonly (MC.segmentFlags seg) = CL.Immutable
                   | otherwise                            = CL.Mutable
@@ -694,12 +721,14 @@ mergedMemorySymbolicMemChunks bak hooks mems =
           (smcChunks, size) <- memChunkToSymbolic mut mem seg addr chunk
           let interval = IM.IntervalCO absAddr (absAddr + fromIntegral size)
           let intervalChunks = chunksOfInterval (fromIntegral chunkSize) interval
-          -- The length of these two lists should be the same, as
-          -- @chunksOfInterval size@ should return a list of the same
-          -- size as @Split.chunksOf size@.
-          pure $ X.assert (length intervalChunks == length smcChunks)
-               $ zip intervalChunks smcChunks)
+          let ichunks = X.assert (length intervalChunks == length smcChunks)
+                      $ zip intervalChunks smcChunks
+          case mut of
+            CL.Mutable   -> pure (ichunks, [])
+            CL.Immutable -> pure ([], ichunks)
+        )
         (MC.relativeSegmentContents [seg])
+      pure (foldMap id pairs)
 
     memChunkToSymbolic ::
       CL.Mutability ->
@@ -744,7 +773,9 @@ concreteUnmutatedGlobalRead ::
   ) =>
   sym ->
   IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym) ->
-  -- ^ The interval map of global memory chunks
+  -- ^ The interval map of mutable memory chunks
+  IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym) ->
+  -- ^ The interval map of immutable memory chunks
   MBC.ByteCache sym ->
   -- ^ Byte cache for creating symbolic expressions on demand
   WI.SymNat sym ->
@@ -752,9 +783,9 @@ concreteUnmutatedGlobalRead ::
   MSMC.MemoryModelContents ->
   -- ^ How mutable memory is modeled
   MS.ConcreteUnmutatedGlobalRead p sym w
-concreteUnmutatedGlobalRead sym imap cache memPtrBlk memContents personality =
+concreteUnmutatedGlobalRead sym mutMap immutMap cache memPtrBlk memContents personality =
   let popChunks = personality ^. MS.populatedMemChunks in
-  concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache memPtrBlk memContents popChunks
+  concreteUnmutatedGlobalReadWithPopulatedChunks sym mutMap immutMap cache memPtrBlk memContents popChunks
 
 concreteUnmutatedGlobalReadWithPopulatedChunks ::
   forall sym w ty.
@@ -763,6 +794,9 @@ concreteUnmutatedGlobalReadWithPopulatedChunks ::
   ) =>
   sym ->
   IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym) ->
+  -- ^ The interval map of mutable memory chunks
+  IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym) ->
+  -- ^ The interval map of immutable memory chunks
   MBC.ByteCache sym ->
   WI.SymNat sym ->
   MSMC.MemoryModelContents ->
@@ -770,7 +804,7 @@ concreteUnmutatedGlobalReadWithPopulatedChunks ::
   MC.MemRepr ty ->
   CL.LLVMPtr sym w ->
   IO (Maybe (CS.RegValue sym (MS.ToCrucibleType ty)))
-concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache memPtrBlk memContents populatedChunks memRep ptr
+concreteUnmutatedGlobalReadWithPopulatedChunks sym mutMap immutMap cache memPtrBlk memContents populatedChunks memRep ptr
   | -- First, check that the pointer being read from is concrete.
     Just ptrBlkNat <- WI.asNat ptrBlk
   , Just addrBV    <- WI.asBV ptrOff
@@ -784,9 +818,11 @@ concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache memPtrBlk memConte
     -- contiguous, unmutated bytes covering the full read.
   , let addr = fromInteger @(MC.MemWord w) $ BV.asUnsigned addrBV
   , let endAddr = addr + fromIntegral @Int @(MC.MemWord w) numBytes
-  , let chunks = IM.toAscList $
-          imap `IM.intersecting` IMI.IntervalCO addr endAddr
-  , Just bytes <- sliceContiguousChunks cache addr numBytes memContents populatedChunks chunks
+  , let mutChunks = IM.toAscList $
+          mutMap `IM.intersecting` IMI.IntervalCO addr endAddr
+  , let immutChunks = IM.toAscList $
+          immutMap `IM.intersecting` IMI.IntervalCO addr endAddr
+  , Just bytes <- sliceContiguousChunks cache addr numBytes mutChunks immutChunks memContents populatedChunks
   = do readVal <- readBytesAsRegValue sym memRep bytes
        pure $ Just readVal
 
@@ -809,7 +845,7 @@ lazilyPopulateGlobalMemArr ::
   MemPtrTable sym w ->
   -- ^ The global memory
   MS.LazilyPopulateGlobalMem p sym ext w
-lazilyPopulateGlobalMemArr bak mpt memRep ptr state
+lazilyPopulateGlobalMemArr bak mpt useTag memRep ptr state
   | -- We only wish to populate the array backing global memory if we know for
     -- sure that we are reading from the global pointer. If we're reading from a
     -- different pointer, there's no need to bother populating the array.
@@ -842,8 +878,19 @@ lazilyPopulateGlobalMemArr bak mpt memRep ptr state
     -- of reading from/writing to the pointer.  We build an interval
     -- [ptr, ptr+memRepSize] and load all of the chunks in global memory that
     -- overlap with the interval.
-    tbl = IM.toAscList $ memPtrTable mpt `IM.intersecting`
-                           (ptrInterval `extendUpperBound` memRepSize)
+    --
+    -- For writes, only mutable chunks are populated (writes to immutable
+    -- regions are rejected by mkGlobalPointerValidityPred). For reads,
+    -- both mutable and immutable chunks are populated (immutable data may
+    -- be needed in the SMT array for symbolic reads that fall through
+    -- concreteImmutableGlobalRead).
+    tbl = let accessInterval = ptrInterval `extendUpperBound` memRepSize
+          in case useTag of
+               MS.PointerWrite ->
+                 IM.toAscList $ memMutableTable mpt `IM.intersecting` accessInterval
+               MS.PointerRead ->
+                 IM.toAscList (memMutableTable mpt `IM.intersecting` accessInterval)
+                 ++ IM.toAscList (memImmutableTable mpt `IM.intersecting` accessInterval)
     memRepSize = fromIntegral $ MC.memReprBytes memRep
 
     -- ptrInterval is an interval representing the possible values that ptr
@@ -950,7 +997,15 @@ mkGlobalPointerValidityPred ::
   => MemPtrTable sym w
   -> MS.MkGlobalPointerValidityAssertion sym w
 mkGlobalPointerValidityPred mpt =
-  MSMC.mkGlobalPointerValidityPredCommon $ fmap smcMutability $ memPtrTable mpt
+  \sym puse mcond ptr ->
+    let tbl = case MS.pointerUseTag puse of
+                MS.PointerWrite ->
+                  fmap smcMutability (memMutableTable mpt)
+                MS.PointerRead ->
+                  fmap smcMutability (memMutableTable mpt)
+                  `IM.union`
+                  fmap smcMutability (memImmutableTable mpt)
+    in MSMC.mkGlobalPointerValidityPredCommon tbl sym puse mcond ptr
 
 -- | Construct a translator for machine addresses into LLVM memory model pointers.
 --

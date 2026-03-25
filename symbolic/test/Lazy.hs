@@ -177,7 +177,7 @@ testImmutableRead repr name chunks readAddr memRepr expected = testCase name $ d
     let imap = mkIntervalMap memChunks
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym repr readAddr
-    res <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty memRepr ptr
+    res <- concreteUnmutatedGlobalReadWithPopulatedChunks sym (mkIntervalMap []) imap cache globalBlk ConcreteMutable IS.empty memRepr ptr
     pure $ case res of
       Nothing -> Nothing
       Just val -> extractLEBytes val (fromIntegral $ MC.memReprBytes memRepr)
@@ -232,7 +232,7 @@ readFromOffsetSymbolicBytes = testCase "Read from offset within SymbolicBytes ch
     globalBlk <- WI.natLit sym globalBlock
     -- Read 2 bytes starting at address 101 (offset 1 into the chunk)
     ptr <- mkGlobalPtr sym MC.Addr32 101
-    res <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv2 ptr
+    res <- concreteUnmutatedGlobalReadWithPopulatedChunks sym (mkIntervalMap []) imap cache globalBlk ConcreteMutable IS.empty bv2 ptr
     pure $ case res of
       Nothing -> Nothing
       Just val -> extractLEBytes val 2
@@ -298,7 +298,7 @@ wrongBlockReturnsNothing = testCase "Wrong block returns Nothing" $ do
     let imap = mkIntervalMap @32 [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkPtr sym MC.Addr32 2 100  -- block 2, but global is block 1
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv1 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym (mkIntervalMap []) imap cache globalBlk ConcreteMutable IS.empty bv1 ptr
     pure (isNothing r)
   assertBool "wrong block should return Nothing" result
 
@@ -312,7 +312,7 @@ symbolicOffsetReturnsNothing = testCase "Symbolic offset returns Nothing" $ do
     blkSym <- WI.natLit sym globalBlock
     offSym <- WI.freshConstant sym (WI.safeSymbol "off") (WI.BaseBVRepr (WI.knownNat @32))
     let ptr = CLP.LLVMPointer blkSym offSym
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv1 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym (mkIntervalMap []) imap cache globalBlk ConcreteMutable IS.empty bv1 ptr
     pure (isNothing r)
   assertBool "symbolic offset should return Nothing" result
 
@@ -320,11 +320,12 @@ unpopulatedMutableRegionReturnsJust :: TestTree
 unpopulatedMutableRegionReturnsJust = testCase "Unpopulated mutable region returns concrete bytes" $ do
   result <- withSym $ \sym -> do
     cache <- mkByteCache sym
+    -- The conc-reads optimization allows reading from unpopulated mutable regions
     let chunk = mkChunk [0xAA, 0xBB] CL.Mutable
-    let imap = mkIntervalMap @32 [(100, chunk)]
+    let mutMap = mkIntervalMap @32 [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym MC.Addr32 100
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv1 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym mutMap (mkIntervalMap []) cache globalBlk ConcreteMutable IS.empty bv1 ptr
     pure $ case r of
       Nothing -> Nothing
       Just val -> extractLEBytes val 1
@@ -335,12 +336,12 @@ populatedMutableRegionReturnsNothing = testCase "Populated mutable region return
   result <- withSym $ \sym -> do
     cache <- mkByteCache sym
     let chunk = mkChunk [0xAA, 0xBB] CL.Mutable
-    let imap = mkIntervalMap @32 [(100, chunk)]
+    let mutMap = mkIntervalMap @32 [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym MC.Addr32 100
     -- Mark the chunk as populated
     let populated = IS.singleton (IMI.IntervalCO 100 102)
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable populated bv1 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym mutMap (mkIntervalMap []) cache globalBlk ConcreteMutable populated bv1 ptr
     pure (isNothing r)
   assertBool "populated mutable region should return Nothing" result
 
@@ -352,7 +353,7 @@ symbolicMutableUnpopulatedReturnsNothing = testCase "SymbolicMutable: unpopulate
     let imap = mkIntervalMap @32 [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym MC.Addr32 100
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk SymbolicMutable IS.empty bv1 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap (mkIntervalMap []) cache globalBlk SymbolicMutable IS.empty bv1 ptr
     pure (isNothing r)
   assertBool "SymbolicMutable mutable region should return Nothing even when unpopulated" result
 
@@ -376,7 +377,7 @@ nonContiguousRegionsReturnsNothing = testCase "Non-contiguous regions returns No
           ]
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym MC.Addr32 100
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv2 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym (mkIntervalMap []) imap cache globalBlk ConcreteMutable IS.empty bv2 ptr
     pure (isNothing r)
   assertBool "non-contiguous regions should return Nothing" result
 
@@ -401,15 +402,14 @@ readAdjacentMutableChunkReturnsJust = testCase "Read with adjacent mutable chunk
   result <- withSym $ \sym -> do
     cache <- mkByteCache sym
     let immChunk = mkChunk [0xAA, 0xBB] CL.Immutable
-    let mutChunk = mkChunk [0xCC, 0xDD] CL.Mutable
-    -- [100, 102) immutable, [102, 104) mutable
+    -- Only the immutable map is passed to concreteImmutableGlobalRead;
+    -- the mutable chunk at [102, 104) lives in memMutableTable.
     let imap = IM.fromList
           [ (IMI.IntervalCO (100 :: MC.MemWord 32) 102, immChunk)
-          , (IMI.IntervalCO 102 104, mutChunk)
           ]
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym MC.Addr32 100
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv2 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym (mkIntervalMap []) imap cache globalBlk ConcreteMutable IS.empty bv2 ptr
     pure $ case r of
       Nothing -> Nothing
       Just val -> extractLEBytes val 2
@@ -506,19 +506,46 @@ data MemorySpace = MemorySpace
 sliceBytes :: BS.ByteString -> Word32 -> Int -> [Word8]
 sliceBytes bs offset len = BS.unpack $ BS.take len $ BS.drop (fromIntegral offset) bs
 
--- | Build an IntervalMap from a MemorySpace.
--- Extracts bytes from the ByteString and creates symbolic chunks.
-memorySpaceToIntervalMap ::
+-- | Build an IntervalMap containing only immutable chunks from a MemorySpace.
+-- This mirrors how concreteImmutableGlobalRead only receives memImmutableTable.
+memorySpaceToImmutableIntervalMap ::
   MemorySpace ->
   IM.IntervalMap (MC.MemWord 32) (SymbolicMemChunk sym)
-memorySpaceToIntervalMap memSpace =
+memorySpaceToImmutableIntervalMap memSpace =
   let chunks =
         [ ( word32ToWord64 (mcsBaseAddr s)
           , mkChunk chunkBytes (mcsMutability s) )
         | s <- msChunks memSpace
+        , mcsMutability s == CL.Immutable
         , let chunkBytes = sliceBytes (msBytes memSpace) (mcsBaseAddr s) (mcsLength s)
         ]
   in mkIntervalMap chunks
+
+-- | Build a mutable interval map from a MemorySpace (only mutable chunks).
+memorySpaceToMutableIntervalMap ::
+  MemorySpace ->
+  IM.IntervalMap (MC.MemWord 32) (SymbolicMemChunk sym)
+memorySpaceToMutableIntervalMap memSpace =
+  let chunks =
+        [ ( word32ToWord64 (mcsBaseAddr s)
+          , mkChunk chunkBytes (mcsMutability s) )
+        | s <- msChunks memSpace
+        , mcsMutability s == CL.Mutable
+        , let chunkBytes = sliceBytes (msBytes memSpace) (mcsBaseAddr s) (mcsLength s)
+        ]
+  in mkIntervalMap chunks
+
+-- | Build a mutability map from a MemorySpace (all chunks, with mutability).
+memorySpaceToMutabilityMap ::
+  MemorySpace ->
+  IM.IntervalMap (MC.MemWord 32) CL.Mutability
+memorySpaceToMutabilityMap memSpace = IM.fromList
+  [ ( IMI.IntervalCO
+        (checkedToMemWord @32 (word32ToWord64 (mcsBaseAddr s)))
+        (checkedToMemWord @32 (word32ToWord64 (mcsBaseAddr s) + fromIntegral (mcsLength s)))
+    , mcsMutability s )
+  | s <- msChunks memSpace
+  ]
 
 -- | Generate a memory space with random bytes and non-overlapping chunks.
 -- The ByteString is large enough that ByteString[i] corresponds to address i.
@@ -594,7 +621,8 @@ prop_concreteUnmutatedGlobalRead = testPropertyNamed
     -- Return either Nothing (function declined) or Just (list of bytes).
     result <- evalIO $ withSym $ \sym -> do
       cache <- mkByteCache sym
-      let imap = memorySpaceToIntervalMap memSpace
+      let mutMap = memorySpaceToMutableIntervalMap memSpace
+      let immutMap = memorySpaceToImmutableIntervalMap memSpace
       globalBlk <- WI.natLit sym globalBlock
       ptr <- mkPtr sym MC.Addr32 (rrBlockNum req) (word32ToWord64 (rrOffset req))
 
@@ -603,7 +631,7 @@ prop_concreteUnmutatedGlobalRead = testPropertyNamed
           Nothing -> fail $ "bvMemReprForSize failed for size " ++ show (rrSize req) ++ " (generator bug)"
           Just r -> pure r
 
-      r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty repr ptr
+      r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym mutMap immutMap cache globalBlk ConcreteMutable IS.empty repr ptr
       pure $ case r of
         Nothing -> Nothing
         Just v -> extractLEBytes v (rrSize req)
@@ -637,7 +665,8 @@ prop_readValidityConsistency = testPropertyNamed
     (readSucceeded, validityResult) <- evalIO $ withSym $ \sym -> do
       let ?processMacawAssert = defaultProcessMacawAssertion
       cache <- mkByteCache sym
-      let imap = memorySpaceToIntervalMap memSpace
+      let mutMap = memorySpaceToMutableIntervalMap memSpace
+      let immutMap = memorySpaceToImmutableIntervalMap memSpace
       let blk = 0 :: Natural
       globalBlk <- WI.natLit sym blk
       ptr <- mkPtr sym MC.Addr32 blk (word32ToWord64 off)
@@ -647,12 +676,14 @@ prop_readValidityConsistency = testPropertyNamed
           Nothing -> fail $ "bvMemReprForSize failed for size " ++ show sz ++ " (generator bug)"
           Just r -> pure r
 
-      readResult <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty repr ptr
+      readResult <- concreteUnmutatedGlobalReadWithPopulatedChunks sym mutMap immutMap cache globalBlk ConcreteMutable IS.empty repr ptr
 
-      let mutMap = fmap smcMutability imap
+      -- Build the combined mutability map from the MemorySpace
+      -- (matching how production code derives it)
+      let mutabilityMap = memorySpaceToMutabilityMap memSpace
       let ptrEntry = CS.RegEntry (CL.LLVMPointerRepr WI.knownNat) ptr
       let puse = MS.PointerUse Nothing MS.PointerRead
-      vResult <- mkGlobalPointerValidityPredCommon mutMap sym puse Nothing ptrEntry
+      vResult <- mkGlobalPointerValidityPredCommon mutabilityMap sym puse Nothing ptrEntry
       let vr = case vResult of
                  Nothing -> Nothing
                  Just (CB.LabeledPred p _) -> Just (WI.asConstantPred p)
