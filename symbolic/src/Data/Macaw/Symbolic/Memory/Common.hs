@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -139,53 +140,61 @@ defaultProcessMacawAssertion _ p _  = pure p
 -- | The shared implementation for the @mkGlobalPointerValidityPred@ function in
 -- the default memory model ("Data.Macaw.Symbolic.Memory") and the lazy memory
 -- model ("Data.Macaw.Symbolic.Memory.Lazy").
+--
+-- Takes separate mutable and immutable interval maps. For writes, only the
+-- mutable map is consulted (writes to immutable memory are invalid). For reads,
+-- both maps are consulted.
 mkGlobalPointerValidityPredCommon ::
-     forall sym w
+     forall sym w a b
    . ( CB.IsSymInterface sym
      , MC.MemWidth w
      , MacawProcessAssertion sym
      )
-  => IM.IntervalMap (MC.MemWord w) CL.Mutability
+  => IM.IntervalMap (MC.MemWord w) a
+  -- ^ Mutable regions (valid for both reads and writes)
+  -> IM.IntervalMap (MC.MemWord w) b
+  -- ^ Immutable regions (valid for reads only)
   -> MS.MkGlobalPointerValidityAssertion sym w
-mkGlobalPointerValidityPredCommon tbl sym puse mcond ptr = do
+mkGlobalPointerValidityPredCommon mutableTbl immutableTbl sym puse mcond ptr = do
   let w = MC.memWidthNatRepr @w
 
-  -- If this is a write, the pointer cannot be in an immutable range (so just
-  -- return False for the predicate on that range).
-  --
-  -- Otherwise, the pointer is allowed to be between the lo/hi range
-  let inMappedRange off (range, mut)
-        | MS.pointerUseTag puse == MS.PointerWrite && mut == CL.Immutable = return (WI.falsePred sym)
-        | otherwise =
-          case range of
-            IM.IntervalCO lo hi -> do
-              lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
-              hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
-              lob <- WI.bvUle sym lobv off
-              hib <- WI.bvUlt sym off hibv
-              WI.andPred sym lob hib
-            IM.ClosedInterval lo hi -> do
-              lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
-              hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
-              lob <- WI.bvUle sym lobv off
-              hib <- WI.bvUle sym off hibv
-              WI.andPred sym lob hib
-            IM.OpenInterval lo hi -> do
-              lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
-              hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
-              lob <- WI.bvUlt sym lobv off
-              hib <- WI.bvUlt sym off hibv
-              WI.andPred sym lob hib
-            IM.IntervalOC lo hi -> do
-              lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
-              hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
-              lob <- WI.bvUlt sym lobv off
-              hib <- WI.bvUle sym off hibv
-              WI.andPred sym lob hib
+  let inMappedRange off = \case
+        IM.IntervalCO lo hi -> do
+          lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
+          hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
+          lob <- WI.bvUle sym lobv off
+          hib <- WI.bvUlt sym off hibv
+          WI.andPred sym lob hib
+        IM.ClosedInterval lo hi -> do
+          lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
+          hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
+          lob <- WI.bvUle sym lobv off
+          hib <- WI.bvUle sym off hibv
+          WI.andPred sym lob hib
+        IM.OpenInterval lo hi -> do
+          lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
+          hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
+          lob <- WI.bvUlt sym lobv off
+          hib <- WI.bvUlt sym off hibv
+          WI.andPred sym lob hib
+        IM.IntervalOC lo hi -> do
+          lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
+          hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
+          lob <- WI.bvUlt sym lobv off
+          hib <- WI.bvUle sym off hibv
+          WI.andPred sym lob hib
 
   let mkPred off = do
-        ps <- mapM (inMappedRange off) (IM.toList tbl)
-        ps' <- WI.orOneOf sym (L.folded . id) ps
+        -- For writes, only mutable regions are valid.
+        -- For reads, both mutable and immutable regions are valid.
+        mutP <- WI.orOneOf sym (L.folded . id)
+                  =<< mapM (inMappedRange off) (IM.keys mutableTbl)
+        ps' <- case MS.pointerUseTag puse of
+                 MS.PointerWrite -> pure mutP
+                 MS.PointerRead -> do
+                   immutP <- WI.orOneOf sym (L.folded . id)
+                               =<< mapM (inMappedRange off) (IM.keys immutableTbl)
+                   WI.orPred sym mutP immutP
         -- Add the condition from a conditional write
         WI.itePred sym (maybe (WI.truePred sym) CS.regValue mcond) ps' (WI.truePred sym)
 

@@ -478,17 +478,23 @@ memorySpaceToImmutableIntervalMap memSpace =
         ]
   in mkIntervalMap chunks
 
--- | Build a mutability map from a MemorySpace (all chunks, with mutability).
-memorySpaceToMutabilityMap ::
+-- | Build split mutable/immutable maps from a MemorySpace,
+-- matching the split-map API of mkGlobalPointerValidityPredCommon.
+memorySpaceToSplitMaps ::
   MemorySpace ->
-  IM.IntervalMap (MC.MemWord 32) CL.Mutability
-memorySpaceToMutabilityMap memSpace = IM.fromList
-  [ ( IMI.IntervalCO
-        (checkedToMemWord @32 (word32ToWord64 (mcsBaseAddr s)))
-        (checkedToMemWord @32 (word32ToWord64 (mcsBaseAddr s) + fromIntegral (mcsLength s)))
-    , mcsMutability s )
-  | s <- msChunks memSpace
-  ]
+  ( IM.IntervalMap (MC.MemWord 32) ()
+  , IM.IntervalMap (MC.MemWord 32) ()
+  )
+memorySpaceToSplitMaps memSpace =
+  ( IM.fromList [ (iv, ()) | s <- msChunks memSpace, mcsMutability s == CL.Mutable
+                            , let iv = mkIv s ]
+  , IM.fromList [ (iv, ()) | s <- msChunks memSpace, mcsMutability s == CL.Immutable
+                            , let iv = mkIv s ]
+  )
+  where
+    mkIv s = IMI.IntervalCO
+      (checkedToMemWord @32 (word32ToWord64 (mcsBaseAddr s)))
+      (checkedToMemWord @32 (word32ToWord64 (mcsBaseAddr s) + fromIntegral (mcsLength s)))
 
 -- | Generate a memory space with random bytes and non-overlapping chunks.
 -- The ByteString is large enough that ByteString[i] corresponds to address i.
@@ -619,12 +625,11 @@ prop_readValidityConsistency = testPropertyNamed
 
       readResult <- concreteImmutableGlobalRead sym imap cache globalBlk repr ptr
 
-      -- Build the combined mutability map from the MemorySpace
-      -- (matching how production code derives it)
-      let mutMap = memorySpaceToMutabilityMap memSpace
+      -- Build split maps matching the production API
+      let (mutMap, immutMap) = memorySpaceToSplitMaps memSpace
       let ptrEntry = CS.RegEntry (CL.LLVMPointerRepr WI.knownNat) ptr
       let puse = MS.PointerUse Nothing MS.PointerRead
-      vResult <- mkGlobalPointerValidityPredCommon mutMap sym puse Nothing ptrEntry
+      vResult <- mkGlobalPointerValidityPredCommon mutMap immutMap sym puse Nothing ptrEntry
       let vr = case vResult of
                  Nothing -> Nothing
                  Just (LabeledPred p _) -> Just (WI.asConstantPred p)
