@@ -193,7 +193,7 @@ memModelConfig _ mpt =
     , MS.mkGlobalPointerValidityAssertion = mkGlobalPointerValidityPred mpt
     , MS.resolvePointer = pure
     , MS.concreteUnmutatedGlobalRead = \_ _ _ -> pure Nothing
-    , MS.lazilyPopulateGlobalMem = \_ _ -> pure
+    , MS.lazilyPopulateGlobalMem = \_ _ _ -> pure
     }
   where
     origin = "the default macaw-symbolic memory model"
