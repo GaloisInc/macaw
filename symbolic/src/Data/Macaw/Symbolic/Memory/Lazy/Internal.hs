@@ -787,37 +787,44 @@ lazilyPopulateGlobalMemArr bak mpt useTag memRep ptr state
            ivals tbl =
              IM.toAscList $ tbl `IM.intersecting` accessInterval
 
+       -- Collect assumptions for all unpopulated chunks, then add them
+       -- in a single restoreAssumptionState call.
+       -- See @Note [Top-level assumptions]@.
+       let populated = state ^. chunksL
+           collectChunk (as, addrs) (addr, smc) =
+             if addr `IS.member` populated
+               then pure (as, addrs)
+               else do a <- populateChunkAssumption (byteCache mpt) sym
+                          (memPtrArray mpt) (IMI.lowerBound addr) smc
+                       pure (a : as, addr : addrs)
+
        -- Populate mutable chunks, unless memModelContents is SymbolicMutable
        -- (in which case we leave mutable memory fully symbolic).
-       st1 <- if memModelContents mpt == MSMC.SymbolicMutable
-              then pure state
-              else MSMC.pleatM state (ivals (memMutableTable mpt)) populateChunk
+       acc0 <- if memModelContents mpt == MSMC.SymbolicMutable
+               then pure ([], [])
+               else MSMC.pleatM ([], []) (ivals (memMutableTable mpt)) collectChunk
 
        -- For reads, also populate immutable chunks (needed in the SMT array
        -- for symbolic reads that fall through concreteImmutableGlobalRead).
        -- Writes don't need them since mkGlobalPointerValidityPred rejects
        -- writes to immutable memory.
-       case useTag of
-         MS.PointerWrite -> pure st1
+       (assumps, newAddrs) <- case useTag of
+         MS.PointerWrite -> pure acc0
          MS.PointerRead ->
-           MSMC.pleatM st1 (ivals (memImmutableTable mpt)) populateChunk
+           MSMC.pleatM acc0 (ivals (memImmutableTable mpt)) collectChunk
+
+       if null assumps
+         then pure state
+         else do gc <- CB.saveAssumptionState bak
+                 let gc' = foldl' (\g a -> CBP.gcAddTopLevelAssume
+                              (CB.singleAssumption a) g) gc assumps
+                 CB.restoreAssumptionState bak gc'
+                 pure $ L.over chunksL (<> IS.fromList newAddrs) state
 
   | otherwise
   = pure state
   where
     sym = CB.backendGetSym bak
-
-    populateChunk st (addr, smc) =
-      if addr `IS.member` (st^.chunksL)
-        then pure st  -- already populated
-        else do bytesAssmp <-
-                  populateChunkAssumption (byteCache mpt) sym (memPtrArray mpt)
-                    (IMI.lowerBound addr) smc
-                -- See @Note [Top-level assumptions]@.
-                gc <- CB.saveAssumptionState bak
-                let gc' = CBP.gcAddTopLevelAssume (CB.singleAssumption bytesAssmp) gc
-                CB.restoreAssumptionState bak gc'
-                pure $ L.over chunksL (IS.insert addr) st
 
     chunksL :: forall rtp f args.
                L.Lens' (CS.SimState p sym ext rtp f args)
@@ -838,10 +845,12 @@ along the current path. Instead, the assumption that the memory is initialized
 should be in scope for *all* goals.
 
 How can we achieve this? We ask the backend to export the state of
-its assumptions (`saveAssumptionState`), add a "top-level" assumption
+its assumptions (`saveAssumptionState`), add "top-level" assumptions
 (`gcAddTopLevelAssume`), and restore the state (`restoreAssumptionState`).
 For online backends, this will result in resetting the solver process and
-re-asserting all of the in-scope assumptions.
+re-asserting all of the in-scope assumptions. Since the restore is expensive, we
+batch all newly-needed chunk assumptions and perform a single save/restore cycle
+rather than one per chunk.
 -}
 
 -- | Build an assumption that constrains the SMT array backing global memory
