@@ -193,7 +193,7 @@ memModelConfig _ mpt =
     , MS.mkGlobalPointerValidityAssertion = mkGlobalPointerValidityPred mpt
     , MS.resolvePointer = pure
     , MS.concreteImmutableGlobalRead = \_ _ -> pure Nothing
-    , MS.lazilyPopulateGlobalMem = \_ _ -> pure
+    , MS.lazilyPopulateGlobalMem = \_ _ _ -> pure
     }
   where
     origin = "the default macaw-symbolic memory model"
@@ -201,8 +201,14 @@ memModelConfig _ mpt =
 -- | An index of all of the (statically) mapped memory in a program, suitable
 -- for pointer translation
 data MemPtrTable sym w =
-  MemPtrTable { memPtrTable :: IM.IntervalMap (MC.MemWord w) CL.Mutability
-              -- ^ The ranges of (static) allocations that are mapped
+  MemPtrTable { memMutableTable :: IM.IntervalMap (MC.MemWord w) ()
+              -- ^ The ranges of mutable (static) allocations.
+              --
+              -- We use 'IM.IntervalMap' rather than @IntervalSet@
+              -- for code sharing with the lazy memory model via
+              -- 'mkGlobalPointerValidityPredCommon'.
+              , memImmutableTable :: IM.IntervalMap (MC.MemWord w) ()
+              -- ^ The ranges of immutable (static) allocations.
               , memPtr :: CL.LLVMPtr sym w
               -- ^ The pointer to the allocation backing all of memory
               }
@@ -286,9 +292,12 @@ newMergedGlobalMemoryWith hooks proxy bak endian mmc mems = do
   -- Create the shared byte cache once (all 256 possible byte values)
   cache <- liftIO $ MBC.mkByteCache sym
 
-  (symArray2, tbl) <- populateMemory proxy cache hooks bak mmc mems symArray1
+  (symArray2, mutTbl, immutTbl) <- populateMemory proxy cache hooks bak mmc mems symArray1
   memImpl3 <- liftIO $ CL.doArrayStore bak memImpl2 ptr CLD.noAlignment symArray2 sizeBV
-  let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr }
+  let ptrTable = MemPtrTable { memMutableTable = mutTbl
+                             , memImmutableTable = immutTbl
+                             , memPtr = ptr
+                             }
 
   return (memImpl3, ptrTable)
 
@@ -358,14 +367,15 @@ populateMemory :: ( CB.IsSymBackend sym bak
                -- ^ The initial memory images for the binaries, which contain static data to populate the memory model
                -> WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
                -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
-                    , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) CL.Mutability
+                    , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) ()
+                    , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) ()
                     )
 populateMemory proxy cache hooks bak mmc mems symArray0 =
-  MSMC.pleatM (symArray0, IM.empty) mems $ \allocs0 mem ->
+  MSMC.pleatM (symArray0, IM.empty, IM.empty) mems $ \allocs0 mem ->
     MSMC.pleatM allocs0 (MC.memSegments mem) $ \allocs1 seg -> do
-      MSMC.pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, allocs2) (addr, memChunk) -> do
+      MSMC.pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, mutTbl, immutTbl) (addr, memChunk) -> do
         concreteBytes <- populateMemChunkBytes cache bak hooks mem seg addr memChunk
-        populateSegmentChunk proxy bak mmc mem symArray seg addr concreteBytes allocs2
+        populateSegmentChunk proxy bak mmc mem symArray seg addr concreteBytes mutTbl immutTbl
 
 -- | Convert each byte in a 'MC.MemChunk' to the corresponding bytes. These
 -- can possibly be symbolic bytes depending on the behavior of the
@@ -428,31 +438,29 @@ populateSegmentChunk :: ( 16 <= w
                    -- ^ Memory chunk address
                    -> [WI.SymBV sym 8]
                    -- ^ The concrete values in this chunk (which may or may not be used)
-                   -> IM.IntervalMap (MC.MemWord w) CL.Mutability
+                   -> IM.IntervalMap (MC.MemWord w) ()
+                   -- ^ Accumulator for mutable regions
+                   -> IM.IntervalMap (MC.MemWord w) ()
+                   -- ^ Accumulator for immutable regions
                    -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
-                        , IM.IntervalMap (MC.MemWord w) CL.Mutability
+                        , IM.IntervalMap (MC.MemWord w) ()
+                        , IM.IntervalMap (MC.MemWord w) ()
                         )
-populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
+populateSegmentChunk _ bak mmc mem symArray seg addr bytes mutTbl immutTbl = do
   let sym = CB.backendGetSym bak
   let ?ptrWidth = MC.memWidth mem
   let abs_addr = toAbsoluteAddr addr
   let size = length bytes
   let interval = IM.IntervalOC abs_addr (abs_addr + fromIntegral size)
-  let (mut_flag, conc_flag) =
+  let (isImmutable, conc_flag) =
         case MMP.isReadonly (MC.segmentFlags seg) of
-          True ->
-            ( CL.Immutable
-            , True
-            )
+          True  -> (True, True)
           False -> case mmc of
-            MSMC.ConcreteMutable ->
-              ( CL.Mutable
-              , True
-              )
-            MSMC.SymbolicMutable ->
-              ( CL.Mutable
-              , False
-              )
+            MSMC.ConcreteMutable -> (False, True)
+            MSMC.SymbolicMutable -> (False, False)
+  let insertInterval
+        | isImmutable = (mutTbl, IM.insert interval () immutTbl)
+        | otherwise   = (IM.insert interval () mutTbl, immutTbl)
 
   -- When we are treating a piece of memory as having concrete initial values
   -- (e.g., for read-only memory) taken from the binary.
@@ -462,7 +470,7 @@ populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
   --
   -- We currently choose the former, as the latter has been crashing solvers.
   case conc_flag of
-    False -> return (symArray, IM.insert interval mut_flag ptrtable)
+    False -> let (m, i) = insertInterval in return (symArray, m, i)
     True -> do
 {-
       -- We don't use this method because repeated applications of updateArray
@@ -501,7 +509,7 @@ populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
       liftIO $ CB.addAssumption bak bytesAssmp
       let symArray2 = symArray
 
-      return (symArray2, IM.insert interval mut_flag ptrtable)
+      let (m, i) = insertInterval in return (symArray2, m, i)
 
   where
     toAbsoluteAddr a =
@@ -545,7 +553,9 @@ mkGlobalPointerValidityPred :: forall sym w
                             => MemPtrTable sym w
                             -> MS.MkGlobalPointerValidityAssertion sym w
 mkGlobalPointerValidityPred mpt =
-  MSMC.mkGlobalPointerValidityPredCommon (memPtrTable mpt)
+  MSMC.mkGlobalPointerValidityPredCommon
+    (memMutableTable mpt)
+    (memImmutableTable mpt)
 
 -- | Construct a translator for machine addresses into LLVM memory model pointers.
 --

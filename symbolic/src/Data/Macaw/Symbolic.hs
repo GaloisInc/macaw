@@ -1123,7 +1123,8 @@ type ConcreteImmutableGlobalRead sym w =
 -- @ty@ of the value being read of written.
 type LazilyPopulateGlobalMem p sym ext w =
      forall ty rtp f args
-   . M.MemRepr ty
+   . PointerUseTag
+  -> M.MemRepr ty
   -> MM.LLVMPtr sym w
   -> C.SimState p sym ext rtp f args
   -> IO (C.SimState p sym ext rtp f args)
@@ -1291,7 +1292,7 @@ doReadMemModel mvar mmConf addrWidth memRep ptr0 st0 =
     case mbReadVal of
       Just readVal -> pure (readVal, st0)
       Nothing -> do
-        st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+        st1 <- lazilyPopulateGlobalMem mmConf PointerRead memRep ptr2 st0
         let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
         mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
         case mGlobalPtrValid of
@@ -1328,7 +1329,7 @@ doCondReadMemModel mvar mmConf addrWidth memRep cond ptr0 condFalseValue st0 =
         readVal' <- muxMemReprValue sym memRep (C.regValue cond) readVal (C.regValue condFalseValue)
         pure (readVal', st0)
       Nothing -> do
-        st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+        st1 <- lazilyPopulateGlobalMem mmConf PointerRead memRep ptr2 st0
         let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
         mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
         case mGlobalPtrValid of
@@ -1355,7 +1356,7 @@ doWriteMemModel mvar mmConf addrWidth memRep ptr0 v st0 =
     mem <- getMem st0 mvar
     ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
     ptr2 <- resolvePointer mmConf ptr1
-    st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+    st1 <- lazilyPopulateGlobalMem mmConf PointerWrite memRep ptr2 st0
     let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
     mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
     case mGlobalPtrValid of
@@ -1385,7 +1386,7 @@ doCondWriteMemModel mvar mmConf addrWidth memRep cond ptr0 v st0 =
     mem <- getMem st0 mvar
     ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
     ptr2 <- resolvePointer mmConf ptr1
-    st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
+    st1 <- lazilyPopulateGlobalMem mmConf PointerWrite memRep ptr2 st0
     let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
     mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
     case mGlobalPtrValid of
