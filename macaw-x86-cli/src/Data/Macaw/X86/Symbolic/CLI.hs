@@ -19,11 +19,13 @@ import Data.Parameterized.NatRepr (knownNat)
 import What4.Expr (ExprBuilder)
 
 import Lang.Crucible.Backend qualified as C
-import Lang.Crucible.CLI (SimulateProgramHooks, defaultSimulateProgramHooks)
+import Lang.Crucible.CLI (ExtensionSetup(..), SimulateProgramHooks, defaultSimulateProgramHooks)
 import Lang.Crucible.FunctionHandle (newHandleAllocator)
 import Lang.Crucible.LLVM.DataLayout (EndianForm(LittleEndian))
+import Lang.Crucible.LLVM.Intrinsics (llvmIntrinsicTypes)
 import Lang.Crucible.LLVM.MemModel qualified as Mem
-import Lang.Crucible.Simulator.ExecutionTree (ExtensionImpl)
+import Lang.Crucible.Simulator.GlobalState (insertGlobal)
+import Lang.Crucible.Simulator (emptyGlobals)
 import Lang.Crucible.Syntax.Concrete (ParserHooks)
 
 import Data.Macaw.CFG qualified as DMC
@@ -44,7 +46,7 @@ withX86Hooks ::
      , sym ~ ExprBuilder t st fs
      ) =>
      bak ->
-     IO (ExtensionImpl p sym (DMS.MacawExt X86_64))) ->
+     IO (ExtensionSetup p sym (DMS.MacawExt X86_64))) ->
     SimulateProgramHooks (DMS.MacawExt X86_64) ->
     IO a) ->
   IO a
@@ -53,29 +55,31 @@ withX86Hooks k = do
   mvar <- Mem.mkMemVar "macaw-x86:llvm_memory" ha
   let ?ptrWidth = knownNat @64
   let ?memOpts = Mem.defaultMemOptions
+
   let ext ::
         forall p sym bak t st fs.
         (C.IsSymBackend sym bak, sym ~ ExprBuilder t st fs) =>
         bak ->
-        IO (ExtensionImpl p sym (DMS.MacawExt X86_64))
-      ext bak =  do
+        IO (ExtensionSetup p sym (DMS.MacawExt X86_64))
+      ext bak = do
         let sym = C.backendGetSym bak
         let ?recordLLVMAnnotation = \_ _ _ -> pure ()
         let ?processMacawAssert = DMS.defaultProcessMacawAssertion
         symFns <- newSymFuns sym
         let elfMem = DMC.emptyMemory DMM.Addr64
         let eFn = x86_64MacawEvalFn symFns DMS.defaultMacawArchStmtExtensionOverride
-        (_initMem, ptrTable) <-
+        (initMem, ptrTable) <-
           DMS.newGlobalMemory
             (Proxy @X86_64)
             bak
             LittleEndian
             DMS.ConcreteMutable
             elfMem
-        -- TODO: We should write this variable, but can't here. See Macaw#423
-        -- and Crucible#1240 for details.
-        -- C.writeGlobal mvar initMem
         let mmConf = DMS.memModelConfig bak ptrTable
-        pure (DMS.macawExtensions eFn mvar mmConf)
+        pure ExtensionSetup
+          { extImpl = DMS.macawExtensions eFn mvar mmConf
+          , extIntrinsicTypes = llvmIntrinsicTypes
+          , extInitGlobals = insertGlobal mvar initMem emptyGlobals
+          }
   let ?parserHooks = machineCodeParserHooks (Proxy :: Proxy X86_64) x86ParserHooks
   k ext defaultSimulateProgramHooks
