@@ -437,7 +437,7 @@ populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
   let ?ptrWidth = MC.memWidth mem
   let abs_addr = toAbsoluteAddr addr
   let size = length bytes
-  let interval = IM.IntervalOC abs_addr (abs_addr + fromIntegral size)
+  let interval = IM.IntervalCO abs_addr (abs_addr + fromIntegral size)
   let (mut_flag, conc_flag) =
         case MMP.isReadonly (MC.segmentFlags seg) of
           True ->
