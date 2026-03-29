@@ -14,6 +14,9 @@ This module provides definitions for x86 instructions.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE NondecreasingIndentation #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# HLINT ignore "Use camelCase" #-}
 module Data.Macaw.X86.Semantics
   ( execInstruction
   ) where
@@ -2580,11 +2583,28 @@ def_pminu suf w = def_pselect ("pminu" <> suf) bvUlt w
 def_pmins :: (1 <= w) => MnemSuffix -> NatRepr w -> InstructionDef
 def_pmins suf w = def_pselect ("pmins" <> suf) bvSlt w
 
+
+exec_movmskps ::
+  forall st ids n n'.
+  (SupportedBVWidth n) =>
+  Location (Addr ids) (BVType n) ->
+  BVExpr ids n' ->
+  X86Generator st ids ()
+exec_movmskps l v
+  | Just Refl <- testEquality (typeWidth v) n128
+  , Just LeqProof <- testLeq n32 (typeWidth l) = do
+      l .= uext (typeWidth l) (mkMask n32 v)
+  | otherwise = fail "Unsupported bitwidth size for movmskps"
+ where
+  mkMask sz src = bvUnvectorize sz $ map f $ bvVectorize n32 src
+  f b = mux (msb b) (bvLit n1 1) (bvLit n1 0)
+  
 exec_pmovmskb :: forall st ids n n'
               .  SupportedBVWidth n
               => Location (Addr ids) (BVType n)
               -> BVExpr ids n'
               -> X86Generator st ids ()
+
 exec_pmovmskb l v
   | Just Refl <- testEquality (typeWidth v) n64 = do
       l .= uext (typeWidth l) (mkMask n8 v)
@@ -3235,7 +3255,7 @@ all_instructions =
   , def_pmins "b"  n8
   , def_pmins "w" n16
   , def_pmins "d" n32
-
+  , defBinaryLVpoly "movmskps" exec_movmskps
   , defBinaryLVpoly "pmovmskb" exec_pmovmskb
   , def_movhpd
   , def_movlpd
