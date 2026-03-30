@@ -114,12 +114,15 @@ library
 
   build-depends:
     base >= 4.13 && < 4.21,
+    bv-sized,
     bytestring,
     containers,
     crucible,
     crucible-debug,
     crucible-llvm,
     elf-edit,
+    galois-dwarf,
+    IntervalMap,
     lens,
     macaw-base,
     macaw-symbolic,
@@ -127,12 +130,14 @@ library
     parameterized-utils,
     prettyprinter,
     text,
+    vector,
     what4,
 
   hs-source-dirs: src
 
   exposed-modules:
     Data.Macaw.Symbolic.Debug
+    Data.Macaw.Symbolic.DwarfInfo
 
 test-suite crucible-macaw-debug-tests
   import: shared

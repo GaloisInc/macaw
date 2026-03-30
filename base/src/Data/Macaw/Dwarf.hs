@@ -25,8 +25,12 @@ module Data.Macaw.Dwarf
     CompileUnit,
     cuRanges,
     cuSubprograms,
+    cuLNE,
+    cuFileVec,
     lookupSubprogram,
     dwarfGlobals,
+    DwarfFilePath(..),
+    FileVec,
 
     -- ** Utility function
     dwarfInfoFromElf,
