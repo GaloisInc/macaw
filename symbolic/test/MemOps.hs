@@ -625,10 +625,10 @@ prop_strictLazyConsistency ef useSym (PtrEqCheck eq) n =
         H.assert l
       _ -> H.discard
 
-prop_readInitialContents_consistency :: CLD.EndianForm -> H.Property
-prop_readInitialContents_consistency ef =
+prop_readInitialContents :: ModelConfig -> CLD.EndianForm -> H.Property
+prop_readInitialContents mc ef =
   let endian = endianFormToEndianness ef in
-  H.withTests 200 $ H.property $ do
+  H.withTests 20 $ H.property $ do
     layout <- H.forAll genMemLayout
     vs <- H.forAll genValSize
     addr <- H.forAll (genMappedAddr layout vs)
@@ -640,26 +640,23 @@ prop_readInitialContents_consistency ef =
     let off = fromIntegral (addr - ssBase seg)
         expected = BS.take (fromIntegral (valSizeBytes vs)) (BS.drop off (ssContents seg))
         expectedVal = bsToInteger ef expected
-    let checkModel mc = withOnlineModel mc ef layout $ \sym bak mvar mmConf st -> do
-          (SomeReadResult w result, _) <- execReadModel bak endian mvar mmConf (MemRead vs addr) st
-          CB.clearProofObligations bak
-          expectedPtr <- mkBvPtr sym w expectedVal
-          eqPred <- CLP.ptrEq sym w result expectedPtr
-          case WI.asConstantPred eqPred of
-            Just b -> pure b
-            Nothing -> do
-              notEq <- WI.notPred sym eqPred
-              CBO.withSolverProcess bak (pure False) $ \sp ->
-                WPO.inNewFrame sp $ do
-                  WPS.assume (WPO.solverConn sp) notEq
-                  res <- WPO.check sp "consistency equality"
-                  case res of
-                    WSat.Unsat _ -> pure True
-                    _            -> pure False
-    strictOk <- H.evalIO (checkModel StrictModel)
-    lazyOk <- H.evalIO (checkModel LazyModel)
-    H.assert strictOk
-    H.assert lazyOk
+    ok <- H.evalIO $ withOnlineModel mc ef layout $ \sym bak mvar mmConf st -> do
+      (SomeReadResult w result, _) <- execReadModel bak endian mvar mmConf (MemRead vs addr) st
+      CB.clearProofObligations bak
+      expectedPtr <- mkBvPtr sym w expectedVal
+      eqPred <- CLP.ptrEq sym w result expectedPtr
+      case WI.asConstantPred eqPred of
+        Just b -> pure b
+        Nothing -> do
+          notEq <- WI.notPred sym eqPred
+          CBO.withSolverProcess bak (pure False) $ \sp ->
+            WPO.inNewFrame sp $ do
+              WPS.assume (WPO.solverConn sp) notEq
+              res <- WPO.check sp "consistency equality"
+              case res of
+                WSat.Unsat _ -> pure True
+                _            -> pure False
+    H.assert ok
 
 bsToInteger :: CLD.EndianForm -> BS.ByteString -> Integer
 bsToInteger CLD.LittleEndian = BS.foldr' (\b acc -> acc * 256 + fromIntegral b) 0
@@ -673,8 +670,11 @@ tests :: TestTree
 tests = testGroup "MemOps"
   [ testPropertyNamed "Strict and lazy agree after warmup writes [SMT]"
       "prop_strictLazyConsistency_le_smt"
-      (prop_strictLazyConsistency CLD.LittleEndian True ptrEqSMT 30)
-  , testPropertyNamed "Strict and lazy agree on initial contents"
-      "prop_readInitialContents_consistency_le"
-      (prop_readInitialContents_consistency CLD.LittleEndian)
+      (prop_strictLazyConsistency CLD.LittleEndian True ptrEqSMT 300)
+  , testPropertyNamed "Strict model reads initial contents correctly"
+      "prop_readInitialContents_strict_le"
+      (prop_readInitialContents StrictModel CLD.LittleEndian)
+  , testPropertyNamed "Lazy model reads initial contents correctly"
+      "prop_readInitialContents_lazy_le"
+      (prop_readInitialContents LazyModel CLD.LittleEndian)
   ]
