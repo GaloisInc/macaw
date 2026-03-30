@@ -128,7 +128,7 @@ module Data.Macaw.Symbolic
   , unsupportedSyscalls
   , MO.LookupSyscallHandle(..)
   , ResolvePointer
-  , ConcreteImmutableGlobalRead
+  , ConcreteUnmutatedGlobalRead
   , LazilyPopulateGlobalMem
   , MO.MacawSimulatorState(..)
   , MO.MacawLazySimulatorState(..)
@@ -1109,13 +1109,16 @@ unsupportedSyscalls compName =
 -- returning the original pointer unchanged if this cannot be done.
 type ResolvePointer sym w = MM.LLVMPtr sym w -> IO (MM.LLVMPtr sym w)
 
--- | If reading a value of type @ty@ from a concrete and immutable (i.e.,
--- read-only) section of the global address space, then returning @Just val@
+-- | If reading a value of type @ty@ from a concrete address in the global
+-- address space where concrete bytes are available, then returning @Just val@
 -- will bypass having to perform a full read from the underlying memory model.
--- Bypassing a full read is likely to be more performant.
-type ConcreteImmutableGlobalRead sym w =
+-- Bypassing a full read is likely to be more performant. This works for
+-- unmutated chunks (immutable chunks and mutable chunks that haven't been
+-- written to yet).
+type ConcreteUnmutatedGlobalRead p sym w =
      forall ty
-   . M.MemRepr ty
+   . p
+  -> M.MemRepr ty
   -> MM.LLVMPtr sym w
   -> IO (Maybe (C.RegValue sym (PS.ToCrucibleType ty)))
 
@@ -1148,19 +1151,20 @@ data MemModelConfig p sym arch mem = MemModelConfig
   , mkGlobalPointerValidityAssertion :: MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
     -- ^ A function to make memory validity predicates (see
     -- 'MkGlobalPointerValidityAssertion' for details).
-  , concreteImmutableGlobalRead :: ConcreteImmutableGlobalRead sym (M.ArchAddrWidth arch)
-    -- ^ If reading a value of type @ty@ from a concrete and immutable (i.e.,
-    -- read-only) section of the global address space, you can return
+  , concreteUnmutatedGlobalRead :: ConcreteUnmutatedGlobalRead p sym (M.ArchAddrWidth arch)
+    -- ^ If reading a value of type @ty@ from a concrete address in the
+    -- global address space where concrete bytes are available, you can return
     -- @Just val@ here to bypass having to perform a full read from the
     -- underlying memory model. Bypassing a full read is likely to be more
-    -- performant. For instance, the lazy memory model makes use of this
-    -- option—see @Note [Lazy memory model]@ in
+    -- performant. This works for unmutated chunks (immutable chunks and
+    -- mutable chunks that haven't been written to yet). For instance, the lazy
+    -- memory model makes
+    -- use of this option—see @Note [Lazy memory model]@ in
     -- "Data.Macaw.Symbolic.Memory.Lazy".
     --
     -- Note that it is always fine to return 'Nothing' as a default
-    -- implementation, even when reading from concrete, immutable sections of
-    -- the global address space. The only thing that will be impacted is
-    -- performance.
+    -- implementation, even when reading from concrete global memory. The
+    -- only thing that will be impacted is performance.
   , lazilyPopulateGlobalMem :: LazilyPopulateGlobalMem p sym (MacawExt arch) (M.ArchAddrWidth arch)
     -- ^ The memory model will call this function just before performing a full
     -- read or write, which allows users to modify the simulator state based on
@@ -1246,7 +1250,7 @@ note the following differences:
 
 * 'MO.doReadMem' unconditionally reads from memory, whereas 'doReadMemModel'
   may skip reading from memory and instead return a result directly if the
-  'MemModelConfig' is configured to do so. (See 'concreteImmutableGlobalRead'.)
+  'MemModelConfig' is configured to do so. (See 'concreteUnmutatedGlobalRead'.)
   Similarly for 'MO.doCondReadMem' versus 'doCondReadMemModel'.
 
 * 'MO.doReadMem' never modifies the 'C.SimState', whereas 'doReadMemModel'
@@ -1287,7 +1291,7 @@ doReadMemModel mvar mmConf addrWidth memRep ptr0 st0 =
     mem <- getMem st0 mvar
     ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
     ptr2 <- resolvePointer mmConf ptr1
-    mbReadVal <- concreteImmutableGlobalRead mmConf memRep ptr2
+    mbReadVal <- concreteUnmutatedGlobalRead mmConf (st0 ^. C.stateContext . C.cruciblePersonality) memRep ptr2
     case mbReadVal of
       Just readVal -> pure (readVal, st0)
       Nothing -> do
@@ -1322,7 +1326,7 @@ doCondReadMemModel mvar mmConf addrWidth memRep cond ptr0 condFalseValue st0 =
     mem <- getMem st0 mvar
     ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
     ptr2 <- resolvePointer mmConf ptr1
-    mbReadVal <- concreteImmutableGlobalRead mmConf memRep ptr2
+    mbReadVal <- concreteUnmutatedGlobalRead mmConf (st0 ^. C.stateContext . C.cruciblePersonality) memRep ptr2
     case mbReadVal of
       Just readVal -> do
         readVal' <- muxMemReprValue sym memRep (C.regValue cond) readVal (C.regValue condFalseValue)

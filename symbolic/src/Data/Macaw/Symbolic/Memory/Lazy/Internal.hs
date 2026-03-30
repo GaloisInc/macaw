@@ -12,7 +12,7 @@
 -- | Internal module for "Data.Macaw.Symbolic.Memory.Lazy".
 --
 -- This module exposes all internals for testing purposes.
--- Mainly, we want to test 'concreteImmutableGlobalRead'.
+-- Mainly, we want to test 'concreteUnmutatedGlobalRead'.
 --
 -- The public API is re-exported by "Data.Macaw.Symbolic.Memory.Lazy".
 module Data.Macaw.Symbolic.Memory.Lazy.Internal (
@@ -38,7 +38,8 @@ module Data.Macaw.Symbolic.Memory.Lazy.Internal (
   readBytesAsBV,
   concatBytes,
   mergedMemorySymbolicMemChunks,
-  concreteImmutableGlobalRead,
+  concreteUnmutatedGlobalRead,
+  concreteUnmutatedGlobalReadWithPopulatedChunks,
   lazilyPopulateGlobalMemArr,
   symBVInterval,
   mulMono,
@@ -103,8 +104,8 @@ import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 --   online SMT solver connection in an effort to concretize the pointer being
 --   read from or written to.
 --
--- * 'MS.concreteImmutableGlobalRead' will use the supplied 'MemPtrTable' to
---   detect concrete reads from read-only memory, in which case the
+-- * 'MS.concreteUnmutatedGlobalRead' will use the supplied 'MemPtrTable' to
+--   detect concrete reads from unmutated memory, in which case the
 --   'memPtrArray' will be bypassed for efficiency reasons.
 --
 -- * 'MS.lazilyPopulateGlobalMem' is used to incrementally populate the
@@ -143,7 +144,7 @@ memModelConfig bak mpt =
     , MS.lookupSyscallHandle = MS.unsupportedSyscalls origin
     , MS.mkGlobalPointerValidityAssertion = mkGlobalPointerValidityPred mpt
     , MS.resolvePointer = MSC.resolveLLVMPtr bak
-    , MS.concreteImmutableGlobalRead = concreteImmutableGlobalRead sym (memPtrTable mpt) (byteCache mpt) (CLP.llvmPointerBlock (memPtr mpt))
+    , MS.concreteUnmutatedGlobalRead = concreteUnmutatedGlobalRead sym (memPtrTable mpt) (byteCache mpt) (CLP.llvmPointerBlock (memPtr mpt))
     , MS.lazilyPopulateGlobalMem = lazilyPopulateGlobalMemArr bak mpt
     }
   where
@@ -307,8 +308,9 @@ extendUpperBound i extendBy =
 --      addr                             addr + numBytes
 -- @
 --
--- Returns 'Just' if the chunks are contiguous, all immutable, and cover the
--- full read window. Returns 'Nothing' otherwise.
+-- Returns 'Just' if the chunks are contiguous, immutable or mutable but
+-- unpopulated, and cover the full read window. Returns 'Nothing' otherwise.
+-- Chunks are valid if they are immutable OR mutable but unpopulated.
 sliceContiguousChunks ::
   forall a sym.
   (Eq a, Integral a) =>
@@ -317,15 +319,17 @@ sliceContiguousChunks ::
   -- ^ The address being read from
   Int ->
   -- ^ Number of bytes to read
+  IS.IntervalSet (IMI.Interval a) ->
+  -- ^ Populated chunks (we cannot use mutable chunks in this set)
   [(IMI.Interval a, SymbolicMemChunk sym)] ->
   Maybe [WI.SymBV sym 8]
-sliceContiguousChunks cache addr numBytes =
+sliceContiguousChunks cache addr numBytes populatedChunks =
   \case
     _ | numBytes <= 0 -> Just []
     [] -> Nothing
     ((firstI, firstC) : rest) -> do
       guard (addr >= IMI.lowerBound firstI)
-      guard (smcMutability firstC == CL.Immutable)
+      guard (validChunk firstI firstC)
       let skip = convert (addr - IMI.lowerBound firstI)
           firstLen = intervalLen firstI
           avail = firstLen - skip
@@ -336,6 +340,12 @@ sliceContiguousChunks cache addr numBytes =
       go firstI remaining trimmedFirst rest
   where
     convert = fromIntegral @a @Int
+
+    validChunk :: IMI.Interval a -> SymbolicMemChunk sym -> Bool
+    validChunk interval chunk =
+      case smcMutability chunk of
+        CL.Immutable -> True
+        CL.Mutable -> interval `IS.notMember` populatedChunks
 
     -- We expect IntervalCOs
     intervalLen :: IMI.Interval a -> Int
@@ -367,7 +377,7 @@ sliceContiguousChunks cache addr numBytes =
       [] -> Nothing
       ((ival, chunk) : rest) -> do
         guard (checkContiguous prev ival)
-        guard (smcMutability chunk == CL.Immutable)
+        guard (validChunk ival chunk)
         let chunkLen = intervalLen ival
         let remaining' = remaining - chunkLen
         -- (++) is O(n^2), but these lists are a maximum of 8 elements (bytes)
@@ -720,12 +730,15 @@ mergedMemorySymbolicMemChunks bak hooks mems =
 
 
 -- Return @Just val@ if we can be absolutely sure that this is a concrete
--- read from a contiguous region of immutable, global memory, where the type of
+-- read from a contiguous region of unmutated global memory, where the type of
 -- @val@ is determined by the @'MC.MemRepr' ty@ argument.
 -- Return @Nothing@ otherwise. See @Note [Lazy memory model]@.
-concreteImmutableGlobalRead ::
-  forall sym w.
-  (CB.IsSymInterface sym, MC.MemWidth w) =>
+concreteUnmutatedGlobalRead ::
+  forall sym w p.
+  ( CB.IsSymInterface sym
+  , MC.MemWidth w
+  , MS.HasMacawLazySimulatorState p sym w
+  ) =>
   sym ->
   IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym) ->
   -- ^ The interval map of global memory chunks
@@ -733,8 +746,25 @@ concreteImmutableGlobalRead ::
   -- ^ Byte cache for creating symbolic expressions on demand
   WI.SymNat sym ->
   -- ^ The global memory block number
-  MS.ConcreteImmutableGlobalRead sym w
-concreteImmutableGlobalRead sym imap cache memPtrBlk memRep ptr
+  MS.ConcreteUnmutatedGlobalRead p sym w
+concreteUnmutatedGlobalRead sym imap cache memPtrBlk personality =
+  let popChunks = personality ^. MS.populatedMemChunks in
+  concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache memPtrBlk popChunks
+
+concreteUnmutatedGlobalReadWithPopulatedChunks ::
+  forall sym w ty.
+  ( CB.IsSymInterface sym
+  , MC.MemWidth w
+  ) =>
+  sym ->
+  IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym) ->
+  MBC.ByteCache sym ->
+  WI.SymNat sym ->
+  IS.IntervalSet (IMI.Interval (MC.MemWord w)) ->
+  MC.MemRepr ty ->
+  CL.LLVMPtr sym w ->
+  IO (Maybe (CS.RegValue sym (MS.ToCrucibleType ty)))
+concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache memPtrBlk populatedChunks memRep ptr
   | -- First, check that the pointer being read from is concrete.
     Just ptrBlkNat <- WI.asNat ptrBlk
   , Just addrBV    <- WI.asBV ptrOff
@@ -744,13 +774,13 @@ concreteImmutableGlobalRead sym imap cache memPtrBlk memRep ptr
   , Just memPtrBlkNat <- WI.asNat memPtrBlk
   , ptrBlkNat == memPtrBlkNat
 
-    -- Next, look up the chunks that intersect the read range and try to
-    -- extract contiguous, immutable bytes covering the full read.
+    -- Next, look up the chunks that intersect the read range and try to extract
+    -- contiguous, unmutated bytes covering the full read.
   , let addr = fromInteger @(MC.MemWord w) $ BV.asUnsigned addrBV
   , let endAddr = addr + fromIntegral @Int @(MC.MemWord w) numBytes
   , let chunks = IM.toAscList $
           imap `IM.intersecting` IMI.IntervalCO addr endAddr
-  , Just bytes <- sliceContiguousChunks cache addr numBytes chunks
+  , Just bytes <- sliceContiguousChunks cache addr numBytes populatedChunks chunks
   = do readVal <- readBytesAsRegValue sym memRep bytes
        pure $ Just readVal
 
@@ -1014,17 +1044,17 @@ two important optimizations:
    that is the right value to be properly aligned on most architectures.
 
 2. While tracking the writable global memory in an SMT array is important in
-   case the memory gets updated, there's really no need to track the
-   read-only global memory in an SMT array. After all, read-only memory can
-   never be updated, so we can determine what read-only memory will be by
-   looking up the corresponding bytes in the IntervalMap, bypassing the SMT
-   array completely.
+   case the memory gets updated, there's really no need to track the read-only
+   global memory in an SMT array, nor to track writable memory that has not
+   yet been mutated. We can determine what unmutated memory will be by looking
+   up the corresponding bytes in the IntervalMap, bypassing the SMT array
+   completely.
 
    To determine which parts of memory are read-only, each `SymbolicMemChunk`
    tracks whether its bytes are mutable or immutable. When performing a memory
    read, if we can conclude that all of the memory to be read is immutable
-   (i.e., read-only), then we can convert the symbolic bytes to a bitvector.
-   (See `readBytesAsRegValue` for how this is implemented.)
+   (i.e., read-only) or not yet written, then we can convert the symbolic bytes
+   to a bitvector. (See `readBytesAsRegValue` for how this is implemented.)
 
    There are several criteria that must be met in order for this to be
    possible:
@@ -1032,7 +1062,7 @@ two important optimizations:
    * The read must be concrete.
 
    * The amount of bytes to be read must lie within a contiguous part of
-     read-only memory.
+     unmutated memory.
 
    * There must be enough bytes within this part of memory to cover the number
      of bytes that must be read.

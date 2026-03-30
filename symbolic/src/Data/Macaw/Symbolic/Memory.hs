@@ -167,8 +167,8 @@ import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 -- * No attempt is made to to concretize pointers. That is, 'MS.resolvePointer'
 --   will simply return its pointer argument unchanged.
 --
--- * No special treatment is given to concrete reads from read-only memory.
---   That is, 'MS.concreteImmutableGlobalRead' always returns 'Nothing'.
+-- * No special treatment is given to concrete reads from unmutated memory.
+--   That is, 'MS.concreteUnmutatedGlobalRead' always returns 'Nothing'.
 --
 -- * The memory model does not perform incremental updates before reads or
 --   writes. That is, 'MS.lazilyPopulateGlobalMem' always returns its state
@@ -192,7 +192,7 @@ memModelConfig _ mpt =
     , MS.lookupSyscallHandle = MS.unsupportedSyscalls origin
     , MS.mkGlobalPointerValidityAssertion = mkGlobalPointerValidityPred mpt
     , MS.resolvePointer = pure
-    , MS.concreteImmutableGlobalRead = \_ _ -> pure Nothing
+    , MS.concreteUnmutatedGlobalRead = \_ _ _ -> pure Nothing
     , MS.lazilyPopulateGlobalMem = \_ _ -> pure
     }
   where
