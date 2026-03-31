@@ -17,6 +17,8 @@ module Data.Macaw.Symbolic.Memory.Common
   , GlobalMemoryHooks(..)
   , defaultGlobalMemoryHooks
 
+  , MutableIntervalMap(..)
+  , ImmutableIntervalMap(..)
   , mkGlobalPointerValidityPredCommon
   , MacawProcessAssertion
   , MacawError(..)
@@ -73,6 +75,14 @@ data MemoryModelContents = SymbolicMutable
                          | ConcreteMutable
                          -- ^ All of the global data is taken from the binary
   deriving Eq
+
+-- | An interval map containing only mutable (read-write) memory regions.
+newtype MutableIntervalMap k v = MutableIntervalMap
+  { getMutableIntervalMap :: IM.IntervalMap k v }
+
+-- | An interval map containing only immutable (read-only) memory regions.
+newtype ImmutableIntervalMap k v = ImmutableIntervalMap
+  { getImmutableIntervalMap :: IM.IntervalMap k v }
 
 -- | Convert a Macaw 'MC.Endianness' to a Crucible LLVM 'CLD.EndianForm'.
 toCrucibleEndian :: MC.Endianness -> CLD.EndianForm
@@ -150,12 +160,12 @@ mkGlobalPointerValidityPredCommon ::
      , MC.MemWidth w
      , MacawProcessAssertion sym
      )
-  => IM.IntervalMap (MC.MemWord w) a
-  -- ^ Mutable regions (valid for both reads and writes)
-  -> IM.IntervalMap (MC.MemWord w) b
-  -- ^ Immutable regions (valid for reads only)
+  => MutableIntervalMap (MC.MemWord w) a
+  -> ImmutableIntervalMap (MC.MemWord w) b
   -> MS.MkGlobalPointerValidityAssertion sym w
-mkGlobalPointerValidityPredCommon mutableTbl immutableTbl sym puse mcond ptr = do
+mkGlobalPointerValidityPredCommon mTbl iTbl sym puse mcond ptr = do
+  let MutableIntervalMap mutableTbl = mTbl
+  let ImmutableIntervalMap immutableTbl = iTbl
   let w = MC.memWidthNatRepr @w
 
   let inMappedRange off = \case

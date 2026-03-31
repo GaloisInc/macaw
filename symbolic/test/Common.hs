@@ -19,7 +19,9 @@ import           Numeric.Natural (Natural)
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Symbolic as MS
 import           Data.Macaw.Symbolic.Memory.Common
-                   ( mkGlobalPointerValidityPredCommon
+                   ( MutableIntervalMap(..)
+                   , ImmutableIntervalMap(..)
+                   , mkGlobalPointerValidityPredCommon
                    , defaultProcessMacawAssertion
                    )
 import qualified Lang.Crucible.Backend as CB
@@ -79,14 +81,16 @@ mkSplitMaps ::
   forall w.
   MC.MemWidth w =>
   [(Word64, Word64, CL.Mutability)] ->
-  ( IM.IntervalMap (MC.MemWord w) ()
-  , IM.IntervalMap (MC.MemWord w) ()
+  ( MutableIntervalMap (MC.MemWord w) ()
+  , ImmutableIntervalMap (MC.MemWord w) ()
   )
 mkSplitMaps entries =
-  ( IM.fromList [ (iv, ()) | (lo, hi, CL.Mutable)   <- entries
-                            , let iv = IMI.IntervalCO (fromIntegral lo) (fromIntegral hi) ]
-  , IM.fromList [ (iv, ()) | (lo, hi, CL.Immutable) <- entries
-                            , let iv = IMI.IntervalCO (fromIntegral lo) (fromIntegral hi) ]
+  ( MutableIntervalMap $ IM.fromList
+      [ (iv, ()) | (lo, hi, CL.Mutable)   <- entries
+                  , let iv = IMI.IntervalCO (fromIntegral lo) (fromIntegral hi) ]
+  , ImmutableIntervalMap $ IM.fromList
+      [ (iv, ()) | (lo, hi, CL.Immutable) <- entries
+                  , let iv = IMI.IntervalCO (fromIntegral lo) (fromIntegral hi) ]
   )
 
 -- | Parameterized test for mkGlobalPointerValidityPredCommon.
@@ -398,14 +402,16 @@ genIntervalEntries = do
 
 entriesToSplitMaps ::
   [IntervalEntry] ->
-  ( IM.IntervalMap (MC.MemWord 32) ()
-  , IM.IntervalMap (MC.MemWord 32) ()
+  ( MutableIntervalMap (MC.MemWord 32) ()
+  , ImmutableIntervalMap (MC.MemWord 32) ()
   )
 entriesToSplitMaps entries =
-  ( IM.fromList [ (iv, ()) | e <- entries, ieMut e == CL.Mutable
-                            , let iv = IMI.IntervalCO (fromIntegral (ieLo e)) (fromIntegral (ieHi e)) ]
-  , IM.fromList [ (iv, ()) | e <- entries, ieMut e == CL.Immutable
-                            , let iv = IMI.IntervalCO (fromIntegral (ieLo e)) (fromIntegral (ieHi e)) ]
+  ( MutableIntervalMap $ IM.fromList
+      [ (iv, ()) | e <- entries, ieMut e == CL.Mutable
+                  , let iv = IMI.IntervalCO (fromIntegral (ieLo e)) (fromIntegral (ieHi e)) ]
+  , ImmutableIntervalMap $ IM.fromList
+      [ (iv, ()) | e <- entries, ieMut e == CL.Immutable
+                  , let iv = IMI.IntervalCO (fromIntegral (ieLo e)) (fromIntegral (ieHi e)) ]
   )
 
 genOffset :: H.Gen Word32
@@ -418,8 +424,8 @@ genOffset = Gen.word32 (Range.linearFrom 100 0 maxBound)
 -- | Helper to run mkGlobalPointerValidityPredCommon with concrete block-0 pointer.
 runValidityPred ::
   WEB.ExprBuilder t WE.EmptyExprBuilderState (WEB.Flags WEB.FloatIEEE) ->
-  IM.IntervalMap (MC.MemWord 32) () ->
-  IM.IntervalMap (MC.MemWord 32) () ->
+  MutableIntervalMap (MC.MemWord 32) () ->
+  ImmutableIntervalMap (MC.MemWord 32) () ->
   Word32 ->
   MS.PointerUseTag ->
   Maybe (CS.RegEntry (WEB.ExprBuilder t WE.EmptyExprBuilderState (WEB.Flags WEB.FloatIEEE)) CT.BoolType) ->
@@ -446,8 +452,8 @@ genOffsetInEntries entries = Gen.choice
 -- | Helper to run mkGlobalPointerValidityPredCommon with an ite'd block-0 pointer.
 runValidityPredIte ::
   WEB.ExprBuilder t WE.EmptyExprBuilderState (WEB.Flags WEB.FloatIEEE) ->
-  IM.IntervalMap (MC.MemWord 32) () ->
-  IM.IntervalMap (MC.MemWord 32) () ->
+  MutableIntervalMap (MC.MemWord 32) () ->
+  ImmutableIntervalMap (MC.MemWord 32) () ->
   Word32 ->
   Word32 ->
   MS.PointerUseTag ->
