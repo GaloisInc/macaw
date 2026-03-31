@@ -144,7 +144,7 @@ memModelConfig bak mpt =
     , MS.lookupSyscallHandle = MS.unsupportedSyscalls origin
     , MS.mkGlobalPointerValidityAssertion = mkGlobalPointerValidityPred mpt
     , MS.resolvePointer = MSC.resolveLLVMPtr bak
-    , MS.concreteUnmutatedGlobalRead = concreteUnmutatedGlobalRead sym (memPtrTable mpt) (byteCache mpt) (CLP.llvmPointerBlock (memPtr mpt))
+    , MS.concreteUnmutatedGlobalRead = concreteUnmutatedGlobalRead sym (memPtrTable mpt) (byteCache mpt) (CLP.llvmPointerBlock (memPtr mpt)) (memModelContents mpt)
     , MS.lazilyPopulateGlobalMem = lazilyPopulateGlobalMemArr bak mpt
     }
   where
@@ -319,11 +319,13 @@ sliceContiguousChunks ::
   -- ^ The address being read from
   Int ->
   -- ^ Number of bytes to read
+  MSMC.MemoryModelContents ->
+  -- ^ How mutable memory is modeled
   IS.IntervalSet (IMI.Interval a) ->
   -- ^ Populated chunks (we cannot use mutable chunks in this set)
   [(IMI.Interval a, SymbolicMemChunk sym)] ->
   Maybe [WI.SymBV sym 8]
-sliceContiguousChunks cache addr numBytes populatedChunks =
+sliceContiguousChunks cache addr numBytes memContents populatedChunks =
   \case
     _ | numBytes <= 0 -> Just []
     [] -> Nothing
@@ -345,7 +347,8 @@ sliceContiguousChunks cache addr numBytes populatedChunks =
     validChunk interval chunk =
       case smcMutability chunk of
         CL.Immutable -> True
-        CL.Mutable -> interval `IS.notMember` populatedChunks
+        CL.Mutable -> memContents /= MSMC.SymbolicMutable
+                    && interval `IS.notMember` populatedChunks
 
     -- We expect IntervalCOs
     intervalLen :: IMI.Interval a -> Int
@@ -746,10 +749,12 @@ concreteUnmutatedGlobalRead ::
   -- ^ Byte cache for creating symbolic expressions on demand
   WI.SymNat sym ->
   -- ^ The global memory block number
+  MSMC.MemoryModelContents ->
+  -- ^ How mutable memory is modeled
   MS.ConcreteUnmutatedGlobalRead p sym w
-concreteUnmutatedGlobalRead sym imap cache memPtrBlk personality =
+concreteUnmutatedGlobalRead sym imap cache memPtrBlk memContents personality =
   let popChunks = personality ^. MS.populatedMemChunks in
-  concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache memPtrBlk popChunks
+  concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache memPtrBlk memContents popChunks
 
 concreteUnmutatedGlobalReadWithPopulatedChunks ::
   forall sym w ty.
@@ -760,11 +765,12 @@ concreteUnmutatedGlobalReadWithPopulatedChunks ::
   IM.IntervalMap (MC.MemWord w) (SymbolicMemChunk sym) ->
   MBC.ByteCache sym ->
   WI.SymNat sym ->
+  MSMC.MemoryModelContents ->
   IS.IntervalSet (IMI.Interval (MC.MemWord w)) ->
   MC.MemRepr ty ->
   CL.LLVMPtr sym w ->
   IO (Maybe (CS.RegValue sym (MS.ToCrucibleType ty)))
-concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache memPtrBlk populatedChunks memRep ptr
+concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache memPtrBlk memContents populatedChunks memRep ptr
   | -- First, check that the pointer being read from is concrete.
     Just ptrBlkNat <- WI.asNat ptrBlk
   , Just addrBV    <- WI.asBV ptrOff
@@ -780,7 +786,7 @@ concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache memPtrBlk populate
   , let endAddr = addr + fromIntegral @Int @(MC.MemWord w) numBytes
   , let chunks = IM.toAscList $
           imap `IM.intersecting` IMI.IntervalCO addr endAddr
-  , Just bytes <- sliceContiguousChunks cache addr numBytes populatedChunks chunks
+  , Just bytes <- sliceContiguousChunks cache addr numBytes memContents populatedChunks chunks
   = do readVal <- readBytesAsRegValue sym memRep bytes
        pure $ Just readVal
 

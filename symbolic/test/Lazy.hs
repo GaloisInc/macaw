@@ -26,7 +26,8 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Symbolic as MS
 import           Data.Macaw.Types (BVType)
 import           Data.Macaw.Symbolic.Memory.Common
-                   ( mkGlobalPointerValidityPredCommon
+                   ( MemoryModelContents(..)
+                   , mkGlobalPointerValidityPredCommon
                    , defaultProcessMacawAssertion
                    )
 import           Data.Macaw.Symbolic.Memory.Lazy.Internal
@@ -176,7 +177,7 @@ testImmutableRead repr name chunks readAddr memRepr expected = testCase name $ d
     let imap = mkIntervalMap memChunks
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym repr readAddr
-    res <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk IS.empty memRepr ptr
+    res <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty memRepr ptr
     pure $ case res of
       Nothing -> Nothing
       Just val -> extractLEBytes val (fromIntegral $ MC.memReprBytes memRepr)
@@ -231,7 +232,7 @@ readFromOffsetSymbolicBytes = testCase "Read from offset within SymbolicBytes ch
     globalBlk <- WI.natLit sym globalBlock
     -- Read 2 bytes starting at address 101 (offset 1 into the chunk)
     ptr <- mkGlobalPtr sym MC.Addr32 101
-    res <- concreteImmutableGlobalRead sym imap cache globalBlk bv2 ptr
+    res <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv2 ptr
     pure $ case res of
       Nothing -> Nothing
       Just val -> extractLEBytes val 2
@@ -297,7 +298,7 @@ wrongBlockReturnsNothing = testCase "Wrong block returns Nothing" $ do
     let imap = mkIntervalMap @32 [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkPtr sym MC.Addr32 2 100  -- block 2, but global is block 1
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk IS.empty bv1 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv1 ptr
     pure (isNothing r)
   assertBool "wrong block should return Nothing" result
 
@@ -311,7 +312,7 @@ symbolicOffsetReturnsNothing = testCase "Symbolic offset returns Nothing" $ do
     blkSym <- WI.natLit sym globalBlock
     offSym <- WI.freshConstant sym (WI.safeSymbol "off") (WI.BaseBVRepr (WI.knownNat @32))
     let ptr = CLP.LLVMPointer blkSym offSym
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk IS.empty bv1 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv1 ptr
     pure (isNothing r)
   assertBool "symbolic offset should return Nothing" result
 
@@ -323,7 +324,7 @@ unpopulatedMutableRegionReturnsJust = testCase "Unpopulated mutable region retur
     let imap = mkIntervalMap @32 [(100, chunk)]
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym MC.Addr32 100
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk IS.empty bv1 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv1 ptr
     pure $ case r of
       Nothing -> Nothing
       Just val -> extractLEBytes val 1
@@ -339,9 +340,21 @@ populatedMutableRegionReturnsNothing = testCase "Populated mutable region return
     ptr <- mkGlobalPtr sym MC.Addr32 100
     -- Mark the chunk as populated
     let populated = IS.singleton (IMI.IntervalCO 100 102)
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk populated bv1 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable populated bv1 ptr
     pure (isNothing r)
   assertBool "populated mutable region should return Nothing" result
+
+symbolicMutableUnpopulatedReturnsNothing :: TestTree
+symbolicMutableUnpopulatedReturnsNothing = testCase "SymbolicMutable: unpopulated mutable region returns Nothing" $ do
+  result <- withSym $ \sym -> do
+    cache <- mkByteCache sym
+    let chunk = mkChunk [0xAA, 0xBB] CL.Mutable
+    let imap = mkIntervalMap @32 [(100, chunk)]
+    globalBlk <- WI.natLit sym globalBlock
+    ptr <- mkGlobalPtr sym MC.Addr32 100
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk SymbolicMutable IS.empty bv1 ptr
+    pure (isNothing r)
+  assertBool "SymbolicMutable mutable region should return Nothing even when unpopulated" result
 
 notEnoughBytesReturnsNothing :: TestTree
 notEnoughBytesReturnsNothing = testImmutableRead MC.Addr32
@@ -363,7 +376,7 @@ nonContiguousRegionsReturnsNothing = testCase "Non-contiguous regions returns No
           ]
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym MC.Addr32 100
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk IS.empty bv2 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv2 ptr
     pure (isNothing r)
   assertBool "non-contiguous regions should return Nothing" result
 
@@ -396,7 +409,7 @@ readAdjacentMutableChunkReturnsJust = testCase "Read with adjacent mutable chunk
           ]
     globalBlk <- WI.natLit sym globalBlock
     ptr <- mkGlobalPtr sym MC.Addr32 100
-    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk IS.empty bv2 ptr
+    r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty bv2 ptr
     pure $ case r of
       Nothing -> Nothing
       Just val -> extractLEBytes val 2
@@ -590,7 +603,7 @@ prop_concreteUnmutatedGlobalRead = testPropertyNamed
           Nothing -> fail $ "bvMemReprForSize failed for size " ++ show (rrSize req) ++ " (generator bug)"
           Just r -> pure r
 
-      r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk IS.empty repr ptr
+      r <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty repr ptr
       pure $ case r of
         Nothing -> Nothing
         Just v -> extractLEBytes v (rrSize req)
@@ -634,7 +647,7 @@ prop_readValidityConsistency = testPropertyNamed
           Nothing -> fail $ "bvMemReprForSize failed for size " ++ show sz ++ " (generator bug)"
           Just r -> pure r
 
-      readResult <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk IS.empty repr ptr
+      readResult <- concreteUnmutatedGlobalReadWithPopulatedChunks sym imap cache globalBlk ConcreteMutable IS.empty repr ptr
 
       let mutMap = fmap smcMutability imap
       let ptrEntry = CS.RegEntry (CL.LLVMPointerRepr WI.knownNat) ptr
@@ -688,6 +701,7 @@ tests = testGroup "Lazy memory model"
           , symbolicOffsetReturnsNothing
           , unpopulatedMutableRegionReturnsJust
           , populatedMutableRegionReturnsNothing
+          , symbolicMutableUnpopulatedReturnsNothing
           , notEnoughBytesReturnsNothing
           , nonContiguousRegionsReturnsNothing
           , overlappingRegionsReturnsNothing
