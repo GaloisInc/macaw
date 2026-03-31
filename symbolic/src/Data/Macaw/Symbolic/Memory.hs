@@ -201,13 +201,13 @@ memModelConfig _ mpt =
 -- | An index of all of the (statically) mapped memory in a program, suitable
 -- for pointer translation
 data MemPtrTable sym w =
-  MemPtrTable { memMutableTable :: IM.IntervalMap (MC.MemWord w) ()
+  MemPtrTable { memMutableTable :: MSMC.MutableIntervalMap (MC.MemWord w) ()
               -- ^ The ranges of mutable (static) allocations.
               --
               -- We use 'IM.IntervalMap' rather than @IntervalSet@
               -- for code sharing with the lazy memory model via
               -- 'mkGlobalPointerValidityPredCommon'.
-              , memImmutableTable :: IM.IntervalMap (MC.MemWord w) ()
+              , memImmutableTable :: MSMC.ImmutableIntervalMap (MC.MemWord w) ()
               -- ^ The ranges of immutable (static) allocations.
               , memPtr :: CL.LLVMPtr sym w
               -- ^ The pointer to the allocation backing all of memory
@@ -367,11 +367,13 @@ populateMemory :: ( CB.IsSymBackend sym bak
                -- ^ The initial memory images for the binaries, which contain static data to populate the memory model
                -> WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
                -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
-                    , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) ()
-                    , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) ()
+                    , MSMC.MutableIntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) ()
+                    , MSMC.ImmutableIntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) ()
                     )
-populateMemory proxy cache hooks bak mmc mems symArray0 =
-  MSMC.pleatM (symArray0, IM.empty, IM.empty) mems $ \allocs0 mem ->
+populateMemory proxy cache hooks bak mmc mems symArray0 = do
+  let mm0 = MSMC.MutableIntervalMap IM.empty
+  let im0 = MSMC.ImmutableIntervalMap IM.empty
+  MSMC.pleatM (symArray0, mm0, im0) mems $ \allocs0 mem ->
     MSMC.pleatM allocs0 (MC.memSegments mem) $ \allocs1 seg -> do
       MSMC.pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, mutTbl, immutTbl) (addr, memChunk) -> do
         concreteBytes <- populateMemChunkBytes cache bak hooks mem seg addr memChunk
@@ -438,15 +440,17 @@ populateSegmentChunk :: ( 16 <= w
                    -- ^ Memory chunk address
                    -> [WI.SymBV sym 8]
                    -- ^ The concrete values in this chunk (which may or may not be used)
-                   -> IM.IntervalMap (MC.MemWord w) ()
+                   -> MSMC.MutableIntervalMap (MC.MemWord w) ()
                    -- ^ Accumulator for mutable regions
-                   -> IM.IntervalMap (MC.MemWord w) ()
+                   -> MSMC.ImmutableIntervalMap (MC.MemWord w) ()
                    -- ^ Accumulator for immutable regions
                    -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
-                        , IM.IntervalMap (MC.MemWord w) ()
-                        , IM.IntervalMap (MC.MemWord w) ()
+                        , MSMC.MutableIntervalMap (MC.MemWord w) ()
+                        , MSMC.ImmutableIntervalMap (MC.MemWord w) ()
                         )
-populateSegmentChunk _ bak mmc mem symArray seg addr bytes mutTbl immutTbl = do
+populateSegmentChunk _ bak mmc mem symArray seg addr bytes mTbl iTbl = do
+  let MSMC.MutableIntervalMap mutTbl = mTbl
+  let MSMC.ImmutableIntervalMap immutTbl = iTbl
   let sym = CB.backendGetSym bak
   let ?ptrWidth = MC.memWidth mem
   let abs_addr = toAbsoluteAddr addr
@@ -459,8 +463,12 @@ populateSegmentChunk _ bak mmc mem symArray seg addr bytes mutTbl immutTbl = do
             MSMC.ConcreteMutable -> (False, True)
             MSMC.SymbolicMutable -> (False, False)
   let insertInterval
-        | isImmutable = (mutTbl, IM.insert interval () immutTbl)
-        | otherwise   = (IM.insert interval () mutTbl, immutTbl)
+        | isImmutable = ( MSMC.MutableIntervalMap mutTbl
+                        , MSMC.ImmutableIntervalMap (IM.insert interval () immutTbl)
+                        )
+        | otherwise   = ( MSMC.MutableIntervalMap (IM.insert interval () mutTbl)
+                        , MSMC.ImmutableIntervalMap immutTbl
+                        )
 
   -- When we are treating a piece of memory as having concrete initial values
   -- (e.g., for read-only memory) taken from the binary.
