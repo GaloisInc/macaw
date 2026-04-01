@@ -786,12 +786,14 @@ data X86PrimFn f tp where
 
   -- | Issue a system call
   --
-  -- The arguments are all of the registers that *could* be system call
-  -- arguments under any x86_64 ABI. The return value is all of the registers
-  -- that *could* be return values under any x86_64 ABI.
-  --
   -- The 'NatRepr' is the pointer width for the platform; this is 64 bits for
   -- now, but when we add 32 bit support, we will want this
+  --
+  -- The 'RegState' contains all of the registers that could participate in the
+  -- syscall protocol under any x86_64 ABI. Under the standard Linux ABI, the
+  -- syscall number is in rax, and arguments are passed in rdi, rsi, rdx, r10,
+  -- r8, r9. However, other ABIs or calling conventions may use additional
+  -- registers, which are included here for flexibility.
   --
   -- The return values are rax and rdx (because Linux can return two values for
   -- some system calls; windows seems to just return one).
@@ -807,13 +809,7 @@ data X86PrimFn f tp where
   -- possible syscall conventions for each platform.
   X86Syscall :: (1 <= w)
              => NatRepr w
-             -> !(f (BVType w)) -- rax (syscall #)
-             -> !(f (BVType w)) -- rdi
-             -> !(f (BVType w)) -- rsi
-             -> !(f (BVType w)) -- rdx
-             -> !(f (BVType w)) -- r10
-             -> !(f (BVType w)) -- r8
-             -> !(f (BVType w)) -- r9
+             -> RegState X86Reg f
              -> X86PrimFn f (TupleType [BVType w, BVType w])
 
 instance HasRepr (X86PrimFn f) TypeRepr where
@@ -871,7 +867,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       SHA_Sigma1{} -> knownRepr
       SHA_Ch{} -> knownRepr
       SHA_Maj{} -> knownRepr
-      X86Syscall w _ _ _ _ _ _ _ -> TupleTypeRepr (BVTypeRepr w :< BVTypeRepr w :< Nil)
+      X86Syscall w _ -> TupleTypeRepr (BVTypeRepr w :< BVTypeRepr w :< Nil)
 
 packedAVX :: (1 <= n, 1 <= w) => NatRepr n -> NatRepr w ->
                                                   TypeRepr (BVType (n*w))
@@ -941,8 +937,8 @@ instance TraversableFC X86PrimFn where
       SHA_Ch x y z -> SHA_Ch <$> go x <*> go y <*> go z
       SHA_Maj x y z -> SHA_Maj <$> go x <*> go y <*> go z
 
-      X86Syscall w a1 a2 a3 a4 a5 a6 a7 ->
-        X86Syscall w <$> go a1 <*> go a2 <*> go a3 <*> go a4 <*> go a5 <*> go a6 <*> go a7
+      X86Syscall w regState ->
+        X86Syscall w <$> traverseF go regState
 
 -- | Pretty print a rep value size
 ppRepValSize :: RepValSize w -> Doc ann
@@ -1016,8 +1012,10 @@ instance IsArchFn X86PrimFn where
       SHA_Sigma1 x -> sexprA "sha_Sigma1" [pp x]
       SHA_Ch x y z -> sexprA "sha_Ch" [pp x, pp y, pp z]
       SHA_Maj x y z -> sexprA "sha_Maj" [pp x, pp y, pp z]
-      X86Syscall _w a1 a2 a3 a4 a5 a6 a7 ->
-        sexprA "syscall" [pp a1, pp a2, pp a3, pp a4, pp a5, pp a6, pp a7]
+      X86Syscall _w regState ->
+        let lst = toListF pp regState
+            regArgs = hsep <$> sequenceA lst
+        in (\args -> "syscall" <+> args) <$> regArgs
 
 
 -- | This returns true if evaluating the primitive function implicitly
