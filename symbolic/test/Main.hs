@@ -6,6 +6,7 @@ import Test.Tasty.HUnit ( assertBool, testCase )
 import Data.Macaw.Symbolic.Internal ( assertionsEnabled )
 import qualified Common
 import qualified Lazy
+import qualified MemOps
 
 main :: IO ()
 main = defaultMain $ testGroup "macaw-symbolic"
@@ -15,4 +16,5 @@ main = defaultMain $ testGroup "macaw-symbolic"
       assertBool "assertions should be enabled" assertsEnabled
   , Common.tests
   , Lazy.tests
+  , MemOps.tests
   ]
