@@ -436,9 +436,7 @@ simulateAndVerify :: forall arch sym bak ids w solver scope st fs
                      , ?memOpts :: CLM.MemOptions
                      )
                   => WS.SolverAdapter st
-                  -- ^ The solver adapter to use to discharge assertions
-                  -> WS.LogData
-                  -- ^ A logger to (optionally) record solver interaction (for the goal solver)
+                  -- ^ The solver adapter to use to discharge proof obligations
                   -> bak
                   -- ^ The symbolic backend
                   -> [CS.GenericExecutionFeature sym]
@@ -458,7 +456,7 @@ simulateAndVerify :: forall arch sym bak ids w solver scope st fs
                   -> MD.DiscoveryFunInfo arch ids
                   -- ^ The function to simulate and verify
                   -> IO SimulationResult
-simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmPreset extractor dfi =
+simulateAndVerify goalSolver bak execFeatures archInfo archVals binfo mmPreset extractor dfi =
   MS.withArchConstraints archVals $ do
     halloc <- CFH.newHandleAllocator
     let ?processMacawAssert = MSMC.defaultProcessMacawAssertion
@@ -476,7 +474,7 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo mmP
     (memVar, execResult) <-
       simulateFunction bak execFeatures archVals halloc iMem binfo dfi
 
-    summarizeExecution goalSolver logger bak memVar extractor execResult
+    summarizeExecution goalSolver bak memVar extractor execResult
 
 -- | Post-process the results of symbolic execution
 --
@@ -494,17 +492,15 @@ summarizeExecution ::
   , bak ~ CBO.OnlineBackend solver scope st fs
   , WPO.OnlineSolver solver
   ) =>
-  -- | The solver adapter to use to discharge assertions
+  -- | The solver adapter to use to discharge proof obligations
   WS.SolverAdapter st ->
-  -- | A logger to (optionally) record solver interaction (for the goal solver)
-  WS.LogData ->
   bak ->
   CS.GlobalVar CLM.Mem ->
   -- | A function to extract the return value of a function from its post-state
   ResultExtractor sym arch ->
   CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch)) ->
   IO SimulationResult
-summarizeExecution goalSolver logger bak memVar (ResultExtractor withResult) =
+summarizeExecution goalSolver bak memVar (ResultExtractor withResult) =
   \case
     CS.TimeoutResult {} -> return SimulationTimeout
     CS.AbortedResult {} -> return SimulationAborted
@@ -528,8 +524,12 @@ summarizeExecution goalSolver logger bak memVar (ResultExtractor withResult) =
             bv_val <- CLM.projectLLVM_bv bak val
             notZero <- WI.bvNe sym bv_val zero
             goal <- WI.notPred sym notZero
-            WS.solver_adapter_check_sat goalSolver sym logger [goal] $
-              \case
+            -- Use the online solver to check the goal. This is
+            -- important because the default memory model adds memory
+            -- contents as assumptions to the online backend; a fresh
+            -- offline solver session would not see them.
+            CBO.withSolverProcess bak (return (SimulationResult Unknown)) $ \proc ->
+              WPO.checkSatisfiable proc "goal" goal >>= \case
                 WSR.Sat {} -> return (SimulationResult Sat)
                 WSR.Unsat {} -> return (SimulationResult Unsat)
                 WSR.Unknown -> return (SimulationResult Unknown)
