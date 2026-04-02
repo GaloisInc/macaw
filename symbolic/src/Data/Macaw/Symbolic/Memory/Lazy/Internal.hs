@@ -167,7 +167,7 @@ data MemPtrTable sym w = MemPtrTable
   -- See @Note [Lazy memory model]@.
   , memImmutableTable :: MSMC.ImmutableIntervalMap (MC.MemWord w) (SymbolicMemChunk sym)
   -- ^ Immutable (read-only) memory regions, also chunked to 'chunkSize'.
-  -- Used directly by 'concreteImmutableGlobalRead' for concrete reads, and
+  -- Used directly by 'concreteUnmutatedGlobalRead' for concrete reads, and
   -- lazily populated into the SMT array for symbolic reads.
   , memPtr :: CL.LLVMPtr sym w
   -- ^ The pointer to the allocation backing all of memory.
@@ -881,7 +881,7 @@ lazilyPopulateGlobalMemArr bak mpt useTag memRep ptr state
                     in MSMC.pleatM ([], []) (ivals mutTbl) collectChunk
 
        -- For reads, also populate immutable chunks (needed in the SMT array
-       -- for symbolic reads that fall through concreteImmutableGlobalRead).
+       -- for symbolic reads that fall through concreteUnmutatedGlobalRead).
        -- Writes don't need them since mkGlobalPointerValidityPred rejects
        -- writes to immutable memory.
        (assumps, newAddrs) <- case useTag of
