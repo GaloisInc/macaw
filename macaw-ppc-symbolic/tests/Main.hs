@@ -21,10 +21,10 @@ import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeNats ( KnownNat, type (<=) )
+import qualified Data.Text as Text
 import qualified Prettyprinter as PP
 import           System.FilePath ( (</>), (<.>) )
 import qualified System.FilePath.Glob as SFG
-import qualified System.IO as IO
 import qualified Test.Tasty as TT
 import qualified Test.Tasty.HUnit as TTH
 import qualified Test.Tasty.Options as TTO
@@ -287,14 +287,16 @@ symExTestSized expected mmPreset exePath saveSMT saveMacaw step ehi loadedBinary
        let backendConf = WI.getConfiguration sym
        WC.extendConfig (WS.solver_adapter_config_options solver) backendConf
 
+       -- Configure SMT logging if requested
+       configureSMTLogging saveSMT backendConf solver name exePath
+
        execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend bak)
        archVals <- case MS.archVals (Proxy @(MP.AnyPPC v)) Nothing of
                      Just archVals -> pure archVals
                      Nothing -> error "symExTestSized: impossible"
        let extract = ppcResultExtractor archVals
-       logger <- makeGoalLogger saveSMT solver name exePath
        let ?memOpts = LLVM.defaultMemOptions
-       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals binfo mmPreset extract dfi
+       simRes <- MST.simulateAndVerify solver bak execFeatures archInfo archVals binfo mmPreset extract dfi
        TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()
@@ -306,19 +308,18 @@ toSavedMacawPath :: String -> FilePath
 toSavedMacawPath testName = "/tmp" </> name <.> "macaw"
   where
     name = fmap escapeSlash testName
+    escapeSlash '/' = '_'
+    escapeSlash c = c
 
--- | Construct a solver logger that saves the SMT session for the goal solving
--- in /tmp (if requested by the save-smt option)
---
--- The adapter name is included so that, if the same test is solved with
--- multiple solvers, we can differentiate them.
-makeGoalLogger :: SaveSMT -> WS.SolverAdapter st -> BS8.ByteString -> FilePath -> IO WS.LogData
-makeGoalLogger (SaveSMT saveSMT) adapter funName p
-  | not saveSMT = return WS.defaultLogData
+-- | Configure SMT logging for the online backend if requested
+configureSMTLogging :: SaveSMT -> WC.Config -> WS.SolverAdapter st -> BS8.ByteString -> FilePath -> IO ()
+configureSMTLogging (SaveSMT saveSMT) config solver funName exePath
+  | not saveSMT = return ()
   | otherwise = do
-      hdl <- IO.openFile (toSavedSMTSessionPath adapter funName p) IO.WriteMode
-      return (WS.defaultLogData { WS.logHandle = Just hdl })
-
+      let logPath = toSavedSMTSessionPath solver funName exePath
+      setting <- WC.getOptionSetting CBO.solverInteractionFile config
+      _ <- WC.setOpt setting (Text.pack logPath)
+      return ()
 
 -- | Construct a path in /tmp to save the SMT session to
 --
@@ -332,7 +333,5 @@ toSavedSMTSessionPath adapter funName p = "/tmp" </> filename <.> "smtlib2"
                       , "_"
                       , WS.solver_adapter_name adapter
                       ]
-
-escapeSlash :: Char -> Char
-escapeSlash '/' = '_'
-escapeSlash c = c
+    escapeSlash '/' = '_'
+    escapeSlash c = c
