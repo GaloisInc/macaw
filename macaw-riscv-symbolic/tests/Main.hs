@@ -336,9 +336,8 @@ symExTestSized expected mmPreset exePath saveSMT saveMacaw step ehi archInfo = d
                      Just archVals -> pure archVals
                      Nothing -> error "symExTestSized: impossible"
        let extract = riscvResultExtractor archVals
-       logger <- makeGoalLogger saveSMT solver name exePath
        let ?memOpts = LLVM.defaultMemOptions
-       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals binfo mmPreset extract dfi
+       simRes <- MST.simulateAndVerify solver bak execFeatures archInfo archVals binfo mmPreset extract dfi
        TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()
