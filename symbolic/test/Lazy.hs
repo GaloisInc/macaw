@@ -447,7 +447,7 @@ readBeforeChunkLowerBoundReturnsNothing = testImmutableRead MC.Addr64
 
 -- | The immutable map only contains the immutable chunk; the mutable
 -- chunk at [102, 104) lives in memMutableTable and is not passed to
--- concreteImmutableGlobalRead.
+-- concreteUmutatedGlobalRead.
 readAdjacentMutableChunkReturnsJust :: TestTree
 readAdjacentMutableChunkReturnsJust = testImmutableRead MC.Addr32
   "Read with adjacent mutable chunk returns Just"
@@ -552,7 +552,7 @@ sliceBytes :: BS.ByteString -> Word32 -> Int -> [Word8]
 sliceBytes bs offset len = BS.unpack $ BS.take len $ BS.drop (fromIntegral offset) bs
 
 -- | Build an IntervalMap containing only immutable chunks from a MemorySpace.
--- This mirrors how concreteImmutableGlobalRead only receives memImmutableTable.
+-- This mirrors how concreteUmutatedGlobalRead only receives memImmutableTable.
 memorySpaceToImmutableIntervalMap ::
   MemorySpace ->
   IM.IntervalMap (MC.MemWord 32) (MemChunkBytes sym)
