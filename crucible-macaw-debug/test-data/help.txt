@@ -26,6 +26,7 @@ quit (q): Exit the debugger
 register (reg): Print registers (including block/function arguments)
 run (r): Continue to the next breakpoint or the end of execution
 secret (.): Maintenance commands, used for testing
+sloc (sl): Print current source location
 source (src): Execute a file containing debugger commands
 step (s): Continue N steps of execution (default: 1)
 trace (trace): Print the N most recently executed basic blocks (default: 2)

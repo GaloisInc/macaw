@@ -1,7 +1,10 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -12,6 +15,7 @@ module Data.Macaw.Symbolic.Debug
   ) where
 
 import Control.Lens qualified as Lens
+import Data.BitVector.Sized qualified as BV
 import Data.ByteString (ByteString)
 import Data.ElfEdit qualified as Elf
 import Data.Functor.Const (Const(Const, getConst))
@@ -20,9 +24,11 @@ import Data.List qualified as List
 import Data.Macaw.CFG qualified as M
 import Data.Macaw.Dwarf qualified as D
 import Data.Macaw.Symbolic qualified as M
+import Data.Macaw.Symbolic.DwarfInfo (SourceLocation(..))
+import Data.Macaw.Symbolic.DwarfInfo qualified as DI
 import Data.Macaw.Symbolic.Regs qualified as M
 import Data.Maybe qualified as Maybe
-import Data.Parameterized.Classes (knownRepr, ixF')
+import Data.Parameterized.Classes (knownRepr, ixF', OrdF)
 import Data.Parameterized.Context qualified as Ctx
 import Data.Parameterized.Some (Some(Some))
 import Data.Parameterized.SymbolRepr (someSymbol)
@@ -30,6 +36,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Data.Void (Void, absurd)
+import Data.Word (Word64)
 import Lang.Crucible.CFG.Core qualified as C
 import Lang.Crucible.Debug (ExtImpl, CommandExt)
 import Lang.Crucible.Debug qualified as Debug
@@ -39,6 +46,7 @@ import Lang.Crucible.Simulator.EvalStmt qualified as C
 import Lang.Crucible.Simulator.ExecutionTree qualified as C
 import Lang.Crucible.Simulator.GlobalState qualified as C
 import Lang.Crucible.Simulator.RegMap qualified as C
+import Numeric (showHex)
 import Prettyprinter as PP
 import What4.Interface qualified as W4
 
@@ -57,6 +65,7 @@ data MacawCommand
   | MMem
   | MRegister
   | MTrace
+  | MSloc
   deriving (Bounded, Enum)
 
 instance PP.Pretty MacawCommand where
@@ -69,6 +78,7 @@ abbrev =
     MMem -> "mmem"
     MRegister -> "mreg"
     MTrace -> "mtr"
+    MSloc -> "sl"
 
 detail :: MacawCommand -> Maybe Text
 detail =
@@ -92,6 +102,10 @@ detail =
       \The trace does not include any overrides that may have been executed.\
       \It will be empty for S-expression programs.\
       \"
+    MSloc -> Just "\
+      \Prints the current source location (file, line, column) and function name \
+      \from DWARF debug information. Requires the binary to be compiled with debug info (-g).\
+      \"
 
 help :: MacawCommand -> Text
 help =
@@ -100,6 +114,7 @@ help =
     MMem -> "Display LLVM memory"
     MRegister -> "Display machine registers"
     MTrace -> "Print executed machine instructions"
+    MSloc -> "Print current source location"
 
 name :: MacawCommand -> Text
 name =
@@ -108,6 +123,7 @@ name =
     MMem -> "mmemory"
     MRegister -> "mregister"
     MTrace -> "mtrace"
+    MSloc -> "sloc"
 
 rMDwarfGlobals :: Debug.RegexRepr Debug.ArgTypeRepr (Debug.Star Debug.Text)
 rMDwarfGlobals = knownRepr
@@ -120,6 +136,9 @@ rMRegister = knownRepr
 
 rMTrace :: Debug.RegexRepr Debug.ArgTypeRepr (Debug.Empty Debug.:| Debug.Int)
 rMTrace = knownRepr
+
+rMSloc :: Debug.RegexRepr Debug.ArgTypeRepr Debug.Empty
+rMSloc = knownRepr
 
 enumRepr :: [Text] -> Some (Debug.RegexRepr Debug.ArgTypeRepr)
 enumRepr =
@@ -145,6 +164,7 @@ regex archVals =
       case enumRepr (M.toListFC (Text.pack . getConst) (regNames archVals)) of
         Some r -> Some (Debug.Star r)
     MTrace -> Some rMTrace
+    MSloc -> Some rMSloc
 
 macawCommandExt ::
   M.PrettyF (M.ArchReg arch) =>
@@ -167,6 +187,8 @@ data MacawResponse
   | RMRegister [(String, PP.Doc Void)]
   | RMTrace [[Text]]
   | RNoRegs
+  | RSourceLoc (Maybe SourceLocation)
+  | RNoSourceInfo
 
 instance PP.Pretty MacawResponse where
   pretty =
@@ -194,6 +216,22 @@ instance PP.Pretty MacawResponse where
         if List.null t || all List.null t
         then PP.emptyDoc
         else PP.vcat (PP.punctuate PP.line (map (PP.vcat . map PP.pretty) t))
+      RSourceLoc Nothing ->
+        "Source location not found for current PC (may be outside compiled code or PC is symbolic)"
+      RSourceLoc (Just loc) ->
+        let functionLine = case slFunction loc of
+              Just fn -> ["  Function: " PP.<> PP.pretty (Text.decodeUtf8Lenient fn)]
+              Nothing -> []
+        in PP.vcat $
+          [ "Source location:"
+          , "  File:    " PP.<> PP.pretty (Text.decodeUtf8Lenient (slFile loc))
+          , "  Line:    " PP.<> PP.pretty (slLine loc)
+          , "  Column:  " PP.<> PP.pretty (slColumn loc)
+          ] ++ functionLine ++
+          [ "  Address: 0x" PP.<> PP.pretty (showHex (slAddress loc) "")
+          ]
+      RNoSourceInfo ->
+        "No DWARF line information available (binary not compiled with -g)"
 
 type instance Debug.ResponseExt MacawCommand = MacawResponse
 
@@ -246,25 +284,53 @@ ppGlobals nms =
     then Just (nm, PP.pretty var)
     else Nothing
 
+-- | Extract the program counter from register state.
+-- Returns Nothing if the PC cannot be determined (e.g., symbolic value).
+extractProgramCounter ::
+  forall arch sym mem.
+  M.RegisterInfo (M.ArchReg arch) =>
+  M.MemWidth (M.ArchAddrWidth arch) =>
+  W4.IsExpr (W4.SymExpr sym) =>
+  C.IsInterpretedFloatSymExprBuilder sym =>
+  M.SymArchConstraints arch =>
+  M.GenArchVals mem arch ->
+  C.RegValue sym (C.StructType (M.MacawCrucibleRegTypes arch)) ->
+  Maybe Word64
+extractProgramCounter archVals regs =
+  let regType = C.StructRepr (M.crucArchRegTypes (M.archFunctions archVals))
+      regsEntry = C.RegEntry regType regs
+      ipEntry = M.lookupReg archVals regsEntry M.ip_reg
+      ipPtr = C.regValue ipEntry
+      (_, ptrOffset) = Mem.llvmPointerView ipPtr
+  in case W4.asBV ptrOffset of
+       Just bv -> Just (fromInteger (BV.asUnsigned bv))
+       Nothing -> Nothing
+
 macawExtImpl ::
   M.PrettyF (M.ArchReg arch) =>
+  M.RegisterInfo (M.ArchReg arch) =>
+  OrdF (M.ArchReg arch) =>
+  M.MemWidth (M.ArchAddrWidth arch) =>
   W4.IsExpr (W4.SymExpr sym) =>
+  C.IsInterpretedFloatSymExprBuilder sym =>
   IntrinsicPrinters sym ->
   C.GlobalVar Mem.Mem ->
   M.GenArchVals mem arch ->
   Maybe (Elf.Elf (M.ArchAddrWidth arch)) ->
+  Maybe DI.DwarfInfoCache ->
   ExtImpl MacawCommand p sym (M.MacawExt arch) t
-macawExtImpl iFns mVar archVals mElf =
-  Debug.ExtImpl $
+macawExtImpl iFns mVar archVals mElf dwarfCache =
+  -- Parse DWARF info for globals (still eager)
+  let (errs, cus) = case mElf of
+        Just elf -> D.dwarfInfoFromElf elf
+        Nothing -> ([], [])
+
+  in Debug.ExtImpl $
     \case
       MDwarfGlobals ->
         Debug.CommandImpl
         { Debug.implRegex = rMDwarfGlobals
         , Debug.implBody =
-            let (errs, cus) =
-                  case mElf of
-                    Just elf -> D.dwarfInfoFromElf elf
-                    Nothing -> ([],[]) in
             let vars = D.dwarfGlobals cus in
             \ctx _execState (Debug.MStar gNms0) -> do
               let gNms = List.map (\(Debug.MLit (Debug.AText t)) -> t) gNms0
@@ -318,5 +384,31 @@ macawExtImpl iFns mVar archVals mElf =
                     insnsInStmts (C._blockStmts blk)
               let resp = Debug.XResponse (RMTrace (map entryInsns ents))
               pure (Debug.EvalResult ctx C.ExecutionFeatureNoChange resp)
+        }
+      MSloc ->
+        Debug.CommandImpl
+        { Debug.implRegex = rMSloc
+        , Debug.implBody =
+            \ctx execState Debug.MEmpty -> do
+              let result = Debug.EvalResult ctx C.ExecutionFeatureNoChange Debug.Ok
+
+              case dwarfCache of
+                Nothing ->
+                  pure result { Debug.evalResp = Debug.XResponse RNoSourceInfo }
+                Just cache -> do
+                  case M.execStateRegs (M.archFunctions archVals) execState of
+                    Nothing ->
+                      pure result { Debug.evalResp = Debug.XResponse RNoRegs }
+                    Just regs ->
+                      M.withArchConstraints archVals $
+                        case extractProgramCounter archVals regs of
+                          Nothing ->
+                            -- PC is symbolic or not found
+                            pure result { Debug.evalResp = Debug.XResponse (RSourceLoc Nothing) }
+                          Just pc -> do
+                            -- LAZY LOOKUP: Only builds maps for the CU containing pc
+                            sourceLoc <- DI.lookupSourceLocation cache pc
+                            let resp = Debug.XResponse (RSourceLoc sourceLoc)
+                            pure result { Debug.evalResp = resp }
         }
 

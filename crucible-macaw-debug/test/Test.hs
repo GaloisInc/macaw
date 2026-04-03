@@ -117,7 +117,7 @@ runScript path = do
   let ?parserHooks = ParserHooks Applicative.empty Applicative.empty
   Debug.bareDebuggerExt
     cmdExt
-    (MacawDebug.macawExtImpl (IntrinsicPrinters MapF.empty) mVar archVals Nothing)
+    (MacawDebug.macawExtImpl (IntrinsicPrinters MapF.empty) mVar archVals Nothing Nothing)
     stubMacawExtImpl
     inps
     (Outps.accumulate r)
