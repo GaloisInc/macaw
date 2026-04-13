@@ -31,6 +31,8 @@ package macaw-refinement
   ghc-options: -Wall -Werror
 package compare-dwarfdump
   ghc-options: -Wall -Werror
+package macaw-x86-support
+  ghc-options: -Wall -Werror
 
 -- See Note [Asserts] in crucible-llvm
 package crucible-llvm
