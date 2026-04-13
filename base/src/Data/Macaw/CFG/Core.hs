@@ -24,6 +24,9 @@ single CFG.
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE UndecidableSuperClasses #-}
+-- The boundValue/view RULES pragma is intentional: view from Lens.Micro.Extras
+-- is INLINE but we want the rule to fire first (before view inlines away).
+{-# OPTIONS_GHC -Wno-inline-rule-shadowing #-}
 module Data.Macaw.CFG.Core
   ( -- * Stmt level declarations
     Stmt(..)
@@ -95,9 +98,12 @@ module Data.Macaw.CFG.Core
   , module Data.Macaw.Utils.Pretty
   ) where
 
-import           Control.Lens
+import           Data.Functor.Const (Const(..))
+import           Data.Functor.Identity (Identity(..), runIdentity)
+import           Lens.Micro (Lens', lens, (^.))
+import           Lens.Micro.Extras (view)
 import           Control.Monad (when)
-import           Control.Monad.State.Strict (MonadState(..), State, gets, modify, runState)
+import           Control.Monad.State.Strict (State, gets, modify, runState)
 import           Data.Bits
 import           Data.Int (Int64)
 import qualified Data.Kind as Kind
@@ -613,9 +619,9 @@ getBoundValue r (RegState m) =
 -- Without this rule, boundValue gets left as a higher-order function,
 -- making its uses VERY slow.
 {-# RULES
-      "boundValue/get" forall rs r. get (boundValue r) rs = getBoundValue r rs
+      "boundValue/view" forall rs r. view (boundValue r) rs = getBoundValue r rs
   #-}
--- Note that this rule seems to cover (^.) as well as get, which is
+-- Note that this rule seems to cover (^.) as well as view, which is
 -- fortunate since a parsing bug makes it impossible to mention (^.)
 -- in a rule.
 

@@ -30,7 +30,9 @@ module Data.Macaw.Analysis.FunctionArgs
   , RegisterSet
   ) where
 
-import           Control.Lens
+import           Lens.Micro (Lens', lens, (^.), (&), (%~))
+import           Lens.Micro.GHC (ix)
+import           Lens.Micro.Mtl (use, (.=), (%=))
 import           Control.Monad (when)
 import           Control.Monad.Except (Except, MonadError(..), runExcept)
 import           Control.Monad.Reader (MonadReader(..), ReaderT(..), asks)
@@ -337,11 +339,11 @@ data FunctionArgsState arch ids = FAS
   , _assignmentCache :: !(AssignmentCache (ArchReg arch) ids)
   }
 
-blockDemandMap :: Simple Lens (FunctionArgsState arch ids)
+blockDemandMap :: Lens' (FunctionArgsState arch ids)
                     (Map (ArchSegmentOff arch) (BlockDemands (ArchReg arch)))
 blockDemandMap = lens _blockDemandMap (\s v -> s { _blockDemandMap = v })
 
-assignmentCache :: Simple Lens (FunctionArgsState arch ids) (AssignmentCache (ArchReg arch) ids)
+assignmentCache :: Lens' (FunctionArgsState arch ids) (AssignmentCache (ArchReg arch) ids)
 assignmentCache = lens _assignmentCache (\s v -> s { _assignmentCache = v })
 
 initFunctionArgsState :: FunctionArgsState arch ids
@@ -809,15 +811,15 @@ data FunctionSummaries r = FunctionSummaries {
   , inferenceFails   :: !(FunctionSummaryFailureMap r)
   }
 
-funArgMap :: Simple Lens (FunctionSummaries r) (ArgDemandsMap r)
+funArgMap :: Lens' (FunctionSummaries r) (ArgDemandsMap r)
 funArgMap = lens _funArgMap (\s v -> s { _funArgMap = v })
 
 -- | Get the map from function addresses to what results are demanded.
-funResMap :: Simple Lens (FunctionSummaries r) (Map (RegSegmentOff r) (FinalRegisterDemands r))
+funResMap :: Lens' (FunctionSummaries r) (Map (RegSegmentOff r) (FinalRegisterDemands r))
 funResMap = lens _funResMap (\s v -> s { _funResMap = v })
 
 -- | Get the map from function adderesses to what results are demanded.
-alwaysDemandMap :: Simple Lens (FunctionSummaries r) (Map (RegSegmentOff r)  (DemandSet r))
+alwaysDemandMap :: Lens' (FunctionSummaries r) (Map (RegSegmentOff r)  (DemandSet r))
 alwaysDemandMap = lens _alwaysDemandMap (\s v -> s { _alwaysDemandMap = v })
 
 decomposeMap :: OrdF r

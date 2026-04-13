@@ -51,7 +51,7 @@ module Data.Macaw.X86
        , x86DemandContext
        ) where
 
-import           Control.Lens
+import           Lens.Micro ((.~), (&), (^.))
 import           Control.Monad (when)
 import           Control.Monad.Except (ExceptT, MonadError(..), runExceptT, withExceptT)
 import           Control.Monad.ST

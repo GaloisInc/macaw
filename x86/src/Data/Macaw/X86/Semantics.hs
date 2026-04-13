@@ -18,7 +18,7 @@ module Data.Macaw.X86.Semantics
   ( execInstruction
   ) where
 
-import           Control.Lens ((^.))
+import           Lens.Micro ((^.))
 import           Control.Monad (when)
 import qualified Data.Bits as Bits
 import qualified Data.ByteString.Char8 as BSC

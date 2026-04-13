@@ -30,7 +30,7 @@ module Data.Macaw.Discovery.Classifier (
   ) where
 
 import           Control.Applicative ( Alternative(empty) )
-import           Control.Lens ( (^.), (&), (.~) )
+import           Lens.Micro ((^.), (&), (.~))
 import           Control.Monad ( when, unless )
 import qualified Control.Monad.Reader as CMR
 import qualified Data.Foldable as F

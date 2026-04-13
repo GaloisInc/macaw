@@ -8,7 +8,7 @@ module ElfX64Linux (
   , elfX64LinuxTests
   ) where
 
-import           Control.Lens ( (^.) )
+import           Lens.Micro ((^.))
 import           Control.Monad ( unless, when )
 import qualified Control.Monad.Catch as C
 import qualified Data.ByteString as B

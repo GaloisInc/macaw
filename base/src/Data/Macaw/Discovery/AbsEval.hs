@@ -14,7 +14,7 @@ module Data.Macaw.Discovery.AbsEval
   , absEvalReadMem
   ) where
 
-import           Control.Lens
+import           Lens.Micro ((^.), (&), (%~))
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
 

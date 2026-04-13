@@ -41,7 +41,8 @@ module Data.Macaw.Memory.ElfLoader
   , module Data.Macaw.Memory.Symbols
   ) where
 
-import           Control.Lens
+import           Lens.Micro (Lens', lens, (^.), (.~), (&))
+import           Lens.Micro.Mtl (use, (%=))
 import           Control.Monad (when)
 import           Control.Monad.Except (Except, ExceptT, MonadError(..), runExcept, runExceptT)
 import           Control.Monad.State.Strict (State, StateT(..), execStateT, gets, modify, runState)
@@ -262,11 +263,11 @@ data MemLoaderState w = MLS { _mlsMemory :: !(Memory w)
                             , mlsWarnings :: ![MemLoadWarning]
                             }
 
-mlsMemory :: Simple Lens (MemLoaderState w) (Memory w)
+mlsMemory :: Lens' (MemLoaderState w) (Memory w)
 mlsMemory = lens _mlsMemory (\s v -> s { _mlsMemory = v })
 
 -- | Map from elf section indices to their offset and section
-mlsIndexMap :: Simple Lens (MemLoaderState w) (SectionIndexMap w)
+mlsIndexMap :: Lens' (MemLoaderState w) (SectionIndexMap w)
 mlsIndexMap = lens _mlsIndexMap (\s v -> s { _mlsIndexMap = v })
 
 addWarning :: MemLoadWarning -> MemLoader w ()
@@ -1168,7 +1169,7 @@ addRelaEntry :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
             -> Elf.RelaEntry tp
             -> MemLoader w (Integer, RelocMap w)
 addRelaEntry symtab resolver (idx,m) r = do
-  w <- uses mlsMemory memAddrWidth
+  w <- memAddrWidth <$> use mlsMemory
   reprConstraints w $ do
     let addr = fromIntegral (Elf.relaAddr r)
         e =  RelocEntry { relocEntrySize = relocTargetBytes (Elf.relaType r)
@@ -1202,7 +1203,7 @@ addElfRelaEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
 addElfRelaEntries m _ _ _ Nothing =
   pure m
 addElfRelaEntries m dta resolver symtab (Just relaBuffer) = do
-  w <- uses mlsMemory memAddrWidth
+  w <- memAddrWidth <$> use mlsMemory
   reprConstraints w $ do
     case Elf.decodeRelaEntries dta relaBuffer of
       Left msg -> do
@@ -1220,7 +1221,7 @@ addRelEntry :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
             -> Elf.RelEntry tp
             -> MemLoader w (Integer, RelocMap w)
 addRelEntry end symtab resolver (idx,m) r = do
-  w <- uses mlsMemory memAddrWidth
+  w <- memAddrWidth <$> use mlsMemory
   reprConstraints w $ do
     let addr = fromIntegral (Elf.relAddr r)
         e =  RelocEntry { relocEntrySize = relocTargetBytes (Elf.relType r)
@@ -1256,7 +1257,7 @@ addElfRelEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
 addElfRelEntries m _ _ _ Nothing =
   pure m
 addElfRelEntries m dta resolver symtab (Just relBuffer) = do
-  w <- uses mlsMemory memAddrWidth
+  w <- memAddrWidth <$> use mlsMemory
   reprConstraints w $ do
     case Elf.decodeRelEntries dta relBuffer of
       Left msg -> do
@@ -1284,7 +1285,7 @@ withDynamicBytes :: Elf.DynamicMap w -- ^ Dynamic map
 withDynamicBytes dmap virtMap offTag sizeTag failVal cont = do
   case (Map.findWithDefault [] offTag dmap, Map.findWithDefault [] sizeTag dmap) of
     ([off], [sz]) -> do
-      w <- uses mlsMemory memAddrWidth
+      w <- memAddrWidth <$> use mlsMemory
       reprConstraints w $
         case Elf.lookupVirtAddrContents off virtMap of
           Just relocStartBytes
@@ -1324,7 +1325,7 @@ withAndroidRelaEntries :: ( w ~ Elf.RelocationWidth tp
                        -> MemLoader w a
 withAndroidRelaEntries dmap virtMap offTag sizeTag failVal cont =
   withDynamicBytes dmap virtMap offTag sizeTag failVal $ \bytes -> do
-    w <- uses mlsMemory memAddrWidth
+    w <- memAddrWidth <$> use mlsMemory
     reprConstraints w $
       case Elf.decodeAndroidRelaEntries bytes of
         Left e -> do
@@ -1345,7 +1346,7 @@ dynamicRelocationMap hdr phdrs contents = do
     dynPhdr:dynRest -> do
       when (not (null dynRest)) $ do
         addWarning MultipleDynamicSegments
-      w <- uses mlsMemory memAddrWidth
+      w <- memAddrWidth <$> use mlsMemory
       reprConstraints w $ do
         -- Build virtual address map so that we can resolve
         -- elf virtual addresses to their program header offset.
@@ -1434,7 +1435,7 @@ insertElfSegment :: RegionIndex
                  -> Elf.Phdr w
                  -> MemLoader w ()
 insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
-  w <- uses mlsMemory memAddrWidth
+  w <- memAddrWidth <$> use mlsMemory
   reprConstraints w $
    when (Elf.phdrMemSize phdr > 0) $ do
     let segIdx = Elf.phdrSegmentIndex phdr
@@ -1577,7 +1578,7 @@ insertAllocatedShdr :: Elf.ElfHeader w
                        -- ^ Name of section
                     -> MemLoader w ()
 insertAllocatedShdr hdr contents symtab shdrMap regIdx nm = do
-  w <- uses mlsMemory memAddrWidth
+  w <- memAddrWidth <$> use mlsMemory
   reprConstraints w $ do
    mshdr <- findShdr shdrMap nm
    case mshdr of

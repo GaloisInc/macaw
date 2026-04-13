@@ -60,7 +60,8 @@ module Data.Macaw.AbsDomain.AbsState
   ) where
 
 import           Control.Exception (assert)
-import           Control.Lens
+import           Lens.Micro (Lens', lens, (^.), (.~), (%~), (&), _1, _2)
+import           Lens.Micro.Mtl (use, (.=), (%=))
 import           Control.Monad (guard)
 import           Control.Monad.State.Strict (MonadState(..), State, modify, runState)
 import           Data.Bits

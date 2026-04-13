@@ -80,7 +80,9 @@ module Data.Macaw.Discovery
        ) where
 
 import           Control.Applicative ( Alternative((<|>)) )
-import           Control.Lens ( Lens', (&), (^.), (^?), (%~), (.~), (%=), use, lens, _Just, at )
+import           Lens.Micro (Lens', lens, (&), (^.), (^?), (%~), (.~))
+import           Lens.Micro.GHC (at, _Just)
+import           Lens.Micro.Mtl (use, (%=))
 import           Control.Monad ( unless, when )
 import qualified Control.Monad.ST.Lazy as STL
 import qualified Control.Monad.ST.Strict as STS

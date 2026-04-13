@@ -33,7 +33,8 @@ module Data.Macaw.CFG.Rewriter
   , appendRewrittenArchStmt
   ) where
 
-import           Control.Lens
+import           Lens.Micro (Lens', lens)
+import           Lens.Micro.Mtl (use, (.=))
 import           Control.Monad (when)
 import           Control.Monad.ST
 import           Control.Monad.State.Strict (StateT(..), gets)
@@ -132,7 +133,7 @@ data RewriteState arch s src tgt
                   }
 
 -- | A list of statements in the current block in reverse order.
-rwRevStmts :: Simple Lens (RewriteState arch s src tgt) [Stmt arch tgt]
+rwRevStmts :: Lens' (RewriteState arch s src tgt) [Stmt arch tgt]
 rwRevStmts = lens _rwRevStmts (\s v -> s { _rwRevStmts = v })
 
 -- | Monad for constant propagation within a block.

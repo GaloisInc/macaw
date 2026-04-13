@@ -80,7 +80,9 @@ module Data.Macaw.Dwarf
   )
 where
 
-import Control.Lens
+import Data.Functor.Identity (Identity(..), runIdentity)
+import Lens.Micro (Lens', lens, (^.))
+import Lens.Micro.Mtl ((%=))
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader

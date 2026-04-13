@@ -66,7 +66,10 @@ module Data.Macaw.Analysis.RegisterUse
   , biWriteUsed
   ) where
 
-import           Control.Lens
+import           Data.Functor.Const (Const(..))
+import           Lens.Micro (Lens', lens, (^.), (&), (%~))
+import           Lens.Micro.Extras (view)
+import           Lens.Micro.Mtl ((.=), (%=))
 import           Control.Monad (unless, when, zipWithM_)
 import           Control.Monad.Except (MonadError(..), Except)
 import           Control.Monad.Reader (MonadReader(..), ReaderT(..), asks)
