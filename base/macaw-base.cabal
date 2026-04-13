@@ -40,7 +40,6 @@ library
     galois-dwarf >= 0.2.2,
     IntervalMap >= 0.6.2.0,
     microlens >= 0.4.0,
-    microlens-ghc >= 0.4.0,
     microlens-mtl >= 0.1.0,
     mtl,
     panic,

@@ -80,8 +80,7 @@ module Data.Macaw.Discovery
        ) where
 
 import           Control.Applicative ( Alternative((<|>)) )
-import           Lens.Micro (Lens', lens, (&), (^.), (^?), (%~), (.~))
-import           Lens.Micro.GHC (at, _Just)
+import           Lens.Micro (Lens', lens, (&), (^.), (%~), (.~))
 import           Lens.Micro.Mtl (use, (%=))
 import           Control.Monad ( unless, when )
 import qualified Control.Monad.ST.Lazy as STL
@@ -361,7 +360,7 @@ addFunBlock segment block s =
         | diffSegmentOff bSegment segment > Just (-toInteger (blockSize bBlock))
         -- put the overlapped segment back in the frontier
         -> s & curFunBlocks %~ (Map.insert segment block . Map.delete bSegment)
-             & foundAddrs.at bSegment._Just.foundReasonL %~ SplitAt segment
+             & foundAddrs %~ Map.adjust (foundReasonL %~ SplitAt segment) bSegment
              & frontier %~ Set.insert bSegment
     _ -> s & curFunBlocks %~ Map.insert segment block
 
@@ -765,7 +764,7 @@ analyzeBlocks disOpts ds0 faddr fs =
             | otherwise = go ds r
       pure $ go ds1 (Map.toList (fs^.newEntries))
     Just (baddr, next_roots) ->
-      let mReason = fs^.foundAddrs.at baddr^?_Just.foundReasonL in
+      let mReason = (^. foundReasonL) <$> Map.lookup baddr (fs ^. foundAddrs) in
       fmap (reportAnalyzeBlock disOpts faddr baddr mReason) $ do
         fs' <- transfer baddr (fs & frontier .~ next_roots)
         analyzeBlocks disOpts ds0 faddr fs'

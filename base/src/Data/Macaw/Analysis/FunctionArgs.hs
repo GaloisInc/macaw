@@ -31,7 +31,6 @@ module Data.Macaw.Analysis.FunctionArgs
   ) where
 
 import           Lens.Micro (Lens', lens, (^.), (&), (%~))
-import           Lens.Micro.GHC (ix)
 import           Lens.Micro.Mtl (use, (.=), (%=))
 import           Control.Monad (when)
 import           Control.Monad.Except (Except, MonadError(..), runExcept)
@@ -262,7 +261,7 @@ insertRegDemand r s (FRD m)
 -- | @postRegisterDemands s r@ returns the demand set needed to
 -- compute @r@ in @s@.
 postRegisterDemands :: OrdF r => FinalRegisterDemands r -> r tp -> DemandSet r
-postRegisterDemands (FRD m) r = m^.ix (Some r)
+postRegisterDemands (FRD m) r = Map.findWithDefault mempty (Some r) m
 
 instance OrdF r => Semigroup (FinalRegisterDemands r) where
   FRD x <> FRD y = FRD (Map.unionWith mappend x y)
@@ -419,6 +418,13 @@ addBlockDemands :: OrdF (ArchReg arch)
 addBlockDemands a m =
   blockDemandMap %= Map.insertWith unionBlockDemands a m
 
+-- | Look up the demands for a block, returning empty demands if the block
+-- has not been recorded yet.
+lookupBlockDemands :: ArchSegmentOff arch
+                   -> FunctionArgsM arch ids (BlockDemands (ArchReg arch))
+lookupBlockDemands addr =
+  Map.findWithDefault (BD Map.empty) addr <$> use blockDemandMap
+
 -- | Given a block and a maping from register to value after the block
 -- has executed, this traverses the registers that will be available
 -- in future blocks, and records a mapping from those registers to
@@ -518,7 +524,7 @@ linkKnownCallReturnValues blockAddr faddr regs mReturnAddr = do
   case mReturnAddr of
     Nothing -> do
       -- Get demands for this block.
-      curDemandMap <- Map.findWithDefault mempty blockAddr <$> use blockDemandMap
+      curDemandMap <- lookupBlockDemands blockAddr
 
       -- For each return register @r@, extend @curDemandMap@ so that
       -- to indicate that if a caller demands this function returns
@@ -577,7 +583,7 @@ summarizeCall blockAddr callOff finalRegs mReturnAddr = do
     _ | Just faddr <- valueAsSegmentOff (ctxMemory ctx) ipVal
       , Set.member faddr (computedAddrSet ctx) -> do
 
-      curBlockDemands <- Map.findWithDefault mempty blockAddr <$> use blockDemandMap
+      curBlockDemands <- lookupBlockDemands blockAddr
       newBlockDemands <- linkKnownCallArguments curBlockDemands faddr finalRegs
       -- Update new demands for address.
       blockDemandMap %= Map.insert blockAddr newBlockDemands
@@ -756,10 +762,11 @@ calculateOnePred :: ( MemWidth (ArchAddrWidth arch)
                     -- ^ Address of the previous block.
                  -> FunctionArgsM arch ids (Map (ArchSegmentOff arch) (BlockDemands (ArchReg arch)))
 calculateOnePred xferMap (BD newDemands) pendingMap predAddr = do
-  let xfer = xferMap^.ix predAddr
+  let noXfer = FRD Map.empty
+      xfer   = Map.findWithDefault noXfer predAddr xferMap
 
   -- update uses, returning value before this iteration
-  BD seenDemands <- use (blockDemandMap . ix predAddr)
+  BD seenDemands <- lookupBlockDemands predAddr
 
   demands' <- traverse (transferDemands xfer) newDemands
 
@@ -796,7 +803,8 @@ calculateLocalFixpoint predMap xferMap new =
      Nothing -> pure ()
      Just ((currAddr, newDemands), rest) -> do
        -- propagate new demands bacl to predecessors of this block.
-       next <- foldlM (calculateOnePred xferMap newDemands) rest (predMap^.ix currAddr)
+       let preds = Map.findWithDefault [] currAddr predMap
+       next <- foldlM (calculateOnePred xferMap newDemands) rest preds
        calculateLocalFixpoint predMap xferMap next
 
 -- | Map function entry points that fail to reasons why we could not infer arguments.
@@ -884,7 +892,7 @@ summarizeFunction ctx acc (Some finfo) = do
     new <- use blockDemandMap
     calculateLocalFixpoint (predBlockMap finfo) xferMap new
     -- Get registers demanded by initial block map.
-    entryDemands <- use $ blockDemandMap . ix addr
+    entryDemands <- lookupBlockDemands addr
     -- Record the demands in this function.
     pure $! recordInferredFunctionDemands (archDemandInfo ctx) addr entryDemands acc
 
@@ -895,7 +903,8 @@ postRegisterSetDemandsAtAddr :: OrdF r
                              -> Set (Some r)
                              -> DemandSet r
 postRegisterSetDemandsAtAddr m addr retRegs =
-  foldMap (\(Some r) -> postRegisterDemands (m^.ix addr) r) retRegs
+  let frd = Map.findWithDefault (FRD Map.empty) addr m
+  in foldMap (\(Some r) -> postRegisterDemands frd r) retRegs
 
 -- PERF: we can calculate the return types as we go (instead of doing
 -- so at the end).
@@ -930,7 +939,8 @@ calculateGlobalFixpoint s = go (s^.alwaysDemandMap) (s^.alwaysDemandMap)
 
           regsDemands :: AddrDemandMap r
           regsDemands =
-            Map.unionsWith mappend [ argDemandsMap ^. ix (fun, r) | r <- Set.toList regs ]
+            let demandsFor r = Map.findWithDefault Map.empty (fun, r) argDemandsMap
+            in Map.unionsWith mappend [ demandsFor r | r <- Set.toList regs ]
 
           newDemands = Map.unionWith mappend regsDemands retDemands
 

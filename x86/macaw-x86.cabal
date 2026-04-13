@@ -16,7 +16,6 @@ library
     elf-edit,
     flexdis86 >= 0.1.5,
     microlens >= 0.4.0,
-    microlens-ghc >= 0.4.0,
     microlens-mtl >= 0.1.0,
     macaw-base >= 0.3.3,
     mtl,
