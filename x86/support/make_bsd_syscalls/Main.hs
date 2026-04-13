@@ -5,7 +5,8 @@ module Main
   ( main
   ) where
 
-import           Control.Lens
+import           Data.Function ((&))
+import           Lens.Micro ((%~), _1, _2)
 import           Data.Attoparsec.ByteString.Char8 (Parser)
 import qualified Data.Attoparsec.ByteString.Char8 as P
 import           Data.ByteString (ByteString)
@@ -16,7 +17,6 @@ import           Language.C
 import           Language.C.Analysis.AstAnalysis
 import           Language.C.Analysis.SemRep
 import           Language.C.Analysis.TravMonad
-import           Language.C.Data.Name (newNameSupply)
 import           Language.C.Data.Position (position)
 import           System.Environment (getArgs)
 import           System.Exit
@@ -248,10 +248,10 @@ main = do
 
   let (syscalls, split_headers) = splitFile (filter (not . BS.null) ls)
       headers = BS.intercalate "\n" split_headers
-      Right tunit  = parseC headers (position 0 "" 0 0 Nothing)
+      tunit = either (error . show) id $ parseC headers (position 0 "" 0 0 Nothing)
       idents       = translUnitToIdents tunit
 
-  ms <- mapM (parseSyscallLine idents) (tail syscalls)
+  ms <- mapM (parseSyscallLine idents) (drop 1 syscalls)
   putStrLn "Got ms"
   -- mapM_ pp (catMaybes ms)
   print $ generateHSFile tunit $ catMaybes ms

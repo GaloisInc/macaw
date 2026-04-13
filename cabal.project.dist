@@ -19,6 +19,7 @@ packages: base/
           macaw-x86-cli/
           macaw-x86-syntax/
           x86/
+          x86/support/
           symbolic/
           symbolic-syntax/
           x86_symbolic/
