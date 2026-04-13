@@ -18,7 +18,7 @@ module Data.Macaw.AbsDomain.Refine
   ) where
 
 
-import           Control.Lens
+import           Lens.Micro ((&), (%~), (.~), (^.))
 import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
 

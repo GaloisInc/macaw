@@ -47,7 +47,7 @@ module Data.Macaw.X86.Getters
   , ymmMemRepr
   ) where
 
-import           Control.Lens ((&))
+import           Lens.Micro ((&))
 import qualified Control.Monad.Fail as MF
 import           Data.Parameterized.NatRepr
 import qualified Data.Text as T

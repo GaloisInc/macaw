@@ -52,7 +52,7 @@ module Data.Macaw.Discovery.State
   , RegConstraint
   )  where
 
-import           Control.Lens
+import           Lens.Micro (Lens', lens, (^.))
 import qualified Data.ByteString.Char8 as BSC
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -147,7 +147,7 @@ discoveredFunName finfo =
     Just nm -> nm
     Nothing -> BSC.pack (show (discoveredFunAddr finfo))
 
-parsedBlocks :: Simple Lens (DiscoveryFunInfo arch ids) (Map (ArchSegmentOff arch) (Parsed.ParsedBlock arch ids))
+parsedBlocks :: Lens' (DiscoveryFunInfo arch ids) (Map (ArchSegmentOff arch) (Parsed.ParsedBlock arch ids))
 parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
 
 instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
@@ -250,20 +250,20 @@ globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | List of functions to explore next.
 unexploredFunctions
-  :: Simple Lens (DiscoveryState arch) (UnexploredFunctionMap arch)
+  :: Lens' (DiscoveryState arch) (UnexploredFunctionMap arch)
 unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunctions = v })
 
 -- | Get information for specific functions
-funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
+funInfo :: Lens' (DiscoveryState arch) (Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
 -- | Retrieves functions that are trusted entry points.
 trustedFunctionEntryPoints
-  :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) Info.NoReturnFunStatus)
+  :: Lens' (DiscoveryState arch) (Map (ArchSegmentOff arch) Info.NoReturnFunStatus)
 trustedFunctionEntryPoints =
   lens _trustedFunctionEntryPoints (\s v -> s { _trustedFunctionEntryPoints = v })
 
-exploreFnPred :: Simple Lens (DiscoveryState arch) (ArchSegmentOff arch -> Bool)
+exploreFnPred :: Lens' (DiscoveryState arch) (ArchSegmentOff arch -> Bool)
 exploreFnPred = lens _exploreFnPred (\s v -> s { _exploreFnPred = v })
 
 ------------------------------------------------------------------------

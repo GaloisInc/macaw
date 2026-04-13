@@ -5,7 +5,7 @@ module Data.Macaw.Discovery.Classifier.JumpTable (
   ) where
 
 import           Control.Applicative ( Alternative((<|>)) )
-import           Control.Lens ( (&), (^.) )
+import           Lens.Micro ((&), (^.))
 import           Control.Monad ( when, unless )
 import qualified Control.Monad.Reader as CMR
 import qualified Data.ByteString as BS

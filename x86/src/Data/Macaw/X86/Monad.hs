@@ -166,9 +166,9 @@ module Data.Macaw.X86.Monad
   ) where
 
 import           Control.Exception
-import           Control.Lens hiding ((.=))
 import           Control.Monad
 import qualified Data.Bits as Bits
+import           Data.Function ((&))
 import           Data.Macaw.CFG
 import           Data.Macaw.Types
 import           Data.Maybe

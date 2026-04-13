@@ -62,7 +62,9 @@ module Data.Macaw.X86.Generator
   , inAVX
   ) where
 
-import           Control.Lens
+import           Lens.Micro (Lens, Lens', lens, (^.))
+import           Lens.Micro.Extras (view)
+import           Lens.Micro.Mtl ((.=), (%=))
 import           Control.Monad (liftM)
 import           Control.Monad.Cont (ContT(..))
 import           Control.Monad.Except (MonadError(..), ExceptT)
@@ -179,13 +181,13 @@ emptyPreBlock startAddr s  =
            , pBlockStart  = startAddr
            }
 
-pBlockStmts :: Simple Lens (PreBlock ids) (Seq (Stmt X86_64 ids))
+pBlockStmts :: Lens' (PreBlock ids) (Seq (Stmt X86_64 ids))
 pBlockStmts = lens _pBlockStmts (\s v -> s { _pBlockStmts = v })
 
-pBlockState :: Simple Lens (PreBlock ids) (RegState X86Reg (Value X86_64 ids))
+pBlockState :: Lens' (PreBlock ids) (RegState X86Reg (Value X86_64 ids))
 pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 
-pBlockApps  :: Simple Lens (PreBlock ids) (MapF (App (Value X86_64 ids)) (Assignment X86_64 ids))
+pBlockApps  :: Lens' (PreBlock ids) (MapF (App (Value X86_64 ids)) (Assignment X86_64 ids))
 pBlockApps = lens _pBlockApps (\s v -> s { _pBlockApps = v })
 
 -- | Finishes the current block, if it is started.
@@ -246,7 +248,7 @@ data GenState st_s ids = GenState
            are working with an SSE instruction. -}
        }
 
-genRegUpdates :: Simple Lens (GenState st_s ids) (MapF.MapF X86Reg (Value X86_64 ids))
+genRegUpdates :: Lens' (GenState st_s ids) (MapF.MapF X86Reg (Value X86_64 ids))
 genRegUpdates = lens _genRegUpdates (\s v -> s { _genRegUpdates = v })
 
 -- | Blocks that are not in CFG that end with a FetchAndExecute,
@@ -254,7 +256,7 @@ genRegUpdates = lens _genRegUpdates (\s v -> s { _genRegUpdates = v })
 blockState :: Lens (GenState st_s ids) (GenState st_s ids) (PreBlock ids) (PreBlock ids)
 blockState = lens _blockState (\s v -> s { _blockState = v })
 
-curX86State :: Simple Lens (GenState st_s ids) (RegState X86Reg (Value X86_64 ids))
+curX86State :: Lens' (GenState st_s ids) (RegState X86Reg (Value X86_64 ids))
 curX86State = blockState . pBlockState
 
 ------------------------------------------------------------------------

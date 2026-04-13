@@ -30,7 +30,6 @@ module Data.Macaw.Discovery.ParsedContents (
   , ppTermStmt
   ) where
 
-import qualified Control.Lens as CL
 import           Data.Maybe ( maybeToList )
 import qualified Data.Parameterized.Map as MapF
 import           Data.Text ( Text )
@@ -262,8 +261,8 @@ ppTermStmt tstmt =
     ParsedLookupTable _layout s idx entries ->
       PP.vcat
       [ "ijump" <+> PP.pretty idx
-      , PP.indent 2 (PP.vcat (CL.imap (\i v -> PP.pretty i <+> ":->" <+> PP.viaShow v)
-                             (V.toList entries)))
+      , PP.indent 2 (PP.vcat (zipWith (\i v -> PP.pretty (i :: Int) <+> ":->" <+> PP.viaShow v)
+                             [0..] (V.toList entries)))
       , PP.indent 2 (PP.pretty s) ]
     ParsedReturn s ->
       PP.vcat
