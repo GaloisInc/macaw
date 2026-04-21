@@ -35,6 +35,7 @@ import           Data.Kind ( Type )
 import qualified Prettyprinter as PP
 import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.List as PL
+import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TraversableF as TF
@@ -279,15 +280,18 @@ data PPCPrimFn v f tp where
   -- uniform treatment is possible. See the x86 version for a more detailed
   -- account of the translation strategy.
   --
-  -- The syscall number is in @r0@. Arguments are passed in the following
+  -- The 'NatRepr' indicates the pointer width (32 or 64 bits).
+  --
+  -- The 'RegState' contains all of the registers that could participate in the
+  -- syscall protocol under any PowerPC ABI. Under standard PowerPC ABIs, the
+  -- syscall number is in @r0@, and arguments are passed in the following
   -- registers:
   --
   -- * @r3@-@r9@ (on PPC32)
   -- * @r3@-@r8@ (on PPC64)
   --
-  -- For the sake of convenience, we include all of the registers from
-  -- @r3@-@r9@, regardless of whether PPC32 or PPC64 is used. (The value of @r9@
-  -- is unused on PPC64.)
+  -- However, other ABIs or system call conventions may use additional registers,
+  -- which are included here for flexibility.
   --
   -- The system call can return both a value (in @r3@) and an error condition
   -- (in @r0@ on PPC32, or in the @cr0.SO@ bit on PPC64). If the error condition
@@ -299,14 +303,7 @@ data PPCPrimFn v f tp where
   -- condition as a full 32-bit register value, even though only the @cr0.SO@
   -- bit of this value is used on PPC64.
   PPCSyscall :: NR.NatRepr (SP.AddrWidth v)
-             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r0@ (syscall number)
-             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r3@
-             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r4@
-             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r5@
-             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r6@
-             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r7@
-             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r8@
-             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r9@ (only used on PPC32)
+             -> MC.RegState (PPCReg v) f
              -> PPCPrimFn v f (MT.TupleType [MT.BVType (SP.AddrWidth v), MT.BVType 32])
                 -- ^ A pair of the return value (@r3@) and the error condition
                 -- (@r0@ on PPC32, or @cr0.SO@ on PPC64).
@@ -498,7 +495,7 @@ data PPCPrimFn v f tp where
 
 instance (1 <= SP.AddrWidth v) => MT.HasRepr (PPCPrimFn v f) MT.TypeRepr where
   typeRepr = \case
-    PPCSyscall w _ _ _ _ _ _ _ _ ->
+    PPCSyscall w _ ->
       MT.TupleTypeRepr (MT.BVTypeRepr w
                         D.:< MT.BVTypeRepr (MT.knownNat @32)
                         D.:< D.Nil)
@@ -581,15 +578,8 @@ rewritePrimFn :: ( PPCArchConstraints v
               => PPCPrimFn v (MC.Value (SP.AnyPPC v) src) tp
               -> Rewriter (SP.AnyPPC v) s src tgt (MC.Value (SP.AnyPPC v) tgt tp)
 rewritePrimFn = \case
-  PPCSyscall w r0 r3 r4 r5 r6 r7 r8 r9 -> do
-    tgtFn <- PPCSyscall w <$> rewriteValue r0
-                          <*> rewriteValue r3
-                          <*> rewriteValue r4
-                          <*> rewriteValue r5
-                          <*> rewriteValue r6
-                          <*> rewriteValue r7
-                          <*> rewriteValue r8
-                          <*> rewriteValue r9
+  PPCSyscall w regState -> do
+    tgtFn <- PPCSyscall w <$> TF.traverseF rewriteValue regState
     evalRewrittenArchFn tgtFn
   UDiv rep lhs rhs -> do
     tgtFn <- UDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
@@ -666,9 +656,10 @@ rewritePrimFn = \case
 
 ppPrimFn :: (Applicative m) => (forall u . f u -> m (PP.Doc ann)) -> PPCPrimFn v f tp -> m (PP.Doc ann)
 ppPrimFn pp = \case
-  PPCSyscall w r0 r3 r4 r5 r6 r7 r8 r9 ->
-    ppSC "ppc_syscall" w <$> pp r0 <*> pp r3 <*> pp r4 <*> pp r5
-                         <*> pp r6 <*> pp r7 <*> pp r8 <*> pp r9
+  PPCSyscall w regState ->
+    let lst = TF.toListF pp regState
+        regArgs = PP.cat <$> sequenceA lst
+    in (\args -> "ppc_syscall" PP.<+> PP.viaShow w PP.<+> args) <$> regArgs
   UDiv _ lhs rhs -> ppBinary "ppc_udiv" <$> pp lhs <*> pp rhs
   SDiv _ lhs rhs -> ppBinary "ppc_sdiv" <$> pp lhs <*> pp rhs
   FPNeg _fi x -> ppUnary "ppc_fp_neg" <$> pp x
@@ -706,9 +697,6 @@ ppPrimFn pp = \case
   ppBinary s v1' v2' = s PP.<+> v1' PP.<+> v2'
   pp3 s v1' v2' v3' = s PP.<+> v1' PP.<+> v2' PP.<+> v3'
   pp4 s v1' v2' v3' v4' = s PP.<+> v1' PP.<+> v2' PP.<+> v3' PP.<+> v4'
-  ppSC s w r0 r3 r4 r5 r6 r7 r8 r9 =
-    s PP.<+> PP.viaShow w PP.<+> r0 PP.<+> r3 PP.<+> r4 PP.<+> r5
-                          PP.<+> r6 PP.<+> r7 PP.<+> r8 PP.<+> r9
 
 instance MC.IsArchFn (PPCPrimFn v) where
   ppArchFn = ppPrimFn
@@ -721,9 +709,8 @@ instance FC.FoldableFC (PPCPrimFn v) where
 
 instance FC.TraversableFC (PPCPrimFn v) where
   traverseFC go = \case
-    PPCSyscall w r0 r3 r4 r5 r6 r7 r8 r9 ->
-      PPCSyscall w <$> go r0 <*> go r3 <*> go r4 <*> go r5
-                   <*> go r6 <*> go r7 <*> go r8 <*> go r9
+    PPCSyscall w regState ->
+      PPCSyscall w <$> TF.traverseF go regState
     UDiv rep lhs rhs -> UDiv rep <$> go lhs <*> go rhs
     SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
     FPNeg  fi x -> FPNeg fi <$> go x
@@ -836,7 +823,7 @@ ppcInstructionMatcher (D.Instruction opc operands) =
       let r7 = regs ^. MC.boundValue (PPC_GP (D.GPR 7))
       let r8 = regs ^. MC.boundValue (PPC_GP (D.GPR 8))
       let r9 = regs ^. MC.boundValue (PPC_GP (D.GPR 9))
-      let sc = PPCSyscall w r0 r3 r4 r5 r6 r7 r8 r9
+      let sc = PPCSyscall w regs
       res <- G.addExpr =<< evalArchFn sc
 
       resVal       <- G.addExpr (G.AppExpr (MC.TupleField knownRepr res PL.index0))

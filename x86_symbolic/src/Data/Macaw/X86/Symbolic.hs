@@ -36,6 +36,7 @@ import           Data.Kind
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableF
+import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Parameterized.TraversableFC
 
 import qualified Data.Macaw.CFG as M
@@ -100,24 +101,24 @@ instance TraversableFC X86StmtExtension where
 
 type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
+regStateToAssignment :: forall ids.
+                        M.RegState M.X86Reg (M.Value M.X86_64 ids)
+                      -> Ctx.Assignment (M.Value M.X86_64 ids) (ArchRegContext M.X86_64)
+regStateToAssignment regState = FC.fmapFC lookupReg x86RegAssignment
+  where
+    lookupReg :: M.X86Reg tp -> M.Value M.X86_64 ids tp
+    lookupReg reg = M.getBoundValue reg regState
 
 crucGenX86Fn :: forall ids s tp. M.X86PrimFn (M.Value M.X86_64 ids) tp
              -> CrucGen M.X86_64 ids s (C.Atom s (ToCrucibleType tp))
 crucGenX86Fn fn =
   case fn of
-    M.X86Syscall w v1 v2 v3 v4 v5 v6 v7 -> do
+    M.X86Syscall w regState -> do
       -- This is the key mechanism for our system call handling. See Note
       -- [Syscalls] for details
-      a1 <- valueToCrucible v1
-      a2 <- valueToCrucible v2
-      a3 <- valueToCrucible v3
-      a4 <- valueToCrucible v4
-      a5 <- valueToCrucible v5
-      a6 <- valueToCrucible v6
-      a7 <- valueToCrucible v7
-
-      let syscallArgs = Ctx.Empty Ctx.:> a1 Ctx.:> a2 Ctx.:> a3 Ctx.:> a4 Ctx.:> a5 Ctx.:> a6 Ctx.:> a7
-      let argTypes = Ctx.Empty Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w
+      let rassign = regStateToAssignment regState
+      syscallArgs <- macawAssignToCrucM valueToCrucible rassign
+      let argTypes = knownRepr
       let retTypes = Ctx.Empty Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w
       let retRepr = C.StructRepr retTypes
       syscallArgStructAtom <- evalAtom (C.EvalApp (CE.MkStruct argTypes syscallArgs))
