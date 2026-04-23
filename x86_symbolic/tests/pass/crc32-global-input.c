@@ -4,7 +4,7 @@
 // path. With the optimization the solver can determine the checksum is the
 // concrete value 0x68d892cf and prove the assertion without path explosion.
 
-static const unsigned long crc_table[256] = {
+__attribute__((section(".rodata"))) static const unsigned long crc_table[256] = {
     0x00000000UL, 0x77073096UL, 0xee0e612cUL, 0x990951baUL,
     0x076dc419UL, 0x706af48fUL, 0xe963a535UL, 0x9e6495a3UL,
     0x0edb8832UL, 0x79dcb8a4UL, 0xe0d5e91eUL, 0x97d2d988UL,
