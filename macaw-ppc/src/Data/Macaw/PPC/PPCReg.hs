@@ -37,7 +37,7 @@ import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TH.GADT as TH
 import qualified Prettyprinter as PP
 
-import qualified Dismantle.PPC as D
+import qualified Dismantle.PPC.Operands as D
 import qualified SemMC.Architecture.PPC as PPC
 import qualified SemMC.Architecture.PPC.Location as APPC
 

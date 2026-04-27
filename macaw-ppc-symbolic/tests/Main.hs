@@ -30,7 +30,7 @@ import qualified Test.Tasty.HUnit as TTH
 import qualified Test.Tasty.Options as TTO
 import qualified Test.Tasty.Runners as TTR
 
-import qualified Dismantle.PPC as DP
+import qualified Dismantle.PPC.Operands as DP
 import qualified Data.Macaw.Architecture.Info as MAI
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.BinaryLoader.PPC as MBLP

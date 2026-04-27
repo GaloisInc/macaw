@@ -16,7 +16,7 @@ import qualified Data.Macaw.Types as MT
 import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
-import           Dismantle.PPC
+import           Dismantle.PPC.Opcodes
 import qualified What4.Expr.Builder as WEB
 import qualified Language.Haskell.TH as TH
 import qualified SemMC.Architecture.PPC as SP
@@ -51,7 +51,7 @@ execInstruction =
                                   , appTranslator = ppcAppEvaluator
                                   , instructionMatchHook = 'ppcInstructionMatcher
                                   , archEndianness = MM.BigEndian
-                                  , operandTypeQ = [t| Dismantle.PPC.Operand |]
+                                  , operandTypeQ = [t| Dismantle.PPC.Opcodes.Operand |]
                                   , archTypeQ = [t| (SP.AnyPPC SP.V64) |]
                                   , genLibraryFunction = \_ -> True
                                   , genOpcodeCase = genOpc

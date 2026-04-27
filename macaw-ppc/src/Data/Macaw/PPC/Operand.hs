@@ -21,7 +21,7 @@ import           Data.Word ( Word32 )
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Macaw.CFG.Core as MC
 import           Data.Macaw.Types
-import qualified Dismantle.PPC as D
+import qualified Dismantle.PPC.Operands as D
 import           GHC.TypeLits ( type (<=) )
 
 import qualified SemMC.Architecture.PPC as PPC

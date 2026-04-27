@@ -51,7 +51,7 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Typeable ( Typeable )
-import qualified Dismantle.PPC as D
+import qualified Dismantle.PPC.Operands as D
 import           GHC.TypeLits
 import qualified Lang.Crucible.LLVM.MemModel as MM
 import qualified Lang.Crucible.Types as C

@@ -32,7 +32,7 @@ import           Data.Parameterized.Some ( Some(..) )
 import qualified SemMC.Architecture.PPC as SP
 import           Prettyprinter ( pretty )
 
-import qualified Dismantle.PPC as D
+import qualified Dismantle.PPC.Operands as D
 
 import qualified Data.Macaw.SemMC.Generator as MSG
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
