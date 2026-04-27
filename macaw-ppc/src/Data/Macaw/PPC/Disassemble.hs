@@ -26,7 +26,9 @@ import qualified Data.Text as T
 import           Data.Word ( Word64 )
 import           Text.Printf ( printf )
 
-import qualified Dismantle.PPC as D
+import qualified Dismantle.PPC.Disassembler as D ( disassembleInstruction )
+import qualified Dismantle.PPC.Opcodes as D
+import qualified Dismantle.PPC.PrettyPrint as D ( ppInstruction )
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block

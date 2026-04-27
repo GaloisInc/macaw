@@ -44,7 +44,8 @@ import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewritten
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 
-import qualified Dismantle.PPC as D
+import qualified Dismantle.PPC.Opcodes as D
+import qualified Dismantle.PPC.Operands as D
 import qualified SemMC.Architecture.PPC as SP
 import qualified SemMC.Architecture.PPC.Eval as E
 
