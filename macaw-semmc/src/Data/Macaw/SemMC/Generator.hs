@@ -44,7 +44,6 @@ module Data.Macaw.SemMC.Generator (
 
 import           GHC.TypeLits
 
-import           Control.Lens
 import qualified Control.Monad.Cont as Ct
 import qualified Control.Monad.Except as ET
 import qualified Control.Monad.Fail as MF
@@ -57,6 +56,8 @@ import           Data.Maybe ( fromMaybe )
 import qualified Data.Sequence as Seq
 import           Data.Word (Word64)
 import           GHC.Stack ( HasCallStack )
+import           Lens.Micro ( Lens', (&), (.~), (^.), lens )
+import           Lens.Micro.Mtl ( (.=), (%=) )
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
