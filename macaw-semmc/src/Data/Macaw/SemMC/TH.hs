@@ -46,7 +46,6 @@ module Data.Macaw.SemMC.TH (
 
 import           GHC.TypeLits ( Symbol )
 
-import           Control.Lens ( (^.) )
 import           Control.Monad ( ap, join, void, liftM, foldM, forM )
 import qualified Control.Concurrent.Async as Async
 import qualified Data.Functor.Const as C
@@ -61,6 +60,7 @@ import           Data.Proxy ( Proxy(..) )
 import qualified Data.Text as T
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax
+import           Lens.Micro ( (^.) )
 import qualified LibBF as BF
 import           Text.Read ( readMaybe )
 
