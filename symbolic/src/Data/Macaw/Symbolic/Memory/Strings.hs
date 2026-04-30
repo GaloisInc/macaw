@@ -14,7 +14,6 @@ module Data.Macaw.Symbolic.Memory.Strings (
   macawLoader,
 ) where
 
-import Control.Lens ((^.))
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.State.Strict qualified as State
 import Data.Macaw.CFG qualified as MC
@@ -30,6 +29,7 @@ import Lang.Crucible.LLVM.MemModel qualified as LCLM
 import Lang.Crucible.LLVM.MemModel.Strings qualified as LCLMS
 import Lang.Crucible.Simulator qualified as C
 import Lang.Crucible.Simulator.ExecutionTree qualified as C
+import Lens.Micro ((^.))
 import What4.Expr.Builder qualified as WEB
 import What4.Interface qualified as WI
 import What4.Protocol.Online qualified as WPO

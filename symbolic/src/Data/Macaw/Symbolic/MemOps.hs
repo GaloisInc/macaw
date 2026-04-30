@@ -50,12 +50,12 @@ module Data.Macaw.Symbolic.MemOps
   ) where
 
 import           Control.Exception (throwIO)
-import           Control.Lens (Lens',(^.),(&),(%~),lens)
 import           Control.Monad (guard, when)
 import           Data.Bits (testBit)
 import qualified Data.IntervalMap.Interval as IMI
 import qualified Data.IntervalSet as IS
 import qualified Data.Vector as V
+import           Lens.Micro (Lens', (&), (%~), (^.), lens)
 
 import qualified Data.BitVector.Sized as BV
 import           Data.Parameterized (Some(..))

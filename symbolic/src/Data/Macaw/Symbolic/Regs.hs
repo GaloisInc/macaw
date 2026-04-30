@@ -8,7 +8,6 @@ module Data.Macaw.Symbolic.Regs
   ) where
 
 import Control.Applicative ((<|>))
-import Control.Lens qualified as Lens
 import Data.Macaw.Symbolic qualified as M
 import Data.Parameterized.Context qualified as Ctx
 import Data.Type.Equality ((:~:)(Refl), testEquality)
@@ -16,6 +15,7 @@ import Lang.Crucible.CFG.Core qualified as C
 import Lang.Crucible.Simulator.CallFrame qualified as C
 import Lang.Crucible.Simulator.ExecutionTree qualified as C
 import Lang.Crucible.Simulator.RegMap qualified as C
+import Lens.Micro qualified as Lens
 
 -- | Helper, not exported
 mostRecentValOfTypeInAssignment ::

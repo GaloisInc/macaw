@@ -54,8 +54,6 @@ module Data.Macaw.Symbolic.Memory.Lazy.Internal (
 import           GHC.TypeLits
 
 import qualified Control.Exception as X
-import qualified Control.Lens as L
-import           Control.Lens ((^.))
 import           Control.Monad ( guard )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.BitVector.Sized as BV
@@ -65,6 +63,8 @@ import qualified Data.IntervalMap.Interval as IMI
 import qualified Data.IntervalMap.Strict as IM
 import qualified Data.IntervalSet as IS
 import qualified Data.Vector as Vec
+import qualified Lens.Micro as L
+import           Lens.Micro ((^.))
 
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Vector as PV

@@ -46,8 +46,6 @@ module Data.Macaw.Symbolic.Testing (
   ) where
 
 import qualified Control.Exception as X
-import qualified Control.Lens as L
-import           Control.Lens ( (&), (%~) )
 import           Control.Monad.Except ( runExceptT )
 import qualified Data.Bits as Bits
 import qualified Data.BitVector.Sized as BVS
@@ -96,6 +94,8 @@ import qualified Lang.Crucible.Simulator.PathSatisfiability as CSP
 import qualified Lang.Crucible.Types as CT
 import qualified Lang.Crucible.Utils.Seconds as Sec
 import qualified Lang.Crucible.Utils.Timeout as CTO
+import qualified Lens.Micro as L
+import           Lens.Micro ( (&), (%~) )
 import qualified System.FilePath as SF
 import qualified System.IO as IO
 import qualified What4.BaseTypes as WT

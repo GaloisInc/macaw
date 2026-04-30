@@ -28,12 +28,13 @@ module Data.Macaw.Symbolic.Memory.Common
 
 import           GHC.TypeLits
 
-import qualified Control.Lens as L
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
 import qualified Data.Foldable.WithIndex as FWI
+import           Data.Functor.WithIndex.Instances ()
 import qualified Data.IntervalMap.Strict as IM
+import qualified Lens.Micro as L
 
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Macaw.CFG as MC
