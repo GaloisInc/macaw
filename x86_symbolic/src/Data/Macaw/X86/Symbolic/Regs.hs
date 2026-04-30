@@ -51,12 +51,12 @@ module Data.Macaw.X86.Symbolic.Regs
   , getReg
   ) where
 
-import           Control.Lens ((^.),(%~),(&))
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableFC
 import qualified Flexdis86.Register as F
 import           GHC.TypeLits
+import           Lens.Micro ((^.), (%~), (&))
 
 import           Data.Macaw.Symbolic
 import           Data.Macaw.Symbolic.Backend

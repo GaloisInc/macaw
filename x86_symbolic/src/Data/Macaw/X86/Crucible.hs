@@ -32,7 +32,6 @@ module Data.Macaw.X86.Crucible
   ) where
 
 import           Control.Exception (Exception, throw)
-import           Control.Lens ((^.))
 import           Control.Monad
 import           Data.Bits hiding (xor)
 import qualified Data.BitVector.Sized as BV
@@ -46,6 +45,7 @@ import qualified Data.Parameterized.Vector as PV
 import qualified Data.Vector as DV
 import           Data.Word (Word8)
 import           GHC.TypeLits (KnownNat)
+import           Lens.Micro ((^.))
 import           Prettyprinter
 
 import           What4.Concrete
