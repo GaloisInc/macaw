@@ -75,7 +75,6 @@ module Data.Macaw.X86.Symbolic.ABI.SysV
   , allocStack
   ) where
 
-import Control.Lens qualified as Lens
 import Data.BitVector.Sized qualified as BVS
 import Data.Coerce (coerce)
 import Data.Macaw.Symbolic qualified as MS
@@ -90,6 +89,7 @@ import Lang.Crucible.LLVM.Bytes qualified as Bytes
 import Lang.Crucible.LLVM.DataLayout qualified as CLD
 import Lang.Crucible.LLVM.MemModel qualified as MM
 import Lang.Crucible.Simulator qualified as C
+import Lens.Micro qualified as Lens
 import What4.Interface qualified as WI
 
 -- | Helper, not exported
