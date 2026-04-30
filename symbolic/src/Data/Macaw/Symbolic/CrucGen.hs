@@ -83,7 +83,6 @@ module Data.Macaw.Symbolic.CrucGen
   , freshValueIndex
   ) where
 
-import           Control.Lens hiding (Empty, (:>))
 import           Control.Monad (foldM, forM, unless)
 import           Control.Monad.Except (MonadError(..), ExceptT, runExceptT)
 import qualified Control.Monad.Fail as MF
@@ -91,7 +90,7 @@ import           Control.Monad.State.Strict (MonadState(..), StateT(..), gets, m
 import           Control.Monad.Trans (MonadTrans(..))
 import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
-import           Data.Functor (void)
+import           Data.Functor (void, (<&>))
 import qualified Data.Kind as K
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.CFG.Block as M
@@ -116,6 +115,8 @@ import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as Vec
+import           Lens.Micro (Lens', lens, (&), (^.))
+import           Lens.Micro.Mtl (assign, use, (%=))
 import           Prettyprinter hiding (width)
 
 import           What4.ProgramLoc as C

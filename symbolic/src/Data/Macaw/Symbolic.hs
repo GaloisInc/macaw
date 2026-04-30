@@ -153,7 +153,6 @@ module Data.Macaw.Symbolic
 import           GHC.TypeLits
 import           GHC.Exts
 
-import           Control.Lens ((^.))
 import           Control.Monad
 import           Control.Monad.State
 import qualified Data.BitVector.Sized as BV
@@ -169,6 +168,7 @@ import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import           Lens.Micro ((^.))
 
 import qualified What4.FunctionName as C
 import           What4.Interface
