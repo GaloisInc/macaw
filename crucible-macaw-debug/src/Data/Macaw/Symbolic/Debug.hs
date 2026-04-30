@@ -11,7 +11,6 @@ module Data.Macaw.Symbolic.Debug
   , macawExtImpl
   ) where
 
-import Control.Lens qualified as Lens
 import Data.ByteString (ByteString)
 import Data.ElfEdit qualified as Elf
 import Data.Functor.Const (Const(Const, getConst))
@@ -39,6 +38,7 @@ import Lang.Crucible.Simulator.EvalStmt qualified as C
 import Lang.Crucible.Simulator.ExecutionTree qualified as C
 import Lang.Crucible.Simulator.GlobalState qualified as C
 import Lang.Crucible.Simulator.RegMap qualified as C
+import Lens.Micro qualified as Lens
 import Prettyprinter as PP
 import What4.Interface qualified as W4
 

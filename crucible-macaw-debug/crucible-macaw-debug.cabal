@@ -120,7 +120,7 @@ library
     crucible-debug,
     crucible-llvm,
     elf-edit,
-    lens,
+    microlens,
     macaw-base,
     macaw-symbolic,
     mtl,
