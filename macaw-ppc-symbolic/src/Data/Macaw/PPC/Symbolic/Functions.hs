@@ -20,11 +20,11 @@ module Data.Macaw.PPC.Symbolic.Functions (
 import           GHC.TypeLits
 
 import qualified Control.Exception as X
-import           Control.Lens ( (^.) )
 import qualified Data.IORef as IO
 import qualified Data.Map.Strict as M
 import           Data.Parameterized.Classes ( (:~:)( Refl ), testEquality )
 import qualified Data.Parameterized.Context as Ctx
+import           Lens.Micro ( (^.) )
 import           Text.Printf ( printf )
 
 import qualified Lang.Crucible.Backend as C
