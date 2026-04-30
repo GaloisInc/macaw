@@ -70,7 +70,6 @@ module Data.Macaw.AArch32.Symbolic.ABI
   , allocStack
   ) where
 
-import Control.Lens qualified as Lens
 import Data.Coerce (coerce)
 import Data.Macaw.AArch32.Symbolic.Regs qualified as MASR
 import Data.Macaw.ARM qualified as AArch32
@@ -83,6 +82,7 @@ import Lang.Crucible.Backend qualified as C
 import Lang.Crucible.LLVM.DataLayout qualified as CLD
 import Lang.Crucible.LLVM.MemModel qualified as MM
 import Lang.Crucible.Simulator qualified as C
+import Lens.Micro qualified as Lens
 import What4.Interface qualified as WI
 
 -- | Helper, not exported

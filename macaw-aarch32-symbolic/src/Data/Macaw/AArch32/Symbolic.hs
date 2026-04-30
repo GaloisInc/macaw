@@ -18,7 +18,6 @@ module Data.Macaw.AArch32.Symbolic (
 import qualified Data.Text as T
 import           GHC.Stack ( HasCallStack )
 
-import           Control.Lens ( (&), (%~) )
 import           Control.Monad ( void )
 import           Control.Monad.IO.Class ( liftIO )
 import qualified Control.Monad.State as CMS
@@ -35,6 +34,7 @@ import qualified Data.Parameterized.NatRepr as PN
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Sequence as Seq
+import           Lens.Micro ( (&), (%~) )
 import qualified What4.ProgramLoc as WP
 import qualified What4.Symbol as WS
 import qualified What4.Utils.StringLiteral as WUS
