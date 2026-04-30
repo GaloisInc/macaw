@@ -12,11 +12,11 @@ module Data.Macaw.AArch32.Symbolic.Functions (
   ) where
 
 import qualified Control.Exception as X
-import           Control.Lens ( (^.) )
 import qualified Data.IORef as IOR
 import qualified Data.Map.Strict as Map
 import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.Context as Ctx
+import           Lens.Micro ( (^.) )
 import           Text.Printf ( printf )
 
 import qualified Data.Macaw.Symbolic as MS
