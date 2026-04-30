@@ -58,7 +58,6 @@ module Data.Macaw.RISCV.Symbolic.Regs
   , priv, exc
   ) where
 
-import           Control.Lens ( (%~), (&) )
 import qualified Control.Monad.Catch as X
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Map as MapF
@@ -69,6 +68,7 @@ import           GHC.TypeLits
 import qualified GRIFT.Types as G
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.LLVM.MemModel as MM
+import           Lens.Micro ( (%~), (&) )
 import qualified What4.Interface as W4
 import qualified What4.Symbol as W4
 
