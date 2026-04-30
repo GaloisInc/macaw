@@ -44,7 +44,6 @@ module Data.Macaw.PPC.Symbolic.Regs
   , f17, f18, f19, f20, f21, f22, f23, f24, f25, f26, f27, f28, f29, f30, f31
   ) where
 
-import           Control.Lens ( (^.), (%~), (&) )
 import qualified Control.Monad.Catch as X
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Map as MapF
@@ -55,6 +54,7 @@ import qualified Dismantle.PPC.Operands as D
 import           GHC.TypeLits
 import qualified Lang.Crucible.LLVM.MemModel as MM
 import qualified Lang.Crucible.Types as C
+import           Lens.Micro ( (^.), (%~), (&) )
 import qualified What4.Interface as C
 import qualified What4.Symbol as C
 

@@ -8,7 +8,6 @@
 {-# LANGUAGE TypeOperators #-}
 module Main (main) where
 
-import           Control.Lens ( (^.) )
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ElfEdit as Elf
@@ -22,6 +21,7 @@ import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeNats ( KnownNat, type (<=) )
 import qualified Data.Text as Text
+import           Lens.Micro ( (^.) )
 import qualified Prettyprinter as PP
 import           System.FilePath ( (</>), (<.>) )
 import qualified System.FilePath.Glob as SFG
