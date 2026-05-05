@@ -10,13 +10,13 @@ module PPC64InstructionCoverage (
   )
 where
 
-import           Control.Lens ( (^.) )
 import           Control.Monad ( when )
 import qualified Data.Foldable as F
 import qualified Data.Map as M
 import           Data.Maybe ( fromJust )
 import qualified Data.Set as S
 import           Data.Word ( Word64 )
+import           Lens.Micro ( (^.) )
 import qualified System.FilePath as FP
 import qualified Test.Tasty as T
 import qualified Test.Tasty.HUnit as T

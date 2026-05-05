@@ -15,7 +15,6 @@ module Data.Macaw.PPC.Disassemble
   )
 where
 
-import           Control.Lens ( (^.), (.~) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
@@ -24,6 +23,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Text as T
 import           Data.Word ( Word64 )
+import           Lens.Micro ( (^.), (.~) )
 import           Text.Printf ( printf )
 
 import qualified Dismantle.PPC.Disassembler as D ( disassembleInstruction )

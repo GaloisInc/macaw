@@ -29,7 +29,6 @@ module Data.Macaw.PPC.Arch (
 
 import           GHC.TypeLits
 
-import           Control.Lens ( (^.) )
 import           Data.Bits
 import           Data.Kind ( Type )
 import qualified Prettyprinter as PP
@@ -43,6 +42,7 @@ import qualified Data.Macaw.CFG.Block as MC
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn, appendRewrittenArchStmt )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
+import           Lens.Micro ( (^.) )
 
 import qualified Dismantle.PPC.Opcodes as D
 import qualified Dismantle.PPC.Operands as D

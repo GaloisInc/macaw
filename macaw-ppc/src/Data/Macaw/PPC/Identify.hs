@@ -8,10 +8,10 @@ module Data.Macaw.PPC.Identify
   )
 where
 
-import           Control.Lens ( (^.) )
 import           Control.Monad ( guard )
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Sequence as Seq
+import           Lens.Micro ( (^.) )
 
 import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.CFG as MC

@@ -13,7 +13,6 @@ module PPCTests (
   , ppcAsmTests
   ) where
 
-import           Control.Lens ( (^.) )
 import           Control.Monad ( unless )
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Foldable as F
@@ -21,6 +20,7 @@ import qualified Data.Map as M
 import           Data.Maybe ( fromJust )
 import qualified Data.Set as S
 import           Data.Word ( Word64 )
+import           Lens.Micro ( (^.) )
 import qualified Prettyprinter as PP
 import           System.FilePath ( dropExtension, replaceExtension, takeFileName, (<.>), (</>) )
 import qualified Test.Tasty as T
