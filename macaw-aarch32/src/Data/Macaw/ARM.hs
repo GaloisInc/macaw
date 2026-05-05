@@ -22,12 +22,12 @@ import qualified Data.Macaw.ARM.ARMReg as ARMReg
 import qualified Data.Macaw.ARM.Semantics.ARMSemantics as ARMSem
 import qualified Data.Macaw.ARM.Semantics.ThumbSemantics as ThumbSem
 import qualified Data.Macaw.CFG as MC
-import           Control.Lens ( (^.) )
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MMEP
+import           Lens.Micro ( (^.) )
 import qualified SemMC.Architecture.AArch32 as ARM
 
 

@@ -36,9 +36,9 @@ library
                      , dismantle-arm-xml
                      , dismantle-tablegen
                      , elf-edit
-                     , lens
                      , macaw-base
                      , macaw-semmc
+                     , microlens >= 0.4.0
                      , mtl
                      , panic
                      , parameterized-utils
@@ -72,9 +72,9 @@ test-suite macaw-asl-tests
                      , exceptions
                      , filemanip
                      , filepath
-                     , lens
                      , macaw-base
                      , macaw-aarch32
+                     , microlens >= 0.4.0
                      , parameterized-utils
                      , prettyprinter >= 1.7.0
                      , semmc-aarch32

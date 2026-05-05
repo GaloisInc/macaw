@@ -20,7 +20,6 @@ module Data.Macaw.ARM.Eval
     )
     where
 
-import           Control.Lens ( (&), (^.), (.~) )
 import qualified Data.BitVector.Sized as BVS
 import qualified Data.Macaw.ARM.ARMReg as AR
 import qualified Data.Macaw.ARM.Arch as AA
@@ -36,6 +35,7 @@ import           Data.Parameterized.NatRepr (knownNat, NatRepr)
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Set as Set
 import           GHC.Stack ( HasCallStack )
+import           Lens.Micro ( (&), (^.), (.~) )
 
 import qualified Language.ASL.Globals as ASL
 import qualified SemMC.Architecture.AArch32 as ARM
