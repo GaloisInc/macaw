@@ -10,8 +10,6 @@
 {-# LANGUAGE TypeOperators #-}
 module Main ( main ) where
 
-import           Control.Lens ( (^.) )
-import qualified Control.Lens as L
 import           Control.Monad ( unless, forM_ )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
@@ -23,6 +21,8 @@ import           Data.Monoid
 import           Data.Parameterized.Some
 import qualified Data.Text.IO as TIO
 import qualified Lang.Crucible.LLVM.MemModel as LLVM
+import           Lens.Micro ( (^.) )
+import qualified Lens.Micro as L
 import qualified Options.Applicative as O
 import           Prettyprinter as PP
 
