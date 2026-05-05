@@ -15,7 +15,7 @@
 -- package that cannot depend on the architecture-specific backends.
 module Data.Macaw.PPC.Operand () where
 
-import           Control.Lens ( (^.) )
+import           Lens.Micro ( (^.) )
 
 import           Data.Word ( Word32 )
 import qualified Data.Parameterized.NatRepr as NR

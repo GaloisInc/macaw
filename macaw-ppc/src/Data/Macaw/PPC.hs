@@ -26,9 +26,9 @@ module Data.Macaw.PPC (
   A.PPCPrimFn(..),
   ) where
 
-import           Control.Lens ( (^.) )
 import           Data.Maybe
 import           Data.Proxy ( Proxy(..) )
+import           Lens.Micro ( (^.) )
 
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG as MC

@@ -20,8 +20,8 @@ module Data.Macaw.PPC.Eval (
 
 import           GHC.TypeLits
 
-import           Control.Lens ( (&), (.~), (^.) )
 import qualified Data.Set as S
+import           Lens.Micro ( (&), (.~), (^.) )
 
 import           Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.AbsDomain.JumpBounds as MJ
