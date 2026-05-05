@@ -37,12 +37,12 @@ import qualified GRIFT.Types as G
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 
-import           Control.Lens ((^.))
 import           Control.Monad.ST (ST)
 import           Data.Parameterized (showF)
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce (NonceGenerator)
 import           Data.Parameterized.Some (Some(..))
+import           Lens.Micro ((^.))
 import           Text.Printf (printf)
 
 import           Data.Macaw.RISCV.Arch

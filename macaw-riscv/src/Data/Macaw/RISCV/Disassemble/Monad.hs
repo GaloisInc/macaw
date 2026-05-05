@@ -27,14 +27,11 @@ import qualified Data.Macaw.Types as MT
 import qualified Control.Monad.RWS as RWS
 import qualified Data.Sequence as Seq
 
-import           Control.Lens ( makeLenses
-                              , view
-                              , use
-                              , assign
-                              )
 import           Control.Monad.ST (ST)
 import           Control.Monad.Trans (lift)
 import           Data.Parameterized.Nonce (NonceGenerator, freshNonce)
+import           Lens.Micro.Mtl ( view, use, assign )
+import           Lens.Micro.TH ( makeLenses )
 
 import           Data.Macaw.RISCV.Arch
 import           Data.Macaw.RISCV.RISCVReg ( )
