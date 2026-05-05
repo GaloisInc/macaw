@@ -5,6 +5,11 @@ SO_CFLAGS=-nostdlib -fno-stack-protector -fcf-protection=none
 unopt = $(patsubst %.c,%.unopt.exe,$(wildcard *.c))
 opt = $(patsubst %.c,%.opt.exe,$(wildcard *.c))
 
+# This test requires clang -fPIC to produce a PIC-relative jump table;
+# gcc -O2 optimizes the switch into a plain increment loop instead.
+switch-jump-table.opt.exe: switch-jump-table.c
+	clang $(CFLAGS) -O2 -fno-unroll-loops -fPIC $< -o $@
+
 all: $(unopt) $(opt)
 
 %.unopt.exe : %.c
