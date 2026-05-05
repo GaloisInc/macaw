@@ -15,7 +15,6 @@ module Data.Macaw.Dump.Discover
   ) where
 
 import Control.Exception qualified as X
-import Control.Lens qualified as Lens
 import Control.Monad qualified as Monad
 import Data.ByteString qualified as BS
 import Data.ElfEdit qualified as EE
@@ -38,6 +37,7 @@ import Lang.Crucible.Analysis.Postdom qualified as CAP
 import Lang.Crucible.CFG.Core qualified as CCC
 import Lang.Crucible.CFG.Extension qualified as CCE
 import Lang.Crucible.FunctionHandle qualified as CFH
+import Lens.Micro qualified as Lens
 import Options.Applicative qualified as Opt
 import Prettyprinter qualified as PP
 import System.IO qualified as IO
