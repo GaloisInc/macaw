@@ -51,7 +51,6 @@ library
                , containers
                , crucible >= 0.4
                , crucible-llvm
-               , lens
                , macaw-base
                , macaw-loader
                , macaw-loader-ppc
@@ -59,6 +58,7 @@ library
                , macaw-ppc
                , macaw-symbolic
                , macaw-ppc-symbolic
+               , microlens >= 0.4.0
                , mtl
                , parameterized-utils
                , prettyprinter >= 1.7
@@ -99,7 +99,6 @@ executable run-refinement
                , containers
                , elf-edit
                , exceptions
-               , lens
                , macaw-base
                , macaw-loader
                , macaw-loader-x86
@@ -110,6 +109,7 @@ executable run-refinement
                , macaw-symbolic
                , macaw-x86
                , macaw-x86-symbolic
+               , microlens >= 0.4.0
                , optparse-applicative
                , parameterized-utils
                , prettyprinter
@@ -138,7 +138,6 @@ test-suite test-refinements
                , exceptions
                , filepath
                , filemanip
-               , lens
                , macaw-base
                , macaw-loader
                , macaw-loader-x86
@@ -151,6 +150,7 @@ test-suite test-refinements
                , macaw-x86-symbolic
                , crucible
                , crucible-llvm
+               , microlens >= 0.4.0
                , what4
                , optparse-applicative >= 0.13 && < 0.20
                , parameterized-utils

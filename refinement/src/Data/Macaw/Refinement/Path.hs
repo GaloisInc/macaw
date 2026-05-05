@@ -21,7 +21,6 @@ module Data.Macaw.Refinement.Path
 where
 
 import           Control.Applicative
-import           Control.Lens ( (^.) )
 import qualified Data.Foldable as F
 import qualified Data.Graph.Haggle as G
 import qualified Data.Graph.Haggle.Algorithms.DFS as GD
@@ -39,6 +38,7 @@ import           Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier(..)
 import qualified Data.Macaw.Refinement.FuncBlockUtils as FBU
 import           Data.Maybe ( fromMaybe, mapMaybe )
 import qualified Data.Set as S
+import           Lens.Micro ( (^.) )
 import           Prettyprinter
 
 data CFG arch ids = CFG { cfgFunc  :: DiscoveryFunInfo arch ids

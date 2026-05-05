@@ -117,8 +117,6 @@ module Data.Macaw.Refinement.UnknownTransfer (
   findingsInfo
   ) where
 
-import qualified Control.Lens as L
-import           Control.Lens ( (^.) )
 import qualified Control.Monad.Catch as X
 import           Control.Monad.IO.Class ( MonadIO )
 import qualified Control.Monad.IO.Unlift as MU
@@ -137,6 +135,8 @@ import           Data.Parameterized.Some ( Some(..), viewSome )
 import qualified Data.Set as S
 import           GHC.TypeLits
 import qualified Lang.Crucible.LLVM.MemModel as LLVM
+import qualified Lens.Micro as L
+import           Lens.Micro ( (^.) )
 import qualified Lumberjack as LJ
 
 -- | This is the main entrypoint, which is given the current Discovery

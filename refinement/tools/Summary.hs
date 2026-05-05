@@ -5,8 +5,6 @@ module Summary (
   , blockAddresses
   ) where
 
-import           Control.Lens ( (^.) )
-import qualified Control.Lens as L
 import qualified Data.Foldable as F
 import qualified Data.Map as M
 import           Data.Maybe ( catMaybes, isNothing )
@@ -15,6 +13,8 @@ import           Data.Parameterized.Some ( Some(..) )
 import           Data.Semigroup
 import qualified Data.Set as S
 import           Data.Word ( Word64 )
+import           Lens.Micro ( (^.) )
+import qualified Lens.Micro as L
 import           Prettyprinter as PP
 
 import qualified Data.Macaw.CFG as MC

@@ -11,11 +11,11 @@ module Data.Macaw.Refinement.FuncBlockUtils
   )
 where
 
-import           Control.Lens ( (^.) )
 import qualified Data.Foldable as F
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery.State as MDS
 import qualified Data.Map as Map
+import           Lens.Micro ( (^.) )
 
 import           Prelude
 

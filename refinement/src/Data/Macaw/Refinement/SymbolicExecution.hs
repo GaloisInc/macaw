@@ -23,8 +23,6 @@ where
 
 import qualified Control.Concurrent.Async as A
 import           Control.Concurrent ( threadDelay )
-import qualified Control.Lens as L
-import           Control.Lens ( (^.) )
 import qualified Control.Monad.Catch as X
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Control.Monad.IO.Unlift as MU
@@ -54,6 +52,8 @@ import qualified Lang.Crucible.LLVM.Intrinsics as LLVM
 import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
+import qualified Lens.Micro as L
+import           Lens.Micro ( (^.) )
 import qualified Lumberjack as LJ
 import qualified System.IO as IO
 import qualified What4.Expr.GroundEval as W
