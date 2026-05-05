@@ -56,7 +56,6 @@ module Data.Macaw.ARM.Disassemble
     )
     where
 
-import           Control.Lens ( (^.), (.~) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
@@ -78,6 +77,7 @@ import qualified Data.Text as T
 import qualified Dismantle.ARM.A32 as ARMD
 import qualified Dismantle.ARM.T32 as ThumbD
 import qualified Language.ASL.Globals as ASL
+import           Lens.Micro ( (^.), (.~) )
 import           Text.Printf ( printf )
 
 import qualified SemMC.Architecture.AArch32 as ARM

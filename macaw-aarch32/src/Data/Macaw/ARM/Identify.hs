@@ -14,7 +14,6 @@ module Data.Macaw.ARM.Identify
     ) where
 
 import           Control.Applicative ( (<|>) )
-import           Control.Lens ( (^.) )
 import           Control.Monad ( when )
 import qualified Control.Monad.Reader as CMR
 import qualified Data.Foldable as F
@@ -32,6 +31,7 @@ import qualified Data.Macaw.SemMC.Simplify as MSS
 import qualified Data.Macaw.Types as MT
 import           Data.Maybe ( maybeToList )
 import qualified Data.Sequence as Seq
+import           Lens.Micro ( (^.) )
 
 import qualified SemMC.Architecture.AArch32 as ARM
 

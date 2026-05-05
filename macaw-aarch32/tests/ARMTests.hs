@@ -11,7 +11,6 @@ module ARMTests
     where
 
 
-import           Control.Lens ( (^.) )
 import           Control.Monad ( when )
 import           Control.Monad.Catch ( throwM, Exception )
 import qualified Data.ByteString.Char8 as BSC
@@ -29,6 +28,7 @@ import qualified Data.Parameterized.Some as PU
 import qualified Data.Set as S
 import           Data.Typeable ( Typeable )
 import           Data.Word ( Word64 )
+import           Lens.Micro ( (^.) )
 import           Shared
 import           System.FilePath ( dropExtension, replaceExtension, takeFileName, (</>), (<.>) )
 import qualified Test.Tasty as T
