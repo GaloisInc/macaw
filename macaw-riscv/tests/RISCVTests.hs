@@ -10,7 +10,6 @@ module RISCVTests
     where
 
 
-import           Control.Lens hiding ( ignored )
 import           Control.Monad ( when )
 import           Control.Monad.Catch ( throwM, Exception )
 import qualified Data.ByteString.Char8 as C8
@@ -27,6 +26,7 @@ import qualified Data.Set as S
 import           Data.Typeable ( Typeable )
 import           Data.Word ( Word64 )
 import qualified GRIFT.Types as RISCV
+import           Lens.Micro ( (^.), (^..), to )
 import           Shared
 import           System.FilePath ( dropExtension, replaceExtension )
 import qualified Test.Tasty as T

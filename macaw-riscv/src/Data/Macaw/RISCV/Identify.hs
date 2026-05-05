@@ -14,12 +14,12 @@ import qualified Data.Macaw.Types as MT
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Sequence as Seq
 
-import           Control.Lens ((^.))
 import           Control.Monad (guard)
 import qualified Data.BitVector.Sized as BVS
 import           Data.Maybe (isJust)
 import           Data.Parameterized ( Some(..) )
 import qualified Data.Parameterized.NatRepr as PN
+import           Lens.Micro ((^.))
 
 import           Data.Macaw.RISCV.Arch
 import           Data.Macaw.RISCV.RISCVReg

@@ -15,7 +15,7 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.Map as MapF
 import qualified GRIFT.Types as G
 
-import Control.Lens ((.~), (&))
+import Lens.Micro ((.~), (&))
 
 import Data.Macaw.RISCV.Arch
 import Data.Macaw.RISCV.RISCVReg
