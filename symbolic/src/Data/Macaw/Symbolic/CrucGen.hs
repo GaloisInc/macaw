@@ -1555,9 +1555,8 @@ addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
       let tlbl = parsedBlockLabel blockLabelMap trueAddr
       let flbl = parsedBlockLabel blockLabelMap falseAddr
       addTermStmt $! CR.Br crucCond tlbl flbl
-    M.ParsedLookupTable _layout regs idx possibleAddrs -> do
-      setMachineRegs =<< createRegStruct regs
-      addSwitch blockLabelMap idx possibleAddrs
+    M.ParsedLookupTable _layout regs idx possibleAddrs ->
+      addSwitch blockLabelMap regs idx possibleAddrs
     M.ParsedReturn regs -> do
       regValues <- createRegStruct regs
       addTermStmt $ CR.Return regValues
@@ -1588,8 +1587,7 @@ addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
       addTermStmt $ CR.ErrorStmt msgVal
     M.ClassifyFailure regs _failureReasons
       | Just targets <- lookup thisAddr externalResolutions -> do
-          setMachineRegs =<< createRegStruct regs
-          addIPSwitch blockLabelMap targets (regs ^. M.boundValue M.ip_reg)
+          addIPSwitch blockLabelMap targets regs
       | otherwise -> do
           msgVal <- crucibleValue $ C.StringLit $ C.UnicodeLiteral $ Text.pack ("Could not identify block at " ++ show thisAddr ++ " with external resolutions: " ++ show externalResolutions)
           addTermStmt $ CR.ErrorStmt msgVal
@@ -1611,16 +1609,16 @@ addIPSwitch :: forall arch s ids
              . BlockLabelMap arch s
             -> [M.ArchSegmentOff arch]
             -- ^ The possible branch targets
-            -> M.Value arch ids (M.BVType (M.ArchAddrWidth arch))
-            -- ^ The IP we are branching to
+            -> M.RegState (M.ArchReg arch) (M.Value arch ids)
             -> CrucGen arch ids s ()
-addIPSwitch blockLabelMap targets macaw_ip = do
+addIPSwitch blockLabelMap targets regs = do
+  setMachineRegs =<< createRegStruct regs
   archFns <- translateFns <$> get
   crucGenArchConstraints archFns $ do
     p <- getPos
     -- Convert the current IP value (taken from the reg state at the terminator)
     -- into a Crucible value
-    ipVal <- v2c macaw_ip
+    ipVal <- v2c (regs ^. M.boundValue M.ip_reg)
     let chain :: ( [CR.Stmt (MacawExt arch) s]
                  , CR.TermStmt s (MacawFunctionResult arch)
                  )
@@ -1668,15 +1666,21 @@ addIPSwitch blockLabelMap targets macaw_ip = do
 
 addSwitch :: forall arch s ids
            . BlockLabelMap arch s
-          -> M.ArchAddrValue arch ids
+          -> M.RegState (M.ArchReg arch) (M.Value arch ids)
+          -> M.Value arch ids (M.BVType (M.ArchAddrWidth arch))
+          -- ^ The jump table index
           -> Vec.Vector (M.ArchSegmentOff arch)
           -> CrucGen arch ids s ()
-addSwitch blockLabelMap idx possibleAddrs = do
+addSwitch blockLabelMap regs idx possibleAddrs = do
+  -- In contrast to 'addIPSwitch', it is important that we retrieve the index
+  -- from the *initial* register state here. See switch-jump-table.c.
+  idxVal <- v2c idx
+  setMachineRegs =<< createRegStruct regs
+
   archFns <- translateFns <$> get
   crucGenArchConstraints archFns $ do
 
   p <- getPos
-  idxVal <- v2c idx
 
   let -- Add a link to the if-else chain, going from the bottom up.
       -- That is, take the current "else" code and an index-address
