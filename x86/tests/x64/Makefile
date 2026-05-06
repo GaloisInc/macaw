@@ -11,6 +11,11 @@ test-tail-call.exe: test-tail-call.c
 	gcc -fno-stack-protector -O2 -fno-inline -S -c $< -o test-tail-call.s
 	gcc -fno-stack-protector -O2 -fno-inline -nostdlib $< -o $@
 
+# Jump table bounded by bitmask needs -O2 to emit the table and -fno-pic
+# to avoid PC-relative relocations that macaw can't handle in object files.
+test-jumptable-mask.o: test-jumptable-mask.c
+	clang -c --target=x86_64-pc-linux-elf -O2 -fno-pic -o $@ $<
+
 %.exe: %.s
 	gcc -fno-stack-protector -nostdlib $< -o $@
 
