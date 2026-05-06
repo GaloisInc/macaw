@@ -1767,16 +1767,28 @@ at entry to the next block.
 -}
 addRegUpdateForBlock :: OrdF (M.ArchReg arch) => MacawSymbolicArchFunctions arch -> M.ArchSegmentOff arch -> CrucGen arch ids s ()
 addRegUpdateForBlock archFns startAddr = do
-  mp <- updatesFromRegStruct (crucGenRegAssignment archFns)
+  regReg <- gets crucRegisterReg
+  regStruct <- evalAtom (CR.ReadReg regReg)
+  idxMap <- gets crucRegIndexMap
+  let regTypes = crucArchRegTypes archFns
+  mp <- updatesFromRegStruct regStruct regTypes idxMap (crucGenRegAssignment archFns)
   void $ evalMacawStmt $ MacawArchStateUpdate (M.segoffAddr startAddr) mp
  where
   updatesFromRegStruct ::
     OrdF (M.ArchReg arch) =>
+    CR.Atom s (ArchRegStruct arch) ->
+    Assignment C.TypeRepr (MacawCrucibleRegTypes arch) ->
+    RegIndexMap arch ->
     Assignment (M.ArchReg arch) ctx ->
     CrucGen arch ids s (MapF.MapF (M.ArchReg arch) (MacawCrucibleValue (CR.Atom s)))
-  updatesFromRegStruct = foldlMFC' (\mp reg -> do
-    rval <- getRegValue reg
-    pure $ MapF.insert reg (MacawCrucibleValue rval) mp) MapF.empty
+  updatesFromRegStruct regStruct regTypes idxMap = foldlMFC' (\mp reg ->
+    case MapF.lookup reg idxMap of
+      Nothing -> fail "internal: Register is not bound."
+      Just idx -> do
+        let cidx = crucibleIndex idx
+        let tp = regTypes Ctx.! cidx
+        rval <- crucibleValue (C.GetStruct regStruct cidx tp)
+        pure $ MapF.insert reg (MacawCrucibleValue rval) mp) MapF.empty
 
 addParsedBlock :: forall arch ids s
                .  MacawSymbolicArchFunctions arch
