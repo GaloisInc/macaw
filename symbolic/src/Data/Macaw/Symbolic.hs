@@ -1223,6 +1223,7 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar mmConf s0 st =
     MacawArchStmtExtension s    -> archStmtFn mvar globs s st
     MacawArchStateUpdate {}     -> return ((), st)
     MacawInstructionStart {}    -> return ((), st)
+    MacawBlockRegState {}       -> return ((), st)
 
     PtrEq  w x y                -> doPtrEq st mvar w x y
     PtrLt  w x y                -> doPtrLt st mvar w x y
