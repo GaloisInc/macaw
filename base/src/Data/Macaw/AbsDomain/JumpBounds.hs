@@ -393,6 +393,10 @@ exprRangePred info e = do
           , lr' <- fromInteger (toUnsigned w (toInteger lr))
           , ur' <- fromInteger (toUnsigned w (toInteger ur)) ->
             SomeRangePred (RangePred w lr' ur')
+        BVAnd w _ (CExpr (BVCValue _ mask)) ->
+          SomeRangePred (mkRangeBound w 0 (fromInteger (toUnsigned w mask)))
+        BVAnd w (CExpr (BVCValue _ mask)) _ ->
+          SomeRangePred (mkRangeBound w 0 (fromInteger (toUnsigned w mask)))
         Trunc x w
           | SomeRangePred r <- exprRangePred info x
             -- Compare the range constraint with the output number of bits.
