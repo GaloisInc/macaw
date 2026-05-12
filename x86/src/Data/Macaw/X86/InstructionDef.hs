@@ -71,7 +71,9 @@ defInstruction mnemonic f = (mnemonic, InstructionSemantics f)
 defVariadic :: Mnem
             -> (forall st ids .F.LockPrefix -> [F.Value] -> X86Generator st ids ())
             -> InstructionDef
-defVariadic mnem f = defInstruction mnem (\ii -> f (F.iiLockPrefix ii) (fst <$> F.iiArgs ii))
+defVariadic mnem f = defInstruction mnem $ \ii ->
+  let pfx = F.prLockPrefix (F.iiPrefixes ii)
+  in f pfx (fst <$> F.iiArgs ii)
 
 -- | Define an instruction that expects no arguments.
 defNullary :: Mnem
@@ -183,7 +185,7 @@ defBinaryLL :: Mnem
 defBinaryLL mnem f = defBinary mnem $ \ii loc loc' -> do
   SomeBV l <- getSomeBVLocation loc
   l'       <- getBVLocation loc' (typeWidth l)
-  f (F.iiLockPrefix ii) l l'
+  f (F.prLockPrefix (F.iiPrefixes ii)) l l'
 
 -- | Define an instruction that expects three arguments.
 defTernary :: Mnem

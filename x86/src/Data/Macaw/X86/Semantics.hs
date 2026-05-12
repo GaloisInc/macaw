@@ -18,7 +18,6 @@ module Data.Macaw.X86.Semantics
   ( execInstruction
   ) where
 
-import           Lens.Micro ((^.))
 import           Control.Monad (when)
 import qualified Data.Bits as Bits
 import qualified Data.ByteString.Char8 as BSC
@@ -402,16 +401,16 @@ def_push =
         -- See Note [Sign-extending immediate operands in push]
         F.ByteSignedImm w ->
           let bvW = bvLit n8 (toInteger w) in
-          pure $ if F.iiPrefixes ii ^. F.prOSO
+          pure $ if F.prOSO (F.iiPrefixes ii)
                  then Some $ HasRepSize WordRepVal  $ sext n16 bvW
                  else Some $ HasRepSize QWordRepVal $ sext n64 bvW
         F.WordSignedImm w ->
           let bvW = bvLit n16 (toInteger w) in
-          pure $ if F.iiPrefixes ii ^. F.prOSO
+          pure $ if F.prOSO (F.iiPrefixes ii)
                  then Some $ HasRepSize WordRepVal bvW
                  else Some $ HasRepSize QWordRepVal $ sext n64 bvW
         F.DWordSignedImm w
-          |  F.iiPrefixes ii ^. F.prOSO
+          |  F.prOSO (F.iiPrefixes ii)
           -> fail "push: Unexpected 32-bit immediate with 16-bit operand size"
           |  otherwise
           -> pure $ Some $ HasRepSize QWordRepVal $ sext n64 $ bvLit n32 (toInteger w)
@@ -1438,9 +1437,9 @@ def_movs = defBinary "movs" $ \ii loc _ -> do
   dest <- get rdi
   src  <- get rsi
   df   <- get df_loc
-  case pfx^.F.prLockPrefix of
+  case F.prLockPrefix pfx of
     F.RepPrefix -> do
-      when (pfx^.F.prASO) $ do
+      when (F.prASO pfx) $ do
         fail "Rep prefix semantics not defined when address size override is true."
       -- The direction flag indicates post decrement or post increment.
       count <- get rcx
@@ -1539,7 +1538,8 @@ def_cmps = defBinary "cmps" $ \ii loc _ -> do
       F.Mem64 F.Addr_64{} -> do
         pure $ Some QWordRepVal
       _ -> fail "Bad argument to cmps"
-  exec_cmps (F.iiLockPrefix ii == F.RepZPrefix) rval
+  let pfx = F.prLockPrefix (F.iiPrefixes ii)
+  exec_cmps (pfx == F.RepZPrefix) rval
 
 -- SCAS/SCASB Scan string/Scan byte string
 -- SCAS/SCASW Scan string/Scan word string
@@ -1638,7 +1638,8 @@ def_scas = defBinary "scas" $ \ii loc loc' -> do
       (F.QWordReg F.RAX, F.Mem64 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement)) -> do
         pure $ Some QWordRepVal
       _ -> error $ "scas given bad addrs " ++ show (loc, loc')
-  exec_scas (F.iiLockPrefix ii == F.RepZPrefix) (F.iiLockPrefix ii == F.RepNZPrefix) rval
+  let pfx = F.prLockPrefix (F.iiPrefixes ii)
+  exec_scas (pfx == F.RepZPrefix) (pfx == F.RepNZPrefix) rval
 
 -- LODS/LODSB Load string/Load byte string
 -- LODS/LODSW Load string/Load word string
@@ -1661,7 +1662,7 @@ exec_lods True _rep = error "exec_lods: rep prefix support not implemented"
 
 def_lods :: InstructionDef
 def_lods = defBinary "lods" $ \ii loc loc' -> do
-  let rep = F.iiLockPrefix ii == F.RepPrefix
+  let rep = F.prLockPrefix (F.iiPrefixes ii) == F.RepPrefix
   case (loc, loc') of
     (F.Mem8  (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.ByteReg  F.AL) -> do
       exec_lods rep ByteRepVal
@@ -1706,7 +1707,7 @@ def_stos = defBinary "stos" $ \ii loc loc' -> do
   dest <- get rdi
   v    <- get (xaxValLoc rep)
   df   <- get df_loc
-  case pfx^.F.prLockPrefix of
+  case F.prLockPrefix pfx of
     F.RepPrefix -> do
       let mrepr = repValSizeMemRepr rep
       count <- get rcx
