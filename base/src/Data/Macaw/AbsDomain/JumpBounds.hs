@@ -19,13 +19,19 @@ known equivalent values.
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.AbsDomain.JumpBounds
-  ( -- * Initial jump bounds
-    InitJumpBounds
+  ( -- * Range predicates
+    RangePred(..)
+  , rangeNotTotal
+  , SubRange(..)
+  , BlockStartRangePred
+    -- * Initial jump bounds
+  , InitJumpBounds
   , initBndsMap
+  , initRngPredMap
   , functionStartBounds
   , ppInitJumpBounds
   , joinInitialBounds
-    -- * IntraJumpbounds
+    -- * IntraJumpBounds
   , IntraJumpBounds
   , blockEndBounds
   , postCallBounds
