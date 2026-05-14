@@ -32,6 +32,7 @@ module Data.Macaw.Symbolic.MemOps
   , doGetGlobal
   , doLookupFunctionHandle
   , doPtrToBits
+  , narrowBVDomain
   , getMem
   , setMem
   , tryGlobPtr
@@ -63,6 +64,9 @@ import qualified Data.Parameterized.Context as Ctx
 
 
 import           What4.Interface
+import qualified What4.ProgramLoc as WPL
+import           What4.Utils.AbstractDomains (getAbsValue)
+import qualified What4.Domains.BV as WUB
 
 import           Lang.Crucible.Backend
 import           Lang.Crucible.CFG.Common (GlobalVar)
@@ -89,10 +93,11 @@ import qualified Lang.Crucible.LLVM.MemModel.Generic as Mem.G
 import           Lang.Crucible.LLVM.DataLayout (Alignment, EndianForm(..), noAlignment, exponentToAlignment)
 import           Lang.Crucible.LLVM.Bytes (Bytes(..))
 
-import           Data.Macaw.Symbolic.CrucGen (addrWidthIsPos, ArchRegStruct, MacawExt, MacawCrucibleRegTypes)
-import           Data.Macaw.Symbolic.PersistentState (ToCrucibleType)
-import           Data.Macaw.CFG.Core (MemRepr(..))
 import qualified Data.Macaw.CFG as M
+import           Data.Macaw.CFG.Core (MemRepr(..))
+import           Data.Macaw.Symbolic.CrucGen (addrWidthIsPos, ArchRegStruct, MacawExt, MacawCrucibleRegTypes)
+import qualified Data.Macaw.Symbolic.Panic as MSP
+import           Data.Macaw.Symbolic.PersistentState (ToCrucibleType)
 
 infix 0 ~>
 
@@ -357,6 +362,37 @@ doPtrToBits sym (Mem.LLVMPointer base off) =
   do undef <- mkUndefinedBV sym "ptr_to_bits" (bvWidth off)
      notPtr <- natEq sym base =<< natLit sym 0
      bvIte sym notPtr off undef
+
+-- | Narrow the abstract domain of a pointer's offset by meeting it with the
+-- supplied 'WUB.BVDomain'. See 'MacawNarrowBVDomain' for details.
+narrowBVDomain ::
+  (IsSymInterface sym, 1 <= w) =>
+  sym ->
+  NatRepr w ->
+  WUB.BVDomain w ->
+  LLVMPtr sym w ->
+  IO (LLVMPtr sym w)
+narrowBVDomain sym w dom ptr@(Mem.LLVMPointer base off) = do
+  let existing = getAbsValue off
+  let dom' = WUB.meet dom existing
+  if WUB.isBottom dom'
+    then do
+      loc <- getCurrentProgramLoc sym
+      MSP.panic
+        MSP.Symbolic
+        "narrowBVDomain"
+        [ "Unsoundness! Abstract values are disjoint!"
+        , "width: " ++ show w
+        , "supplied: " ++ show dom
+        , "existing: " ++ show existing
+        , "location: " ++ show (WPL.plSourceLoc loc)
+        , "function: " ++ show (WPL.plFunction loc)
+        ]
+    else if dom' == existing
+      then pure ptr
+      else do
+        (_, off') <- annotateTerm sym (unsafeSetAbstractValue dom' off)
+        pure (Mem.LLVMPointer base off')
 
 -- | The state extension for Crucible holding Macaw-specific state for
 -- @macaw-symbolic@'s default memory model.

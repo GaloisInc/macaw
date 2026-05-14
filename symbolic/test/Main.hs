@@ -4,6 +4,7 @@ import Test.Tasty ( defaultMain, testGroup )
 import Test.Tasty.HUnit ( assertBool, testCase )
 
 import Data.Macaw.Symbolic.Internal ( assertionsEnabled )
+import qualified AbsValueRange
 import qualified Common
 import qualified Lazy
 
@@ -15,4 +16,5 @@ main = defaultMain $ testGroup "macaw-symbolic"
       assertBool "assertions should be enabled" assertsEnabled
   , Common.tests
   , Lazy.tests
+  , AbsValueRange.tests
   ]

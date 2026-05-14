@@ -5,10 +5,13 @@
 -- API, they are exported only for the sake of the test suite.
 module Data.Macaw.Symbolic.Internal
   ( assertionsEnabled
+  , absValueToBVRange
   ) where
 
 import qualified Control.Exception as X
 import           Data.Functor ((<&>))
+
+import           Data.Macaw.Symbolic.CrucGen (absValueToBVRange)
 
 -- | Check if assertions are enabled.
 --

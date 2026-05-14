@@ -193,8 +193,8 @@ import           System.IO (stdout)
 import qualified Lang.Crucible.LLVM.MemModel as MM
 import           Lang.Crucible.LLVM.Intrinsics (llvmIntrinsicTypes)
 
-import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.CFG as M
+import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.Discovery.State as M
 import qualified Data.Macaw.Types as M
 
@@ -1031,6 +1031,9 @@ evalMacawExprExtension bak _iTypes _logFn _cst f e0 =
     MacawBitcast xExpr eqPr -> do
       x <- f xExpr
       doBitcast bak x eqPr
+    MacawNarrowBVDomain w dom xExpr -> do
+      ptr <- f xExpr
+      narrowBVDomain sym w dom ptr
 
 -- | A use of a pointer in a memory operation
 --

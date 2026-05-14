@@ -81,9 +81,11 @@ module Data.Macaw.Symbolic.CrucGen
   , evalAtom
   , crucibleValue
   , freshValueIndex
+  , addAbsValueNarrowingForBlock
+  , absValueToBVRange
   ) where
 
-import           Control.Monad (foldM, forM, unless)
+import           Control.Monad (foldM, forM, guard, unless)
 import           Control.Monad.Except (MonadError(..), ExceptT, runExceptT)
 import qualified Control.Monad.Fail as MF
 import           Control.Monad.State.Strict (MonadState(..), StateT(..), gets, modify')
@@ -92,9 +94,14 @@ import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
 import           Data.Functor (void, (<&>))
 import qualified Data.Kind as K
+import qualified Data.Macaw.AbsDomain.AbsState as MA
+import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
+import qualified Data.Macaw.AbsDomain.StackAnalysis as MAS
+import qualified Data.Macaw.AbsDomain.StridedInterval as MASI
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.Discovery.State as M
+import qualified Data.Macaw.Symbolic.Panic as MSP
 import qualified Data.Macaw.Types as M
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -121,6 +128,7 @@ import           Prettyprinter hiding (width)
 
 import           What4.ProgramLoc as C
 import qualified What4.Symbol as C
+import qualified What4.Domains.BV as WUB
 import qualified What4.Utils.StringLiteral as C
 
 import qualified Lang.Crucible.CFG.Expr as C
@@ -243,6 +251,31 @@ data MacawExprExtension (arch :: K.Type)
   MacawBitcast :: !(f (ToCrucibleType i))
                -> !(M.WidthEqProof i o)
                -> MacawExprExtension arch f (ToCrucibleType o)
+
+  -- | Narrow the abstract domain of a pointer's offset by intersecting it with
+  -- an externally supplied 'WUB.BVDomain'. Sourced from Macaw's discovery-time
+  -- abstract interpretation, this conveys static bounds that are not deducible
+  -- from the What4 bitvector expression alone (e.g. bounds derived from path
+  -- conditions or jump-bound analysis).
+  --
+  -- The wrapped pointer's semantic value is unchanged: the block ID is
+  -- preserved, and the offset's existing abstract domain is met with the
+  -- supplied one. If the meet is no tighter than the existing domain, the
+  -- offset is left unchanged.
+  --
+  -- This is unsafe in the same sense that
+  -- 'What4.Interface.unsafeSetAbstractValue' is: if the supplied domain does
+  -- not actually contain every possible value of the wrapped offset, downstream
+  -- reasoning becomes unsound. Producers must therefore only emit this when the
+  -- bounds come from a sound static analysis.
+  MacawNarrowBVDomain
+    :: (1 <= w)
+    => !(NatRepr w)
+    -- ^ Pointer width
+    -> !(WUB.BVDomain w)
+    -- ^ Externally supplied bounds on the offset
+    -> !(f (MM.LLVMPointerType w))
+    -> MacawExprExtension arch f (MM.LLVMPointerType w)
 
 -- | Extra extension statements required for Crucible to simulate Macaw programs
 --
@@ -586,6 +619,8 @@ instance C.PrettyApp (MacawExprExtension arch) where
 
       MacawNullPtr _ -> sexpr "null_ptr" []
       MacawBitcast x p -> sexpr "bitcast" [f x, viaShow (M.widthEqTarget p)]
+      MacawNarrowBVDomain w dom x ->
+        sexpr ("narrow_bv_domain_" ++ show w) [viaShow dom, f x]
 
 addrWidthIsPos :: M.AddrWidthRepr w -> LeqProof 1 w
 addrWidthIsPos M.Addr32 = LeqProof
@@ -599,6 +634,7 @@ instance C.TypeApp (MacawExprExtension arch) where
       BitsToPtr w _     -> MM.LLVMPointerRepr w
       MacawNullPtr w | LeqProof <- addrWidthIsPos w -> MM.LLVMPointerRepr (M.addrWidthNatRepr w)
       MacawBitcast _ p -> typeToCrucible (M.widthEqTarget p)
+      MacawNarrowBVDomain w _ _ -> MM.LLVMPointerRepr w
 
 
 ------------------------------------------------------------------------
@@ -1785,6 +1821,128 @@ addRegUpdateForBlock startAddr = do
   regStruct <- evalAtom (CR.ReadReg regReg)
   void $ evalMacawStmt $ MacawBlockRegState (M.segoffAddr startAddr) regStruct
 
+-- | Project a Macaw 'MA.AbsValue' to an unsigned arithmetic range
+-- @(lo, hi)@, if it carries enough information to do so. Returns
+-- 'Nothing' for 'MA.TopV', 'MA.SomeStackOffset', and other values
+-- that don't correspond to a bounded set of bitvectors.
+absValueToBVRange ::
+  M.MemWidth w =>
+  NatRepr n ->
+  MA.AbsValue w (M.BVType n) ->
+  Maybe (Integer, Integer)
+absValueToBVRange w av =
+  case av of
+    MA.FinSet s | not (Set.null s) ->
+      checkRange (Set.findMin s, Set.findMax s)
+    MA.StridedInterval si | MASI.size si > 0 ->
+      checkRange (MASI.base si, MASI.intervalEnd si)
+    MA.SubValue (n' :: NatRepr n') innerAv
+      | Just (lo, hi) <- absValueToBVRange n' innerAv ->
+          checkRange (liftInnerRange w n' lo hi)
+    _ -> Nothing
+  where
+    checkRange r@(lo, hi)
+      | lo < 0 || hi > maxBnd || lo > hi =
+          MSP.panic
+            MSP.Symbolic
+            "absValueToBVRange"
+            [ "AbsValue bounds outside declared bitvector width"
+            , "width: " ++ show w
+            , "bounds: " ++ show r
+            ]
+      | otherwise = Just r
+    maxBnd = 2 ^ natValue w - 1
+
+-- | Given that the lower @u@ bits of a @w@-bit value lie in @[lo, hi]@,
+-- compute the range of the full @w@-bit value.
+--
+-- Any concrete @w@-bit value @v@ decomposes as
+--   @v = upper * 2^u + lower@,
+-- where @lower ∈ [lo, hi]@ and @upper ∈ [0, 2^(w-u) - 1]@ is unconstrained.
+-- @v@ is minimised at @lower = lo, upper = 0@, giving @lo@.
+-- @v@ is maximised at @lower = hi, upper = 2^(w-u) - 1@, giving
+--   @hi + (2^(w-u) - 1) * 2^u = hi + 2^w - 2^u@.
+liftInnerRange ::
+  NatRepr w ->
+  NatRepr u ->
+  Integer -> Integer ->
+  (Integer, Integer)
+liftInnerRange w u lo hi = (lo, hi + 2 ^ natValue w - 2 ^ natValue u)
+
+-- | Extract an unsigned arithmetic range @(lo, hi)@ from a 'Jmp.SubRange'.
+subRangeToBVRange ::
+  NatRepr w ->
+  Jmp.SubRange (M.BVType w) ->
+  (Integer, Integer)
+subRangeToBVRange w (Jmp.SubRange rp) =
+  liftInnerRange w (Jmp.rangeWidth rp)
+    (toInteger (Jmp.rangeLowerBound rp))
+    (toInteger (Jmp.rangeUpperBound rp))
+
+-- | Emit 'MacawNarrowBVDomain' expressions for each register in the block's
+-- pre-state that has a non-trivial range, drawing from both the
+-- 'MA.AbsBlockState' and the 'Jmp.InitJumpBounds'.
+addAbsValueNarrowingForBlock ::
+  forall arch ids s.
+  ( M.RegisterInfo (M.ArchReg arch)
+  , M.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+  ) =>
+  MA.AbsBlockState (M.ArchReg arch) ->
+  Jmp.InitJumpBounds arch ->
+  CrucGen arch ids s ()
+addAbsValueNarrowingForBlock absSt jumpBounds = do
+  archFns <- gets translateFns
+  idxMap <- gets crucRegIndexMap
+  let regs   = absSt ^. MA.absRegState
+  let rngMap = Jmp.initRngPredMap jumpBounds
+  let tps    = crucArchRegTypes archFns
+  regReg <- gets crucRegisterReg
+  startStruct <- evalAtom (CR.ReadReg regReg)
+  updates <-
+    MapF.foldlMWithKey
+      (collect tps (M.regStateMap regs) rngMap startStruct)
+      []
+      idxMap
+  unless (Prelude.null updates) $ do
+    newRegStruct <-
+      foldM (\vals (Pair idx val) -> crucibleValue $ C.SetStruct tps vals idx val)
+            startStruct
+            updates
+    setMachineRegs newRegStruct
+  where
+    collect ::
+      Ctx.Assignment C.TypeRepr (MacawCrucibleRegTypes arch) ->
+      MapF.MapF (M.ArchReg arch) (MA.AbsValue (M.RegAddrWidth (M.ArchReg arch))) ->
+      MAS.LocMap (M.ArchReg arch) Jmp.SubRange ->
+      CR.Atom s (ArchRegStruct arch) ->
+      [Pair (Ctx.Index (MacawCrucibleRegTypes arch)) (CR.Atom s)] ->
+      M.ArchReg arch tp ->
+      IndexPair (ArchRegContext arch) tp ->
+      CrucGen arch ids s
+        [Pair (Ctx.Index (MacawCrucibleRegTypes arch)) (CR.Atom s)]
+    collect tps regMap rngMap startStruct acc reg (IndexPair _ crucIdx) =
+      fromMaybe (pure acc) $ do
+        M.BVTypeRepr w <- Just (M.typeRepr reg)
+        LeqProof <- testLeq (knownNat @1) w
+        repr@(MM.LLVMPointerRepr w') <- Just (tps Ctx.! crucIdx)
+        Refl <- testEquality w w'
+        let absRange = do
+              av <- MapF.lookup reg regMap
+              absValueToBVRange w av
+            jmpRange = subRangeToBVRange w <$>
+              MAS.locLookup (MAS.RegLoc reg) rngMap
+        (lo, hi) <- case (jmpRange, absRange) of
+          (Just (jlo, jhi), Just (alo, ahi)) -> Just (max jlo alo, min jhi ahi)
+          (Just r, Nothing) -> Just r
+          (Nothing, Just r) -> Just r
+          (Nothing, Nothing) -> Nothing
+        guard (lo /= hi)
+        guard (lo /= 0 || hi /= 2 ^ natValue w - 1)
+        Just $ do
+          orig <- crucibleValue (C.GetStruct startStruct crucIdx repr)
+          narrowed <- evalMacawExt (MacawNarrowBVDomain w' (WUB.range w' lo hi) orig)
+          pure (Pair crucIdx narrowed : acc)
+
 addParsedBlock :: forall arch ids s
                .  MacawSymbolicArchFunctions arch
                -> BlockLabelMap arch s
@@ -1815,6 +1973,9 @@ addParsedBlock archFns blockLabelMap externalResolutions posFn regReg macawBlock
   (b,bs) <-
     runCrucGen archFns thisPosFn lbl regReg $ do
       addRegUpdateForBlock startAddr
+      addAbsValueNarrowingForBlock
+        (M.blockAbstractState macawBlock)
+        (M.blockJumpBounds macawBlock)
       mapM_ (addMacawStmt startAddr) (M.pblockStmts  macawBlock)
       addMacawParsedTermStmt blockLabelMap externalResolutions startAddr (M.pblockTermStmt macawBlock)
   pure (reverse (b : bs))
