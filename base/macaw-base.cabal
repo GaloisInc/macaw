@@ -55,6 +55,7 @@ library
 
   exposed-modules:
     Data.Macaw.AbsDomain.AbsState
+    Data.Macaw.AbsDomain.AbsState.Internal
     Data.Macaw.AbsDomain.CallParams
     Data.Macaw.AbsDomain.JumpBounds
     Data.Macaw.AbsDomain.Refine
@@ -113,8 +114,17 @@ test-suite macaw-base-tests
   hs-source-dirs: test
   main-is: Main.hs
   ghc-options: -Wall -Wcompat -threaded
+  other-modules:
+    AbsDomain.AbsValueTests
+    AbsDomain.FinSetTests
+    AbsDomain.Gen
+    AbsDomain.StridedIntervalTests
   build-depends:
     base,
+    containers,
+    hedgehog >= 1.0.2,
+    parameterized-utils,
     tasty,
+    tasty-hedgehog >= 1.2,
     tasty-hunit,
     macaw-base
