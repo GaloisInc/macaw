@@ -20,13 +20,13 @@ import           GHC.TypeLits ( type (<=) )
 import qualified Lang.Crucible.Backend as LCB
 import qualified Lang.Crucible.Backend.Online as LCBO
 import qualified Lang.Crucible.LLVM.MemModel as LCLM
+import qualified What4.Domains.BV as WUB
 import qualified What4.Expr as WE
 import qualified What4.Expr.GroundEval as WEG
 import qualified What4.Interface as WI
 import qualified What4.Protocol.Online as WPO
 import qualified What4.Protocol.SMTWriter as WPS
 import qualified What4.SatResult as WSat
-import qualified What4.Utils.BVDomain as WUB
 import qualified What4.Utils.ResolveBounds.BV as WURB
 
 -- | Resolve an 'LCLM.LLVMPtr' to be concrete if possible. The block ID and
