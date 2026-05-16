@@ -173,12 +173,6 @@ lub si1 si2
     lower = min (base si1) (base si2)
     upper = max (intervalEnd si1) (intervalEnd si2)
 
--- prop_lub :: StridedInterval (BVType 64)
---             -> StridedInterval (BVType 64)
---             -> Bool
--- prop_lub x y = x `isSubsetOf` (x `lub` y)
---                && y `isSubsetOf` (x `lub` y)
-
 lubSingleton :: Integer
                 -> StridedInterval w
                 -> StridedInterval w
@@ -319,11 +313,6 @@ bvmul sz si1 si2 =
     mk b r s
       | s == 0    = singleton (typ si1) b
       | otherwise = StridedInterval { typ = typ si1, base = b, range = r, stride = s }
-
--- prop_bvmul ::  StridedInterval (BVType 64)
---             -> StridedInterval (BVType 64)
---             -> Bool
--- prop_bvmul = mk_prop (*) bvmul
 
 -- filterLeq :: NatRepr w -> StridedInterval w -> Integer -> StridedInterval w
 -- filterLeq tp@(BVTypeRepr _) si x = glb si (mkStridedInterval tp False 0 x 1)

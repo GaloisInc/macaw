@@ -71,22 +71,22 @@ prop_eGCD_matches_gcd = H.property $ do
   g H.=== gcd a b
 
 -- ---------------------------------------------------------------------------
--- ceil_quot / floor_quot properties
+-- ceilDivPos / floorDivPos properties
 
-prop_ceil_quot_bounds :: H.Property
-prop_ceil_quot_bounds = H.property $ do
+prop_ceilDivPos_bounds :: H.Property
+prop_ceilDivPos_bounds = H.property $ do
   x <- H.forAll (H.Gen.integral (H.Range.linearFrom 0 (-1024) 1024))
   y <- H.forAll genPos
-  let q = ceil_quot x y
+  let q = ceilDivPos x y
   -- q is the least integer with q * y >= x
   H.assert (q * y >= x)
   H.assert ((q - 1) * y < x)
 
-prop_floor_quot_bounds :: H.Property
-prop_floor_quot_bounds = H.property $ do
+prop_floorDivPos_bounds :: H.Property
+prop_floorDivPos_bounds = H.property $ do
   x <- H.forAll (H.Gen.integral (H.Range.linearFrom 0 (-1024) 1024))
   y <- H.forAll genPos
-  let q = floor_quot x y
+  let q = floorDivPos x y
   -- q is the greatest integer with q * y <= x
   H.assert (q * y <= x)
   H.assert ((q + 1) * y > x)
@@ -156,9 +156,9 @@ tests = TT.testGroup "StridedInterval.Internal"
     , TTH.testProperty "g divides both inputs"      prop_eGCD_divides
     , TTH.testProperty "matches Prelude.gcd"        prop_eGCD_matches_gcd
     ]
-  , TT.testGroup "ceil_quot / floor_quot"
-    [ TTH.testProperty "ceil_quot bounds"  prop_ceil_quot_bounds
-    , TTH.testProperty "floor_quot bounds" prop_floor_quot_bounds
+  , TT.testGroup "ceilDivPos / floorDivPos"
+    [ TTH.testProperty "ceilDivPos bounds"  prop_ceilDivPos_bounds
+    , TTH.testProperty "floorDivPos bounds" prop_floorDivPos_bounds
     ]
   , TT.testGroup "solveLinearDiophantine"
     [ TTH.testProperty "sound"                       prop_sld_sound
