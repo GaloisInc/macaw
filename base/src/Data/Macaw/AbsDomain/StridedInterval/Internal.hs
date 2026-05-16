@@ -20,7 +20,7 @@ module Data.Macaw.AbsDomain.StridedInterval.Internal
 --
 -- so we want least t s.t.
 --
--- ceiling (max (n * c / - a, m * c / - b)) <= t
+-- ceiling (max (- n * c / b, - m * c / a)) <= t
 -- and
 -- t <= floor (min ((a_max * gcd - n * c) / b, b_max * gcd - m * c) / a)
 
@@ -35,13 +35,13 @@ solveLinearDiophantine a b c a_max b_max
   where
     (g, n, m) = eGCD a (-b)
 
-    t = max (ceil_quot (n * c) (- a)) (ceil_quot (m * c) (- b))
+    t = max (ceil_quot (- (n * c)) b) (ceil_quot (- (m * c)) a)
     t_upper = min (floor_quot (a_max * g - n * c) b)
                   (floor_quot (b_max * g - m * c) a)
 
--- calculates ceil(x/y)
+-- calculates ceil(x/y) for y > 0.
 ceil_quot :: Integral a => a -> a -> a
-ceil_quot x y = x `quot` y + (if x `rem` y == 0 then 0 else 1)
+ceil_quot x y = - ((- x) `div` y)
 
 floor_quot :: Integral a => a -> a -> a
 floor_quot _ 0 = error "floor_quot div by 0"
