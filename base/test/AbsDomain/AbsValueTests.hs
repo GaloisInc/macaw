@@ -175,6 +175,72 @@ prop_bitop_xor_sound = H.property $ do
   H.assert (Ops.mayBeMember (x `xor` y) (Ops.bitop xor Gen.w av bv))
 
 -- ---------------------------------------------------------------------------
+-- Bounds (hasMaximum / hasMinimum) and ordering refinement
+
+-- | Whatever 'hasMaximum' returns must fit in the bit-width: otherwise
+-- 'abstractULt' / 'abstractULeq' would feed an out-of-range value to
+-- 'SI.mkStridedInterval' as a bound.
+prop_hasMaximum_canonical :: H.Property
+prop_hasMaximum_canonical = H.property $ do
+  av <- H.forAll Gen.genAbsValue
+  case Ops.hasMaximum Gen.w av of
+    Nothing -> H.discard
+    Just u  -> do
+      H.assert (0 <= u)
+      H.assert (u <= maxUnsigned Gen.w)
+
+prop_hasMinimum_canonical :: H.Property
+prop_hasMinimum_canonical = H.property $ do
+  av <- H.forAll Gen.genAbsValue
+  case Ops.hasMinimum Gen.w av of
+    Nothing -> H.discard
+    Just l  -> do
+      H.assert (0 <= l)
+      H.assert (l <= maxUnsigned Gen.w)
+
+-- | Soundness: when 'hasMaximum' returns a bound, every concrete member of
+-- @av@ is below it.  Returning 'Nothing' is always sound (no claim made).
+prop_hasMaximum_upperBound :: H.Property
+prop_hasMaximum_upperBound = H.property $ do
+  (av, v) <- H.forAll Gen.genAbsValueWithElement
+  case Ops.hasMaximum Gen.w av of
+    Nothing -> H.discard
+    Just u  -> H.assert (v <= u)
+
+-- | Soundness: when 'hasMinimum' returns a bound, every concrete member of
+-- @av@ is above it.
+prop_hasMinimum_lowerBound :: H.Property
+prop_hasMinimum_lowerBound = H.property $ do
+  (av, v) <- H.forAll Gen.genAbsValueWithElement
+  case Ops.hasMinimum Gen.w av of
+    Nothing -> H.discard
+    Just l  -> H.assert (l <= v)
+
+-- | If @x < y@ holds for chosen members, the refined pair must still contain
+-- those members. A wrapped bound feeding 'mkStridedInterval' would silently
+-- exclude valid elements.
+prop_abstractULt_sound :: H.Property
+prop_abstractULt_sound = H.property $ do
+  (p1, p2) <- H.forAll ((,) <$> Gen.genAbsValueWithElement
+                            <*> Gen.genAbsValueWithElement)
+  let ((av, x), (bv, y)) = if snd p1 < snd p2 then (p1, p2) else (p2, p1)
+  if x == y
+    then H.discard
+    else do
+      let (av', bv') = abstractULt Gen.w av bv
+      H.assert (Ops.mayBeMember x av')
+      H.assert (Ops.mayBeMember y bv')
+
+prop_abstractULeq_sound :: H.Property
+prop_abstractULeq_sound = H.property $ do
+  (p1, p2) <- H.forAll ((,) <$> Gen.genAbsValueWithElement
+                            <*> Gen.genAbsValueWithElement)
+  let ((av, x), (bv, y)) = if snd p1 <= snd p2 then (p1, p2) else (p2, p1)
+  let (av', bv') = abstractULeq Gen.w av bv
+  H.assert (Ops.mayBeMember x av')
+  H.assert (Ops.mayBeMember y bv')
+
+-- ---------------------------------------------------------------------------
 -- StackOffset-specific properties
 
 prop_stackoffset_bvadd_singleton :: H.Property
@@ -261,6 +327,14 @@ tests = TT.testGroup "AbsValue"
     , TTH.testProperty "bitop AND sound" prop_bitop_and_sound
     , TTH.testProperty "bitop OR sound" prop_bitop_or_sound
     , TTH.testProperty "bitop XOR sound" prop_bitop_xor_sound
+    ]
+  , TT.testGroup "bounds and ordering refinement"
+    [ TTH.testProperty "hasMaximum is canonical" prop_hasMaximum_canonical
+    , TTH.testProperty "hasMinimum is canonical" prop_hasMinimum_canonical
+    , TTH.testProperty "hasMaximum is upper bound" prop_hasMaximum_upperBound
+    , TTH.testProperty "hasMinimum is lower bound" prop_hasMinimum_lowerBound
+    , TTH.testProperty "abstractULt sound" prop_abstractULt_sound
+    , TTH.testProperty "abstractULeq sound" prop_abstractULeq_sound
     ]
   , TT.testGroup "StackOffset"
     [ TTH.testProperty "bvadd singleton advances offset" prop_stackoffset_bvadd_singleton

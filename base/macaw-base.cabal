@@ -119,6 +119,7 @@ test-suite macaw-base-tests
     AbsDomain.AbsValueTests
     AbsDomain.FinSetTests
     AbsDomain.Gen
+    AbsDomain.SolveDiophantineTests
     AbsDomain.StridedIntervalTests
   build-depends:
     base,

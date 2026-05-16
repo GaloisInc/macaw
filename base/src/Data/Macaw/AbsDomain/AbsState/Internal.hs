@@ -71,6 +71,7 @@ module Data.Macaw.AbsDomain.AbsState.Internal
   , transferApp
     -- * Utilities
   , hasMaximum
+  , hasMinimum
   ) where
 
 import           Control.Exception (assert)
