@@ -60,6 +60,7 @@ library
     Data.Macaw.AbsDomain.JumpBounds
     Data.Macaw.AbsDomain.Refine
     Data.Macaw.AbsDomain.StridedInterval
+    Data.Macaw.AbsDomain.StridedInterval.Internal
     Data.Macaw.Analysis.FunctionArgs
     Data.Macaw.Analysis.RegisterUse
     Data.Macaw.Architecture.Info
