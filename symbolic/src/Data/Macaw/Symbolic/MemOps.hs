@@ -33,6 +33,7 @@ module Data.Macaw.Symbolic.MemOps
   , doLookupFunctionHandle
   , doPtrToBits
   , narrowBVDomain
+  , narrowBVDomainChecked
   , getMem
   , setMem
   , tryGlobPtr
@@ -80,7 +81,7 @@ import           Lang.Crucible.Simulator.GlobalState (lookupGlobal,insertGlobal)
 import           Lang.Crucible.Simulator.Intrinsics (GetIntrinsic, Intrinsic)
 import           Lang.Crucible.Simulator.RegMap (RegEntry,regValue)
 import           Lang.Crucible.Simulator.RegValue (RegValue)
-import           Lang.Crucible.Simulator.SimError (SimErrorReason(AssertFailureSimError))
+import           Lang.Crucible.Simulator.SimError (SimError(..), SimErrorReason(AssertFailureSimError))
 import           Lang.Crucible.Types
 
 import           Lang.Crucible.LLVM.MemModel
@@ -393,6 +394,32 @@ narrowBVDomain sym w dom ptr@(Mem.LLVMPointer base off) = do
       else do
         (_, off') <- annotateTerm sym (unsafeSetAbstractValue dom' off)
         pure (Mem.LLVMPointer base off')
+
+-- | Like 'narrowBVDomain', but also adds a proof obligation that the
+-- offset lies within the unsigned bounds of @dom@. Useful in tests to
+-- catch unsoundness in the discovery-time abstract domain by routing
+-- the narrowing through an SMT solver.
+narrowBVDomainChecked ::
+  (IsSymBackend sym bak, 1 <= w) =>
+  bak ->
+  NatRepr w ->
+  WUB.BVDomain w ->
+  LLVMPtr sym w ->
+  IO (LLVMPtr sym w)
+narrowBVDomainChecked bak w dom ptr@(Mem.LLVMPointer _ off) = do
+  let sym = backendGetSym bak
+  let (lo, hi) = WUB.ubounds dom
+  loBV <- bvLit sym w (BV.mkBV w lo)
+  hiBV <- bvLit sym w (BV.mkBV w hi)
+  loOk <- bvUle sym loBV off
+  hiOk <- bvUle sym off hiBV
+  inRange <- andPred sym loOk hiOk
+  loc <- getCurrentProgramLoc sym
+  let err = AssertFailureSimError
+              "narrowBVDomainChecked: offset outside abstract domain bounds"
+              ("range: [" ++ show lo ++ ", " ++ show hi ++ "]")
+  addAssertion bak (LabeledPred inRange (SimError loc err))
+  narrowBVDomain sym w dom ptr
 
 -- | The state extension for Crucible holding Macaw-specific state for
 -- @macaw-symbolic@'s default memory model.

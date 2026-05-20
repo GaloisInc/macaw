@@ -62,6 +62,7 @@ import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MELP
 import qualified Data.Macaw.Memory.LoadCommon as MML
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.CrucGen as MSC
+import qualified Data.Macaw.Symbolic.MemOps as MSMO
 import qualified Data.Macaw.Symbolic.Memory as MSM
 import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 import qualified Data.Macaw.Symbolic.Memory.Lazy as MSMLazy
@@ -112,6 +113,23 @@ data TestingException = ELFResolutionError String
   deriving (Show)
 
 instance X.Exception TestingException
+
+-- | Override 'MacawNarrowBVDomain' evaluation to use 'narrowBVDomainChecked',
+-- which adds an SMT proof obligation that the offset lies within the supplied
+-- bounds. This catches unsoundness in the discovery-time abstract domain when
+-- proof obligations are discharged (e.g. by 'simulateAndVerify').
+withCheckedNarrowBVDomain ::
+  CS.ExtensionImpl p sym (MS.MacawExt arch) ->
+  CS.ExtensionImpl p sym (MS.MacawExt arch)
+withCheckedNarrowBVDomain extImpl =
+  extImpl
+    { CS.extensionEval = \bak iTypes logFn cst f e ->
+        case e of
+          MSC.MacawNarrowBVDomain w dom xExpr -> do
+            ptr <- f xExpr
+            MSMO.narrowBVDomainChecked bak w dom ptr
+          _ -> CS.extensionEval extImpl bak iTypes logFn cst f e
+    }
 
 -- | Convert machine addresses into Crucible positions.
 --
@@ -675,7 +693,7 @@ simDiscoveredFunction bak execFeatures archVals halloc iMem regs binfo dfi = do
   memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
   extImpl <-
     MS.withArchEval archVals sym $ \archEvalFn ->
-      pure (MS.macawExtensions archEvalFn memVar mmConf)
+      pure (withCheckedNarrowBVDomain (MS.macawExtensions archEvalFn memVar mmConf))
 
   let funName = functionName dfi
   let mainInfo = mainBinaryInfo binfo

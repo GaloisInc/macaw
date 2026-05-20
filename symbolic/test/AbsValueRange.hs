@@ -107,7 +107,7 @@ genAbsValWithConcreteAt w = Gen.choice $
 -- | Generate a BV width in [1, 64] then an abstract value at that width.
 genAbsValWithConcrete :: H.Gen AbsValWithConcrete
 genAbsValWithConcrete = do
-  nraw <- Gen.integral (Range.linear 1 64)
+  nraw <- Gen.integral (Range.linear (1 :: Integer) 64)
   case someNat nraw of
     Just (Some w) | Just LeqProof <- isPosNat w -> genAbsValWithConcreteAt w
     _ -> Gen.discard
