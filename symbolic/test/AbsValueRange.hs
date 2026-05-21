@@ -9,6 +9,7 @@
 module AbsValueRange (tests) where
 
 import           Data.Bits ((.&.))
+import qualified Data.BitVector.Sized as BV
 import qualified Data.Set as Set
 
 import qualified Data.Macaw.AbsDomain.AbsState as MA
@@ -141,9 +142,10 @@ prop_absValueToBVRangeSound =
     case absValueToBVRange w av of
       Nothing -> H.discard
       Just (lo, hi) -> do
-        H.footnote $ "range: [" ++ show lo ++ ", " ++ show hi ++ "]"
+        H.footnote $ "range: [" ++ show (BV.asUnsigned lo) ++ ", " ++ show (BV.asUnsigned hi) ++ "]"
         H.footnote $ "concrete value: " ++ show concreteVal
-        H.assert (lo <= concreteVal && concreteVal <= hi)
+        let concreteValBV = BV.mkBV w concreteVal
+        H.assert (lo `BV.ule` concreteValBV && concreteValBV `BV.ule` hi)
 
 ------------------------------------------------------------------------
 -- Test tree

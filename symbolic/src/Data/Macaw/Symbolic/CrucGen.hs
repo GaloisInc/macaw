@@ -1829,29 +1829,34 @@ absValueToBVRange ::
   M.MemWidth w =>
   NatRepr n ->
   MA.AbsValue w (M.BVType n) ->
-  Maybe (Integer, Integer)
+  Maybe (BV.BV n, BV.BV n)
 absValueToBVRange w av =
   case av of
     MA.FinSet s | not (Set.null s) ->
-      checkRange (Set.findMin s, Set.findMax s)
+      checkRange (Set.findMin s) (Set.findMax s)
     MA.StridedInterval si | MASI.size si > 0 ->
-      checkRange (MASI.base si, MASI.intervalEnd si)
+      checkRange (MASI.base si) (MASI.intervalEnd si)
     MA.SubValue (n' :: NatRepr n') innerAv
       | Just (lo, hi) <- absValueToBVRange n' innerAv ->
-          checkRange (liftInnerRange w n' lo hi)
+          let (loLifted, hiLifted) = liftInnerRange w n' lo hi
+          in Just (loLifted, hiLifted)
     _ -> Nothing
   where
-    checkRange r@(lo, hi)
-      | lo < 0 || hi > maxBnd || lo > hi =
-          MSP.panic
-            MSP.Symbolic
-            "absValueToBVRange"
-            [ "AbsValue bounds outside declared bitvector width"
-            , "width: " ++ show w
-            , "bounds: " ++ show r
-            ]
-      | otherwise = Just r
-    maxBnd = 2 ^ natValue w - 1
+    checkRange lo hi =
+      let loBV = BV.mkBV w lo
+          hiBV = BV.mkBV w hi
+          -- Check: lo < 0 (must check as Integer before constructing BV)
+          -- Check: hi > maxUnsigned w becomes: maxUnsigned w < hi
+          -- Check: lo > hi becomes: hi < lo
+      in if lo < 0 || BV.maxUnsigned w `BV.ult` hiBV || hiBV `BV.ult` loBV
+         then MSP.panic
+                MSP.Symbolic
+                "absValueToBVRange"
+                [ "AbsValue bounds outside declared bitvector width"
+                , "width: " ++ show w
+                , "bounds: [" ++ show lo ++ ", " ++ show hi ++ "]"
+                ]
+         else Just (loBV, hiBV)
 
 -- | Given that the lower @u@ bits of a @w@-bit value lie in @[lo, hi]@,
 -- compute the range of the full @w@-bit value.
@@ -1865,19 +1870,26 @@ absValueToBVRange w av =
 liftInnerRange ::
   NatRepr w ->
   NatRepr u ->
-  Integer -> Integer ->
-  (Integer, Integer)
-liftInnerRange w u lo hi = (lo, hi + 2 ^ natValue w - 2 ^ natValue u)
+  BV.BV u -> BV.BV u ->
+  (BV.BV w, BV.BV w)
+liftInnerRange w u lo hi =
+  let loW = BV.zresize w lo
+      hiW = BV.zresize w hi
+      maxU = BV.zresize w (BV.maxUnsigned u)
+      adjustment = BV.sub w (BV.maxUnsigned w) maxU
+      hiResult = BV.add w hiW adjustment
+  in (loW, hiResult)
 
 -- | Extract an unsigned arithmetic range @(lo, hi)@ from a 'Jmp.SubRange'.
 subRangeToBVRange ::
   NatRepr w ->
   Jmp.SubRange (M.BVType w) ->
-  (Integer, Integer)
+  (BV.BV w, BV.BV w)
 subRangeToBVRange w (Jmp.SubRange rp) =
-  liftInnerRange w (Jmp.rangeWidth rp)
-    (toInteger (Jmp.rangeLowerBound rp))
-    (toInteger (Jmp.rangeUpperBound rp))
+  let u = Jmp.rangeWidth rp
+      lo = BV.mkBV u (toInteger (Jmp.rangeLowerBound rp))
+      hi = BV.mkBV u (toInteger (Jmp.rangeUpperBound rp))
+  in liftInnerRange w u lo hi
 
 -- | Emit 'MacawNarrowBVDomain' expressions for each register in the block's
 -- pre-state that has a non-trivial range, drawing from both the
@@ -1937,10 +1949,10 @@ addAbsValueNarrowingForBlock absSt jumpBounds = do
           (Nothing, Just r) -> Just r
           (Nothing, Nothing) -> Nothing
         guard (lo /= hi)
-        guard (lo /= 0 || hi /= 2 ^ natValue w - 1)
+        guard (lo /= BV.zero w || hi /= BV.maxUnsigned w)
         Just $ do
           orig <- crucibleValue (C.GetStruct startStruct crucIdx repr)
-          narrowed <- evalMacawExt (MacawNarrowBVDomain w' (WUB.range w' lo hi) orig)
+          narrowed <- evalMacawExt (MacawNarrowBVDomain w' (WUB.range w' (BV.asUnsigned lo) (BV.asUnsigned hi)) orig)
           pure (Pair crucIdx narrowed : acc)
 
 addParsedBlock :: forall arch ids s
