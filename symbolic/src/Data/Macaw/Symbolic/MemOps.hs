@@ -366,6 +366,14 @@ doPtrToBits sym (Mem.LLVMPointer base off) =
 
 -- | Narrow the abstract domain of a pointer's offset by meeting it with the
 -- supplied 'WUB.BVDomain'. See 'MacawNarrowBVDomain' for details.
+--
+-- Panics if the domains are disjoint. This would likely indicate a soundness
+-- bug in Macaw\'s abstract interpretation. If this happens, downstream
+-- consumers can simply switch out 'narrowBVDomain' for an operation that just
+-- ignores 'MacawNarrowBVDomain' statements.
+--
+-- See 'narrowBVDomainChecked' for a version that does a more rigorous soundness
+-- check using an SMT solver.
 narrowBVDomain ::
   (IsSymInterface sym, 1 <= w) =>
   sym ->
@@ -395,10 +403,10 @@ narrowBVDomain sym w dom ptr@(Mem.LLVMPointer base off) = do
         (_, off') <- annotateTerm sym (unsafeSetAbstractValue dom' off)
         pure (Mem.LLVMPointer base off')
 
--- | Like 'narrowBVDomain', but also adds a proof obligation that the
--- offset lies within the unsigned bounds of @dom@. Useful in tests to
--- catch unsoundness in the discovery-time abstract domain by routing
--- the narrowing through an SMT solver.
+-- | Like 'narrowBVDomain', but also adds a proof obligation that the offset
+-- lies within the unsigned bounds of the 'WUB.BVDomain'. Useful in tests
+-- to catch unsoundness in the discovery-time abstract domain by routing the
+-- narrowing through an SMT solver.
 narrowBVDomainChecked ::
   (IsSymBackend sym bak, 1 <= w) =>
   bak ->
