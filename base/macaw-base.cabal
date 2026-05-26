@@ -58,6 +58,7 @@ library
     Data.Macaw.AbsDomain.AbsState.Internal
     Data.Macaw.AbsDomain.CallParams
     Data.Macaw.AbsDomain.JumpBounds
+    Data.Macaw.AbsDomain.JumpBounds.Internal
     Data.Macaw.AbsDomain.StackAnalysis
     Data.Macaw.AbsDomain.Refine
     Data.Macaw.AbsDomain.StridedInterval
