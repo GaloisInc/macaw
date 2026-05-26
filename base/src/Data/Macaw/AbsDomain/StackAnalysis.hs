@@ -83,6 +83,8 @@ module Data.Macaw.AbsDomain.StackAnalysis
   , locLookup
   , nonOverlapLocInsert
   , locOverwriteWith
+  , locMapMergeWithKey
+  , locMapIntersectWithKeyMaybe
   , ppLocMap
   , foldLocMap
     -- * MemMap
@@ -377,6 +379,31 @@ memMapTraverseMaybeWithKey f (SM m) =
   SM <$> Map.traverseMaybeWithKey
        (\o (MemVal repr v) -> fmap (MemVal repr) <$> f o repr v) m
 
+-- | /O(n+m)/. General merge of two memory maps, analogous to 'Map.mergeWithKey'.
+-- Entries with matching offsets are combined by the first function; the second
+-- and third functions handle entries only present in the left or right map,
+-- respectively. Offsets present in both maps but with mismatched 'MemRepr' are
+-- dropped.
+memMapMergeWithKey
+  :: Ord o
+  => (forall tp. o -> MemRepr tp -> a tp -> b tp -> Maybe (c tp))
+  -> (MemMap o a -> MemMap o c)
+  -> (MemMap o b -> MemMap o c)
+  -> MemMap o a
+  -> MemMap o b
+  -> MemMap o c
+memMapMergeWithKey f onlyLeft onlyRight (SM ma) (SM mb) =
+  let unwrap g m = case g (SM m) of SM m' -> m'
+   in SM $ Map.mergeWithKey
+             (\o (MemVal ra va) (MemVal rb vb) ->
+               case testEquality ra rb of
+                 Just Refl -> MemVal ra <$> f o ra va vb
+                 Nothing -> Nothing)
+             (unwrap onlyLeft)
+             (unwrap onlyRight)
+             ma
+             mb
+
 -- @memMapDropAbove bnd m@ includes only entries in @m@ whose bytes
 -- do not go above @bnd@.
 memMapDropAbove :: Integral o => Integer -> MemMap o p -> MemMap o p
@@ -485,6 +512,50 @@ locOverwriteWith upd (StackOffLoc o repr) v m =
              MMLOverlap _ _ _ -> v
              MMLResult oldv -> upd v oldv
    in m { locMapStack = memMapOverwrite o repr nv (locMapStack m) }
+
+-- | /O(n+m)/. General merge operation for location maps, analogous to
+-- 'Map.mergeWithKey'. Locations present in both maps are processed by the
+-- first function; locations only in the left or right map are processed by
+-- the second or third function, respectively.
+locMapMergeWithKey :: (OrdF r, MemWidth (RegAddrWidth r))
+                   => (forall tp. BoundLoc r tp -> a tp -> b tp -> Maybe (c tp))
+                      -- ^ Function for locations in both maps
+                   -> (LocMap r a -> LocMap r c)
+                      -- ^ Function for locations only in left map
+                   -> (LocMap r b -> LocMap r c)
+                      -- ^ Function for locations only in right map
+                   -> LocMap r a
+                   -> LocMap r b
+                   -> LocMap r c
+locMapMergeWithKey f onlyLeft onlyRight ma mb =
+  LocMap
+    { locMapRegs = MapF.mergeWithKey
+                     (\r a b -> f (RegLoc r) a b)
+                     (locMapRegs . onlyLeft  . regsOnly)
+                     (locMapRegs . onlyRight . regsOnly)
+                     (locMapRegs ma)
+                     (locMapRegs mb)
+    , locMapStack = memMapMergeWithKey
+                      (\o repr a b -> f (StackOffLoc o repr) a b)
+                      (locMapStack . onlyLeft  . stackOnly)
+                      (locMapStack . onlyRight . stackOnly)
+                      (locMapStack ma)
+                      (locMapStack mb)
+    }
+  where
+    regsOnly  m = LocMap { locMapRegs = m, locMapStack = emptyMemMap }
+    stackOnly m = LocMap { locMapRegs = MapF.empty, locMapStack = m }
+
+-- | /O(n+m)/. Intersect two location maps with a combining function that may
+-- fail. A location appears in the result only if it appears in both inputs
+-- and the combining function returns @Just@.
+locMapIntersectWithKeyMaybe :: (OrdF r, MemWidth (RegAddrWidth r))
+                            => (forall tp. BoundLoc r tp -> a tp -> b tp -> Maybe (c tp))
+                            -> LocMap r a
+                            -> LocMap r b
+                            -> LocMap r c
+locMapIntersectWithKeyMaybe f =
+  locMapMergeWithKey f (const locMapEmpty) (const locMapEmpty)
 
 ------------------------------------------------------------------------
 -- StackEqConstraint
