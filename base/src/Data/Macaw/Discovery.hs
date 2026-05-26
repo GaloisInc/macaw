@@ -411,10 +411,15 @@ mergeIntraJump info src (tgt, ab, bnds) = do
     -- We have seen this block before, so need to join and see if
     -- the results is changed.
     Just old_info -> do
-      case joinAbsBlockState (foundAbstractState old_info) ab of
-        Nothing  -> return ()
-        Just new -> do
-          let new_info = old_info { foundAbstractState = new }
+      let mAb = joinAbsBlockState (foundAbstractState old_info) ab
+          mBnds = Jmp.joinInitialBounds (foundJumpBounds old_info) bnds
+      case (mAb, mBnds) of
+        (Nothing, Nothing) -> return ()
+        _ -> do
+          let new_info = old_info
+                { foundAbstractState = fromMaybe (foundAbstractState old_info) mAb
+                , foundJumpBounds = fromMaybe (foundJumpBounds old_info) mBnds
+                }
           foundAddrs   %= Map.insert tgt new_info
           reverseEdges %= Map.insertWith Set.union tgt (Set.singleton src)
           frontier %= Set.insert tgt

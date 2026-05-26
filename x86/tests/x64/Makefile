@@ -16,6 +16,12 @@ test-tail-call.exe: test-tail-call.c
 test-jumptable-mask.o: test-jumptable-mask.c
 	clang -c --target=x86_64-pc-linux-elf -O2 -fno-pic -o $@ $<
 
+# Regression test for mergeIntraJump not joining jump bounds.
+# Needs -O1 to keep the explicit comparisons and -fno-jump-tables to keep
+# the chained conditional branches instead of emitting a jump table.
+test-mergeintrajump.o: test-mergeintrajump.c
+	clang -c --target=x86_64-pc-linux-elf -O1 -fno-jump-tables -o $@ $<
+
 %.exe: %.s
 	gcc -fno-stack-protector -nostdlib $< -o $@
 
