@@ -8,6 +8,7 @@ import Data.Macaw.Internal ( assertionsEnabled )
 import qualified AbsDomain.AbsValueTests as AbsValue
 import qualified AbsDomain.FinSetTests as FinSet
 import qualified AbsDomain.Gen as Gen
+import qualified AbsDomain.JumpBoundsTests as JumpBounds
 import qualified AbsDomain.SolveDiophantineTests as SolveDio
 import qualified AbsDomain.StridedIntervalTests as SI
 
@@ -23,4 +24,5 @@ main = TT.defaultMain $
     , SI.tests
     , FinSet.tests
     , AbsValue.tests
+    , JumpBounds.tests
     ]

@@ -11,22 +11,30 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.AbsDomain.JumpBounds.Internal
   ( -- * Range predicates
     RangePred(..)
+  , mkLowerBound
+  , mkUpperBound
+  , mkRangeBound
   , rangeNotTotal
+  , disjoinRangePred
   , SubRange(..)
+  , disjoinSubRange
   , BlockStartRangePred
     -- * Initial jump bounds
-  , InitJumpBounds
-  , initBndsMap
-  , initRngPredMap
+  , InitJumpBounds(..)
   , functionStartBounds
   , ppInitJumpBounds
   , joinInitialBounds
+  , joinRangePredMap
+  , joinAddrPredMap
+  , rangePredMapImpliedBy
+  , addrPredMapImpliedBy
     -- * IntraJumpBounds
   , IntraJumpBounds
   , blockEndBounds
@@ -146,6 +154,66 @@ functionStartBounds =
                  , initAddrPredMap = Map.empty
                  }
 
+-- | Take the pointwise union of two range-predicate maps. A location is
+-- present in the result iff it is present in BOTH inputs and the union of
+-- the two ranges is not saturated. This is the lattice-theoretic join: a
+-- fact survives iff it holds on every incoming edge.
+joinRangePredMap :: forall r
+                  . (OrdF r, MemWidth (RegAddrWidth r))
+                 => LocMap r SubRange
+                 -> LocMap r SubRange
+                 -> LocMap r SubRange
+joinRangePredMap = locMapIntersectWithKeyMaybe (\_loc -> disjoinSubRange)
+
+-- | Return @True@ if every location/value present in @old@ is also present
+-- in @joined@ with bounds that are equal or tighter (i.e., @old@ is implied by
+-- @joined@). This checks whether the join lost any precision relative to @old@.
+rangePredMapImpliedBy :: forall r
+                       . (OrdF r, MemWidth (RegAddrWidth r))
+                      => LocMap r SubRange  -- ^ old
+                      -> LocMap r SubRange  -- ^ joined
+                      -> Bool
+rangePredMapImpliedBy old joined = getAll $ foldLocMap step (All True) old
+  where
+    step :: forall tp. All -> BoundLoc r tp -> SubRange tp -> All
+    step acc loc (SubRange oldR) =
+      acc <> All (case locLookup loc joined of
+                    Just (SubRange jR)
+                      | Just Refl <- testEquality (rangeWidth oldR) (rangeWidth jR)
+                      , rangeLowerBound jR >= rangeLowerBound oldR
+                      , rangeUpperBound jR <= rangeUpperBound oldR -> True
+                    _ -> False)
+
+-- | Pointwise union of two address-predicate maps, mirroring
+-- 'joinRangePredMap' but on the address-keyed map.
+joinAddrPredMap :: Ord k
+                => Map k (MemVal SubRange)
+                -> Map k (MemVal SubRange)
+                -> Map k (MemVal SubRange)
+joinAddrPredMap = mapIntersectWithKeyMaybe joinMemVal
+  where
+    joinMemVal :: k -> MemVal SubRange -> MemVal SubRange -> Maybe (MemVal SubRange)
+    joinMemVal _ (MemVal rx sx) (MemVal ry sy) = do
+      Refl <- testEquality rx ry
+      MemVal rx <$> disjoinSubRange sx sy
+
+addrPredMapImpliedBy :: Ord k
+                     => Map k (MemVal SubRange)
+                     -> Map k (MemVal SubRange)
+                     -> Bool
+addrPredMapImpliedBy old joined =
+  Map.foldlWithKey'
+    (\acc k (MemVal oldR (SubRange oldS)) ->
+       acc && case Map.lookup k joined of
+                Just (MemVal jR (SubRange jS))
+                  | Just Refl <- testEquality oldR jR
+                  , Just Refl <- testEquality (rangeWidth oldS) (rangeWidth jS)
+                  , rangeLowerBound jS >= rangeLowerBound oldS
+                  , rangeUpperBound jS <= rangeUpperBound oldS -> True
+                _ -> False)
+    True
+    old
+
 -- | Return a jump bounds that implies both input bounds, or `Nothing`
 -- if every fact in the old bounds is implied by the new bounds.
 joinInitialBounds :: forall arch
@@ -158,10 +226,13 @@ joinInitialBounds :: forall arch
                   -> Maybe (InitJumpBounds arch)
 joinInitialBounds old new = runChanged $ do
   (finalStkCns, _) <- joinBlockStartStackConstraints (initBndsMap old) (initBndsMap new)
-  unless (locMapNull (initRngPredMap old) && Map.null (initAddrPredMap old)) $ markChanged True
-  pure $! InitJumpBounds { initBndsMap = finalStkCns
-                         , initRngPredMap = locMapEmpty
-                         , initAddrPredMap = Map.empty
+  let joinedRng  = joinRangePredMap (initRngPredMap old) (initRngPredMap new)
+  let joinedAddr = joinAddrPredMap  (initAddrPredMap old) (initAddrPredMap new)
+  unless (rangePredMapImpliedBy (initRngPredMap old) joinedRng
+       && addrPredMapImpliedBy  (initAddrPredMap old) joinedAddr) $ markChanged True
+  pure $! InitJumpBounds { initBndsMap     = finalStkCns
+                         , initRngPredMap  = joinedRng
+                         , initAddrPredMap = joinedAddr
                          }
 
 ------------------------------------------------------------------------
