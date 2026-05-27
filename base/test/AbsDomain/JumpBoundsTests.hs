@@ -28,12 +28,48 @@ import           Data.Macaw.AbsDomain.JumpBounds.Internal
                    , SubRange(..)
                    , disjoinSubRange
                    , joinAddrPredMap
-                   , addrPredMapImpliedBy
                    )
 import           Data.Macaw.AbsDomain.StackAnalysis (MemVal(..))
 import           Data.Macaw.CFG.AssignRhs (MemRepr(..))
 import           Data.Macaw.Memory (Endianness(..))
 import           Data.Macaw.Types (BVType)
+
+------------------------------------------------------------------------
+-- Oracles
+
+-- | Reference implementation of the address-map join: pointwise union by
+-- 'disjoinSubRange', restricted to keys present in both inputs.
+joinAddrPredMapOracle :: Ord k
+                      => Map k (MemVal SubRange)
+                      -> Map k (MemVal SubRange)
+                      -> Map k (MemVal SubRange)
+joinAddrPredMapOracle a b =
+  Map.mapMaybe id $
+    Map.intersectionWithKey joinMemVal a b
+  where
+    joinMemVal :: k -> MemVal SubRange -> MemVal SubRange -> Maybe (MemVal SubRange)
+    joinMemVal _ (MemVal rx sx) (MemVal ry sy) = do
+      Refl <- testEquality rx ry
+      MemVal rx <$> disjoinSubRange sx sy
+
+-- | Reference implementation of the precision-loss check: returns @True@ iff
+-- every key of @old@ is in @joined@ with bounds at least as tight.
+addrPredMapImpliedBy :: Ord k
+                           => Map k (MemVal SubRange)  -- ^ old
+                           -> Map k (MemVal SubRange)  -- ^ joined
+                           -> Bool
+addrPredMapImpliedBy old joined =
+  Map.foldlWithKey'
+    (\acc k (MemVal oldR (SubRange oldS)) ->
+       acc && case Map.lookup k joined of
+                Just (MemVal jR (SubRange jS))
+                  | Just Refl <- testEquality oldR jR
+                  , Just Refl <- testEquality (rangeWidth oldS) (rangeWidth jS)
+                  , rangeLowerBound jS >= rangeLowerBound oldS
+                  , rangeUpperBound jS <= rangeUpperBound oldS -> True
+                _ -> False)
+    True
+    old
 
 ------------------------------------------------------------------------
 -- Width and generators
@@ -290,12 +326,21 @@ genAddrMap = Map.fromList <$> H.Gen.list (H.Range.linear 0 6) genAddrEntry
 showAddrMap :: Map Int (MemVal SubRange) -> String
 showAddrMap = show . Map.toList . fmap memValBounds
 
+-- | The lattice properties below only care about the joined map, not the
+-- precision-loss flag returned alongside it. Pull the map out for brevity.
+joinedMap ::
+  Ord k =>
+  Map k (MemVal SubRange) ->
+  Map k (MemVal SubRange) ->
+  Map k (MemVal SubRange)
+joinedMap a b = fst (joinAddrPredMap a b)
+
 prop_joinAddrPredMap_keys_subset :: H.Property
 prop_joinAddrPredMap_keys_subset = H.property $ do
   -- Result keys are a subset of (and in fact intersection of) the input keys.
   a <- H.forAllWith showAddrMap genAddrMap
   b <- H.forAllWith showAddrMap genAddrMap
-  let j = joinAddrPredMap a b
+  let j = joinedMap a b
   H.assert (all (`Map.member` a) (Map.keys j))
   H.assert (all (`Map.member` b) (Map.keys j))
 
@@ -307,7 +352,7 @@ memValBounds (MemVal _ (SubRange r)) = (rangeLowerBound r, rangeUpperBound r)
 prop_joinAddrPredMap_idempotent :: H.Property
 prop_joinAddrPredMap_idempotent = H.property $ do
   a <- H.forAllWith showAddrMap genAddrMap
-  let j = joinAddrPredMap a a
+  let j = joinedMap a a
   H.assert (addrPredMapImpliedBy a j)
   -- And every entry in the original is preserved (idempotent under join):
   Map.keys j H.=== Map.keys a
@@ -316,8 +361,8 @@ prop_joinAddrPredMap_commutative :: H.Property
 prop_joinAddrPredMap_commutative = H.property $ do
   a <- H.forAllWith showAddrMap genAddrMap
   b <- H.forAllWith showAddrMap genAddrMap
-  let xy = joinAddrPredMap a b
-      yx = joinAddrPredMap b a
+  let xy = joinedMap a b
+      yx = joinedMap b a
   -- Compare by extracting (lo, hi) per key, since MemVal has no Eq.
   fmap memValBounds xy H.=== fmap memValBounds yx
 
@@ -327,7 +372,7 @@ prop_joinAddrPredMap_widens = H.property $ do
   -- original fact in @a@.
   a <- H.forAllWith showAddrMap genAddrMap
   b <- H.forAllWith showAddrMap genAddrMap
-  let j = joinAddrPredMap a b
+  let j = joinedMap a b
   let surviving = Map.intersectionWith (,) (fmap memValBounds a) (fmap memValBounds j)
   H.assert (all widensCorrectly (Map.elems surviving))
   where
@@ -338,8 +383,8 @@ prop_joinAddrPredMap_associative = H.property $ do
   a <- H.forAllWith showAddrMap genAddrMap
   b <- H.forAllWith showAddrMap genAddrMap
   c <- H.forAllWith showAddrMap genAddrMap
-  let lhs = joinAddrPredMap (joinAddrPredMap a b) c
-      rhs = joinAddrPredMap a (joinAddrPredMap b c)
+  let lhs = joinedMap (joinedMap a b) c
+      rhs = joinedMap a (joinedMap b c)
   fmap memValBounds lhs H.=== fmap memValBounds rhs
 
 -- | An empty map is the @top@/identity of the lattice: the join produces
@@ -350,7 +395,7 @@ prop_joinAddrPredMap_top_left = H.property $ do
   a <- H.forAllWith showAddrMap genAddrMap
   -- "top" in this lattice is the map that asserts no facts: i.e. the empty
   -- map. Joining anything with the empty map drops every fact.
-  let j = joinAddrPredMap Map.empty a
+  let j = joinedMap Map.empty a
   Map.null j H.=== True
 
 -- | Soundness: at every key in the joined map, any concrete value that
@@ -360,7 +405,7 @@ prop_joinAddrPredMap_sound :: H.Property
 prop_joinAddrPredMap_sound = H.property $ do
   a <- H.forAllWith showAddrMap genAddrMap
   b <- H.forAllWith showAddrMap genAddrMap
-  let j  = joinAddrPredMap a b
+  let j  = joinedMap a b
       ab = fmap memValBounds a
       bb = fmap memValBounds b
       jb = fmap memValBounds j
@@ -381,13 +426,14 @@ prop_joinAddrPredMap_sound = H.property $ do
 
 prop_joinAddrPredMap_ordering :: H.Property
 prop_joinAddrPredMap_ordering = H.property $ do
-  -- @addrPredMapImpliedBy old joined@ holds when every key in @old@ has a
-  -- *narrower* range in @joined@ — i.e., @joined@ is a refinement (stronger)
-  -- of @old@. After a real join, the result is *weaker* than both inputs,
-  -- so the input maps refine the joined map at every surviving key.
+  -- @addrPredMapImpliedBy old joined@ holds when every key in @old@
+  -- has a *narrower* range in @joined@ — i.e., @joined@ is a refinement
+  -- (stronger) of @old@. After a real join, the result is *weaker* than
+  -- both inputs, so the input maps refine the joined map at every surviving
+  -- key.
   a <- H.forAllWith showAddrMap genAddrMap
   b <- H.forAllWith showAddrMap genAddrMap
-  let j = joinAddrPredMap a b
+  let j = joinedMap a b
   H.assert (addrPredMapImpliedBy j a)
   H.assert (addrPredMapImpliedBy j b)
 
@@ -419,8 +465,8 @@ genLooser m = do
            )
 
 -- | Sanity check on 'genLooser': any map it produces from @m@ is implied
--- by @m@. If this fails, the transitive/antisymmetric tests below are
--- testing nothing useful.
+-- by @m@. If this fails, the transitive test below is testing nothing
+-- useful.
 prop_genLooser_isLooser :: H.Property
 prop_genLooser_isLooser = H.property $ do
   m      <- H.forAllWith showAddrMap genAddrMap
@@ -439,6 +485,17 @@ prop_addrPredMapImpliedBy_transitive = H.property $ do
   H.assert (addrPredMapImpliedBy b c)
   -- Transitivity: a is implied by c.
   H.assert (addrPredMapImpliedBy a c)
+
+prop_joinAddrPredMap_matches_oracle :: H.Property
+prop_joinAddrPredMap_matches_oracle = H.property $ do
+  a <- H.forAllWith showAddrMap genAddrMap
+  b <- H.forAllWith showAddrMap genAddrMap
+  let (j, lost) = joinAddrPredMap a b
+      jOracle   = joinAddrPredMapOracle a b
+  -- Pointwise-equal joined maps (compare via bounds since MemVal has no Eq):
+  fmap memValBounds j H.=== fmap memValBounds jOracle
+  -- The fused @lost@ flag matches "@old@ is not implied by the joined map".
+  lost H.=== not (addrPredMapImpliedBy a jOracle)
 
 
 ------------------------------------------------------------------------
@@ -476,6 +533,7 @@ tests = TT.testGroup "JumpBounds"
       , TTH.testProperty "impliedBy reflexive"    prop_addrPredMapImpliedBy_reflexive
       , TTH.testProperty "genLooser is looser"    prop_genLooser_isLooser
       , TTH.testProperty "impliedBy transitive"   prop_addrPredMapImpliedBy_transitive
+      , TTH.testProperty "matches oracle"         prop_joinAddrPredMap_matches_oracle
       ]
   ]
 
