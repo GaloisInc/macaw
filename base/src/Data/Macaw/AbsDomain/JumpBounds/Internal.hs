@@ -603,7 +603,7 @@ disjoinBranchConstraints x y =
 ------------------------------------------------------------------------
 -- Bounds inference
 
--- | @addRangePred v p@ asserts that @(trunc v (rangeWidth p))@ is satisifies
+-- | @addRangePred v p@ asserts that @(trunc v (rangeWidth p))@ satisfies
 -- bounds in @p@.
 --
 -- In several architectures, but particularly x86, we may have
@@ -688,7 +688,7 @@ addRangePred cns v p =
             Nothing -> error "Invariant broken"
 
         -- If none of the above cases apply, then we just assign the
-        -- predicate to the nonce identifing the app.
+        -- predicate to the nonce identifying the app.
         _ ->
           Right $ branchAssignRangePred n p
 
@@ -783,7 +783,7 @@ assertEqPred cns w x c isTrue
 --
 -- If it returns a new upper bounds, then that may be used.
 -- Otherwise, it detects an inconsistency and returns a message
--- explaing why.
+-- explaining why.
 assertPred :: RegisterInfo (ArchReg arch)
            => IntraJumpBounds arch ids
            -> Value arch ids BoolType -- ^ Value representing predicate
