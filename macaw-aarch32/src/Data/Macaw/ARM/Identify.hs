@@ -345,14 +345,19 @@ conditionalCallClassifier = do
 
   case Jmp.postBranchBounds jmpBounds regs cond of
     Jmp.BothFeasibleBranch trueJumpState falseJumpState -> do
-      let abs' = MDC.branchBlockState ainfo absState stmts regs cond (callBranch == CallsOnFalse)
-      let fallthroughTarget = ( fallthroughIP
-                              , abs'
-                              , if callBranch == CallsOnTrue then falseJumpState else trueJumpState
-                              )
+      let notTakenAbs =
+            MDC.branchBlockState ainfo absState stmts regs cond
+                                 (callBranch == CallsOnFalse)
+      let notTakenJumpState =
+            if callBranch == CallsOnTrue then falseJumpState else trueJumpState
+      let notTakenTarget = (fallthroughIP, notTakenAbs, notTakenJumpState)
+      let takenAbs = MAI.postCallAbsState ainfo absState regs fallthroughIP
+      let takenJumpState =
+            Jmp.postCallBounds (MAI.archCallParams ainfo) jmpBounds regs
+      let takenTarget = (fallthroughIP, takenAbs, takenJumpState)
       return Parsed.ParsedContents { Parsed.parsedNonterm = F.toList stmts'
                                    , Parsed.parsedTerm = Parsed.ParsedArchTermStmt term regs (Just fallthroughIP)
-                                   , Parsed.intraJumpTargets = [fallthroughTarget]
+                                   , Parsed.intraJumpTargets = [notTakenTarget, takenTarget]
                                    , Parsed.newFunctionAddrs = extractCallTargets mem callTarget
                                    , Parsed.writtenCodeAddrs = writtenAddrs
                                    }
