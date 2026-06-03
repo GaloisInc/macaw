@@ -29,6 +29,7 @@ import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.CFG
 import qualified Data.Macaw.Discovery.ParsedContents as Parsed
+import           Data.Macaw.Memory.LLVMJumpTableSizes (JumpTableSize(..))
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
@@ -217,6 +218,10 @@ type JumpTableClassifier arch ids s =
   Info.BlockClassifierM arch ids (JumpTableClassifierResult arch ids)
 
 -- | This operation extracts chunks of memory for a jump table.
+--
+-- Prefers externally-supplied metadata (e.g. an LLVM @.llvm_jump_table_sizes@
+-- entry for the same base address) when available, falls back to
+-- abstract-interpretation-based bounds otherwise.
 extractJumpTableSlices :: ArchConstraints arch
                        => Jmp.IntraJumpBounds arch ids
                        -- ^ Bounds for jump table
@@ -224,19 +229,23 @@ extractJumpTableSlices :: ArchConstraints arch
                        -> Natural -- ^ Stride
                        -> BVValue arch ids idxWidth
                        -> MemRepr tp -- ^ Type of values
+                       -> Maybe (JumpTableSize (ArchAddrWidth arch))
+                       -- ^ Externally-supplied entry count for this base, if any
                        -> Info.Classifier (V.Vector [MemChunk (ArchAddrWidth arch)])
-extractJumpTableSlices jmpBounds base stride ixVal tp = do
-  cnt <-
-    case Jmp.unsignedUpperBound jmpBounds ixVal of
-      Nothing -> fail $ "Upper bounds failed:\n"
-                      ++ show (ppValueAssignments ixVal) ++ "\n"
-                      ++ show (PP.pretty jmpBounds)
-      Just bnd -> do
-        let cnt = toInteger (bnd+1)
-        -- Check array actually fits in memory.
-        when (cnt * toInteger stride > segoffBytesLeft base) $ do
-          fail "Size is too large."
-        pure cnt
+extractJumpTableSlices jmpBounds base stride ixVal tp mbExtCnt = do
+  let extCnt = toInteger . memWordValue . getJumpTableSize <$> mbExtCnt
+  cnt <- case extCnt of
+    Just c -> pure c
+    Nothing ->
+      let aiCnt = (\bnd -> toInteger bnd + 1) <$> Jmp.unsignedUpperBound jmpBounds ixVal
+      in case aiCnt of
+        Just c  -> pure c
+        Nothing -> fail $ "Upper bounds failed:\n"
+                       ++ show (ppValueAssignments ixVal) ++ "\n"
+                       ++ show (PP.pretty jmpBounds)
+  -- Check array actually fits in memory.
+  when (cnt * toInteger stride > segoffBytesLeft base) $ do
+    fail "Size is too large."
 
   -- Get memory contents after base
   Right contents <- pure $ segoffContentsAfter base
@@ -261,9 +270,12 @@ matchBoundedMemArray
   -> AbsProcessorState (ArchReg arch) ids
   -> Jmp.IntraJumpBounds arch ids
      -- ^ Bounds for jump table
+  -> Map.Map (ArchSegmentOff arch) (JumpTableSize (ArchAddrWidth arch))
+     -- ^ Externally-supplied jump-table sizes (e.g. from
+     -- @.llvm_jump_table_sizes@)
   -> Value arch ids tp  -- ^ Value to interpret
   -> Info.Classifier (Parsed.BoundedMemArray arch tp, ArchAddrValue arch ids)
-matchBoundedMemArray mem aps jmpBounds val = do
+matchBoundedMemArray mem aps jmpBounds extSizes val = do
   AssignedValue (Assignment _ (ReadMem addr tp)) <- pure val
   Just (base, offset) <- pure $ valueAsMemOffset mem aps addr
   Just (stride, ixVal) <- pure $ valueAsStaticMultiplication offset
@@ -274,7 +286,8 @@ matchBoundedMemArray mem aps jmpBounds val = do
   let stridew :: Word64
       stridew = fromIntegral stride
   -- Take the given number of bytes out of each slices
-  slices <- extractJumpTableSlices jmpBounds base stride ixVal tp
+  let mbExtCnt = Map.lookup base extSizes
+  slices <- extractJumpTableSlices jmpBounds base stride ixVal tp mbExtCnt
 
   let r = Parsed.BoundedMemArray
           { Parsed.arBase     = base
@@ -296,9 +309,10 @@ matchAbsoluteJumpTable = Info.classifierName "Absolute jump table" $ do
   let mem = Info.pctxMemory (Info.classifierParseContext bcc)
   let aps = Info.classifierAbsState bcc
   let jmpBounds = Info.classifierJumpBounds bcc
+  let extSizes = Info.pctxLLVMJumpTableSizes (Info.classifierParseContext bcc)
   -- Get IP value to interpret as a jump table index.
   let ip = Info.classifierFinalRegState bcc^.curIP
-  (arrayRead, idx) <- Info.liftClassifier $ matchBoundedMemArray mem aps jmpBounds ip
+  (arrayRead, idx) <- Info.liftClassifier $ matchBoundedMemArray mem aps jmpBounds extSizes ip
   unless (Parsed.isReadOnlyBoundedMemArray arrayRead) $ do
     fail "Bounded mem array is not read only."
   endianness <-
@@ -334,6 +348,7 @@ matchRelativeJumpTable = Info.classifierName "Relative jump table" $ do
   let mem = Info.pctxMemory (Info.classifierParseContext bcc)
   let aps = Info.classifierAbsState bcc
   let jmpBounds = Info.classifierJumpBounds bcc
+  let extSizes = Info.pctxLLVMJumpTableSizes (Info.classifierParseContext bcc)
   -- Get IP value to interpret as a jump table index.
   let ip = Info.classifierFinalRegState bcc^.curIP
 
@@ -346,7 +361,7 @@ matchRelativeJumpTable = Info.classifierName "Relative jump table" $ do
       Just p -> pure p
       Nothing -> fail $ "Unaligned IP not a mem offset: " <> show unalignedIP
   SomeExt shortOffset ext <- pure $ matchExtension tgtOffset
-  (arrayRead, idx) <- Info.liftClassifier $ matchBoundedMemArray mem aps jmpBounds shortOffset
+  (arrayRead, idx) <- Info.liftClassifier $ matchBoundedMemArray mem aps jmpBounds extSizes shortOffset
   unless (Parsed.isReadOnlyBoundedMemArray arrayRead) $ do
     fail $ "Jump table memory array must be read only."
   tbl <- case resolveRelativeJumps mem tgtBase arrayRead ext of

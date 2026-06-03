@@ -88,6 +88,7 @@ library
     Data.Macaw.Memory.ElfLoader
     Data.Macaw.Memory.ElfLoader.DynamicDependencies
     Data.Macaw.Memory.ElfLoader.PLTStubs
+    Data.Macaw.Memory.LLVMJumpTableSizes
     Data.Macaw.Memory.LoadCommon
     Data.Macaw.Memory.Permissions
     Data.Macaw.Memory.Symbols
@@ -125,6 +126,7 @@ test-suite macaw-base-tests
     AbsDomain.StridedIntervalTests
   build-depends:
     base,
+    bytestring,
     containers,
     hedgehog >= 1.0.2,
     parameterized-utils,

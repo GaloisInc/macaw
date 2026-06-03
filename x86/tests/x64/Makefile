@@ -22,6 +22,15 @@ test-jumptable-mask.o: test-jumptable-mask.c
 test-mergeintrajump.o: test-mergeintrajump.c
 	clang -c --target=x86_64-pc-linux-elf -O1 -fno-jump-tables -o $@ $<
 
+# Requires Clang >= 20, which emits .llvm_jump_table_sizes under the LLVM
+# flag -emit-jump-table-sizes-section. The section's R_X86_64_64 entries
+# need an absolute (-no-pie) link so the table address resolves to a
+# literal value, since the parser reads raw bytes.
+test-jumptable-llvm-sizes.exe: test-jumptable-llvm-sizes.c util.h
+	clang-20 -fno-stack-protector -no-pie -nostdlib -O2 \
+	         -mllvm -emit-jump-table-sizes-section -o $@ $<
+
+
 %.exe: %.s
 	gcc -fno-stack-protector -nostdlib $< -o $@
 
