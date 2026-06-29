@@ -64,9 +64,9 @@ addrPredMapImpliedBy old joined =
        acc && case Map.lookup k joined of
                 Just (MemVal jR (SubRange jS))
                   | Just Refl <- testEquality oldR jR
-                  , Just Refl <- testEquality (rangeWidth oldS) (rangeWidth jS)
-                  , rangeLowerBound jS >= rangeLowerBound oldS
-                  , rangeUpperBound jS <= rangeUpperBound oldS -> True
+                  , Just Refl <- testEquality (rangeWidth oldS) (rangeWidth jS) ->
+                    rangeLowerBound jS >= rangeLowerBound oldS &&
+                    rangeUpperBound jS <= rangeUpperBound oldS
                 _ -> False)
     True
     old
