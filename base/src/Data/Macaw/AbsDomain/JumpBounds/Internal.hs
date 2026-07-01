@@ -730,14 +730,21 @@ addRangePred cns v p =
           addRangePred cns x (p { rangeWidth = typeWidth x })
     AppExpr n a ->
       case a of
-        BVAdd _ x (CExpr (BVCValue w c))
-          | RangePred _wp l u <- p
+        -- @p@ bounds the low @wp@ bits of @x + c@ to @[l, u]@, so the low @wp@
+        -- bits of @x@ lie in @[l - c, u - c] (mod 2^wp)@.  The shift check
+        -- rejects the case where subtracting @c@ wraps that interval past a
+        -- multiple of 2^wp (it would then be two disjoint ranges, which a
+        -- single 'RangePred' can't hold).  We keep the predicate width @wp@
+        -- rather than the add's operation width (@_w@): the bound only covers
+        -- the low @wp@ bits of @x@, so promoting it to all of @x@ is unsound
+        -- (e.g. a 32-bit compare feeding a 64-bit register).
+        BVAdd _ x (CExpr (BVCValue _w c))
+          | RangePred wp l u <- p
           , l' <- toInteger l - c
           , u' <- toInteger u - c
-            -- Check overflow is consistent
-          , l' `shiftR` fromIntegral (natValue w) == u' `shiftR` fromIntegral (natValue w) -> do
-              addRangePred cns x (RangePred w (fromInteger (toUnsigned w l'))
-                                              (fromInteger (toUnsigned w u')))
+          , l' `shiftR` fromIntegral (natValue wp) == u' `shiftR` fromIntegral (natValue wp) -> do
+              addRangePred cns x (RangePred wp (fromInteger (toUnsigned wp l'))
+                                               (fromInteger (toUnsigned wp u')))
 
         -- Truncation passes through as we aonly affect low order bits.
         Trunc x _w ->

@@ -10,6 +10,12 @@ opt = $(patsubst %.c,%.opt.exe,$(wildcard *.c))
 switch-jump-table.opt.exe: switch-jump-table.c
 	clang $(CFLAGS) -O2 -fno-unroll-loops -fPIC $< -o $@
 
+# This test requires clang -O2 to lower the switch to a jump table gated by
+# 32-bit comparisons on the argument register; gcc -O2 emits a plain byte
+# comparison with no table, which does not exercise the abstract domain.
+switch-jump-table-abs.opt.exe: switch-jump-table-abs.c
+	clang $(CFLAGS) -O2 -fno-pic $< -o $@
+
 all: $(unopt) $(opt)
 
 %.unopt.exe : %.c
