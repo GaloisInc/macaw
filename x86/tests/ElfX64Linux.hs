@@ -8,7 +8,7 @@ module ElfX64Linux (
   , elfX64LinuxTests
   ) where
 
-import           Lens.Micro ((^.))
+import           Lens.Micro ((&), (.~), (^.))
 import           Control.Monad ( unless, when )
 import qualified Control.Monad.Catch as C
 import qualified Data.ByteString as B
@@ -34,6 +34,7 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as MM
+import qualified Data.Macaw.Memory.LLVMJumpTableSizes as JT
 import qualified Data.Macaw.X86 as RO
 import qualified Data.Parameterized.Some as PU
 
@@ -125,7 +126,14 @@ testDiscovery saveMacaw expectedFilename elf = do
       addrSymMap = M.fromList [ (MM.memSymbolStart sym, MM.memSymbolName sym)
                               | sym <- syms
                               ]
-  let di = MD.cfgFromAddrs RO.x86_64_linux_info mem addrSymMap entries []
+  (jtWarns, jtSizes) <- case JT.llvmJumpTableSizesFromElf elf mem of
+    Left err -> error $ "Failed to parse .llvm_jump_table_sizes: " ++ show err
+    Right r -> pure r
+  unless (null jtWarns) $
+    error $ "Warnings while parsing .llvm_jump_table_sizes: " ++ show jtWarns
+  let initState = MD.emptyDiscoveryState mem addrSymMap RO.x86_64_linux_info
+                    & MD.llvmJumpTableSizes .~ jtSizes
+  let di = MD.cfgFromAddrsAndState initState entries []
 
   let testName = takeFileName expectedFilename
   F.forM_ (di ^. MD.funInfo) $ \(PU.Some dfi) -> do

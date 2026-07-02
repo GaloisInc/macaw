@@ -18,6 +18,7 @@ module Data.Macaw.Discovery
          State.DiscoveryState(..)
        , State.emptyDiscoveryState
        , State.trustedFunctionEntryPoints
+       , State.llvmJumpTableSizes
        , State.exploreFnPred
        , State.AddrSymMap
        , State.funInfo
@@ -634,12 +635,14 @@ addBlock ctx src finfo pr s0 = do
 #endif
   let extRes = classifyFailureResolutions s0
   let funAddr = curFunAddr s0
-  let pctx = ParseContext { pctxMemory         =  mem
-                          , pctxArchInfo       = ainfo
-                          , pctxKnownFnEntries = knownFnEntries
-                          , pctxFunAddr        = funAddr
-                          , pctxAddr           = src
-                          , pctxExtResolution  = extRes
+  let jtSizes = ctx ^. llvmJumpTableSizes
+  let pctx = ParseContext { pctxMemory             = mem
+                          , pctxArchInfo           = ainfo
+                          , pctxKnownFnEntries     = knownFnEntries
+                          , pctxFunAddr            = funAddr
+                          , pctxAddr               = src
+                          , pctxExtResolution      = extRes
+                          , pctxLLVMJumpTableSizes = jtSizes
                           }
   let pc = parseBlock pctx initRegs b sz (foundAbstractState finfo) (foundJumpBounds finfo)
   let pb = ParsedBlock { pblockAddr    = src

@@ -44,6 +44,7 @@ import           Data.Macaw.CFG.DemandSet
 import           Data.Macaw.CFG.Rewriter
 import qualified Data.Macaw.Discovery.ParsedContents as Parsed
 import           Data.Macaw.Memory
+import           Data.Macaw.Memory.LLVMJumpTableSizes (JumpTableSize)
 
 
 ------------------------------------------------------------------------
@@ -141,6 +142,10 @@ data ParseContext arch ids =
                , pctxExtResolution :: [(ArchSegmentOff arch, [ArchSegmentOff arch])]
                  -- ^ Externally-provided resolutions for classification
                  -- failures, which are used in parseFetchAndExecute
+               , pctxLLVMJumpTableSizes :: !(Map (ArchSegmentOff arch) (JumpTableSize (ArchAddrWidth arch)))
+                 -- ^ Externally-supplied jump-table sizes (from a
+                 -- Clang/LLVM @.llvm_jump_table_sizes@ section). Maps a
+                 -- jump-table base address to its entry count.
                }
 
 {-| The fields of the 'BlockClassifierContext' are:

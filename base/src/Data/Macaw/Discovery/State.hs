@@ -25,6 +25,7 @@ module Data.Macaw.Discovery.State
   , unexploredFunctions
   , Info.NoReturnFunStatus(..)
   , trustedFunctionEntryPoints
+  , llvmJumpTableSizes
   , exploreFnPred
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo(..)
@@ -64,6 +65,7 @@ import           Prettyprinter as PP
 import           Data.Macaw.Architecture.Info as Info
 import           Data.Macaw.CFG
 import qualified Data.Macaw.Discovery.ParsedContents as Parsed
+import           Data.Macaw.Memory.LLVMJumpTableSizes (JumpTableSize)
 import           Data.Macaw.Types
 
 ------------------------------------------------------------------------
@@ -206,6 +208,12 @@ data DiscoveryState arch
                     , _exploreFnPred :: !(ArchSegmentOff arch -> Bool)
                       -- ^ This predicate decides whether to explore a
                       -- function at the given address or not.
+                    , _llvmJumpTableSizes :: !(Map (ArchSegmentOff arch) (JumpTableSize (ArchAddrWidth arch)))
+                      -- ^ Map from jump-table base addresses to entry counts,
+                      -- as recovered from a Clang/LLVM-emitted
+                      -- @.llvm_jump_table_sizes@ section. Consulted by the
+                      -- jump-table classifier to confirm or supply table
+                      -- bounds.
                     }
 
 -- | Return list of all functions discovered so far.
@@ -241,6 +249,7 @@ emptyDiscoveryState mem addrSymMap info =
   , _unexploredFunctions = Map.empty
   , _trustedFunctionEntryPoints = Info.MayReturnFun <$ addrSymMap
   , _exploreFnPred       = const True
+  , _llvmJumpTableSizes  = Map.empty
   }
 
 -- | Map each jump table start to the address just after the end.
@@ -265,6 +274,13 @@ trustedFunctionEntryPoints =
 
 exploreFnPred :: Lens' (DiscoveryState arch) (ArchSegmentOff arch -> Bool)
 exploreFnPred = lens _exploreFnPred (\s v -> s { _exploreFnPred = v })
+
+-- | Map from jump-table base addresses to entry counts, supplied by an
+-- external source like Clang/LLVM's @.llvm_jump_table_sizes@ section.
+llvmJumpTableSizes
+  :: Lens' (DiscoveryState arch) (Map (ArchSegmentOff arch) (JumpTableSize (ArchAddrWidth arch)))
+llvmJumpTableSizes =
+  lens _llvmJumpTableSizes (\s v -> s { _llvmJumpTableSizes = v })
 
 ------------------------------------------------------------------------
 -- DiscoveryState utilities
