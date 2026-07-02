@@ -32,11 +32,12 @@ import qualified Data.ElfEdit as Elf
 import qualified Data.Foldable as F
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import           Data.Word (Word64)
 import           Numeric (showHex)
 import qualified Prettyprinter as PP
-import qualified Prettyprinter.Render.String as PP
 
 import           Data.Macaw.Memory
+import           Data.Macaw.Memory.ElfLoader (elfAddrWidth)
 
 -- | The section byte count was not a multiple of the entry size.
 data SectionSizeError
@@ -52,7 +53,7 @@ instance PP.Pretty SectionSizeError where
         PP.<+> "is not a multiple of entry size" PP.<+> PP.pretty entry
 
 instance Show SectionSizeError where
-  show = PP.renderString . PP.layoutPretty PP.defaultLayoutOptions . PP.pretty
+  show = show . PP.pretty
 
 -- | An entry's jump-table address could not be resolved in the 'Memory'.
 newtype UnresolvableAddress w = UnresolvableAddress (MemWord w)
@@ -65,7 +66,7 @@ instance MemWidth w => PP.Pretty (UnresolvableAddress w) where
         PP.<> PP.pretty (showHex (memWordValue addr) "")
 
 instance MemWidth w => Show (UnresolvableAddress w) where
-  show = PP.renderString . PP.layoutPretty PP.defaultLayoutOptions . PP.pretty
+  show = show . PP.pretty
 
 -- | The number of basic-block targets (entries) in a jump table, as recorded
 -- in a Clang\/LLVM @.llvm_jump_table_sizes@ section.
@@ -93,6 +94,7 @@ parseLLVMJumpTableSizes wRepr end bs0 = addrWidthClass wRepr $
   let ptrBytes = fromIntegral (addrWidthReprByteCount wRepr) :: Int
       entryBytes = 2 * ptrBytes
       totalLen = BS.length bs0
+      readWord :: BS.ByteString -> Word64
       readWord bs = case wRepr of
         Addr32 -> fromIntegral (bsWord32 end bs)
         Addr64 -> bsWord64 end bs
@@ -110,8 +112,8 @@ parseLLVMJumpTableSizes wRepr end bs0 = addrWidthClass wRepr $
 -- | Read the @.llvm_jump_table_sizes@ section out of an ELF binary, parse
 -- it, and resolve each address against the provided 'Memory'.
 --
--- Returns a parse error if the section is malformed, otherwise a list of
--- per-entry warnings (one per unresolvable address) along with a map from
+-- Returns a 'SectionSizeError' if the section is malformed, otherwise a list
+-- of per-entry warnings (one per unresolvable address) along with a map from
 -- resolved jump-table base addresses to entry counts.
 --
 -- If the section is absent the result is @Right ([], Map.empty)@.
@@ -130,9 +132,7 @@ llvmJumpTableSizesFromElf ehi mem =
         , Elf.elfSectionName sec == sectionName
         ]
       wRepr :: AddrWidthRepr w
-      wRepr = case Elf.headerClass (Elf.header ehi) of
-                Elf.ELFCLASS32 -> Addr32
-                Elf.ELFCLASS64 -> Addr64
+      wRepr = elfAddrWidth (Elf.headerClass (Elf.header ehi))
   in addrWidthClass wRepr $ case sectionBytes of
        [] -> Right ([], Map.empty)
        bs : _ -> resolveEntries mem <$> parseLLVMJumpTableSizes wRepr end bs

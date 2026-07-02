@@ -3,6 +3,19 @@
 // passes that flag and links no-pie so the section's R_X86_64_64 entries
 // resolve to literal addresses (the parser reads raw bytes).
 //
+// The no-pie link is load-bearing: with a PIE (ET_DYN) binary the parser
+// does not error out, but it also does not work. The static linker leaves
+// the section's R_X86_64_64 entries as load-time relocations, so the raw
+// on-disk bytes are addends rather than final absolute addresses. On top of
+// that, llvmJumpTableSizesFromElf resolves addresses via resolveAbsoluteAddr,
+// which is hardcoded to region 0, whereas macaw loads ET_DYN binaries into
+// region 1 (see adjustedLoadRegionIndex). So every entry would come back as
+// an UnresolvableAddress warning and the size map would be empty; discovery
+// would then fall back to its own analysis. Supporting PIE binaries is future
+// work: it would require applying the section's relocations rather than
+// trusting raw bytes, and resolving against the region the section actually
+// loads into rather than region 0.
+//
 // Each case body calls a distinct externally-defined function so the
 // compiler cannot collapse the switch into a constant lookup table — the
 // only viable lowering for irregular control flow at this case count is a
