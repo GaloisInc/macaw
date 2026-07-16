@@ -13,6 +13,7 @@ import Data.Macaw.Dump.Discover qualified as MDD
 import Data.Macaw.Dump.EntryPoints qualified as MDE
 import Data.Macaw.Dump.Memory qualified as MDM
 import Data.Macaw.Dump.Plt qualified as MDP
+import Data.Macaw.Dump.Relocations qualified as MDR
 import Options.Applicative qualified as Opt
 
 data Command
@@ -20,6 +21,7 @@ data Command
   | CommandEntryPoints MDE.EntryPointsConfig
   | CommandMemory MDM.MemoryConfig
   | CommandPlt MDP.PltConfig
+  | CommandRelocations MDR.RelocationConfig
 
 command :: Opt.Parser Command
 command =
@@ -29,6 +31,7 @@ command =
     , cmdEntryPoints
     , cmdMemory
     , cmdPlt
+    , cmdRelocations
     ]
   where
   cmdDiscover :: Opt.Mod Opt.CommandFields Command
@@ -54,6 +57,12 @@ command =
     Opt.command
       "plt"
       (helperInfo (CommandPlt <$> MDP.pltConfig) (Opt.progDesc "Display PLT stubs"))
+
+  cmdRelocations :: Opt.Mod Opt.CommandFields Command
+  cmdRelocations = do
+    Opt.command
+      "relocs"
+      (helperInfo (CommandRelocations <$> MDR.relocationsConfig) (Opt.progDesc "Print relocations"))
 
 data Cli = Cli
   { cliCommand :: Command
