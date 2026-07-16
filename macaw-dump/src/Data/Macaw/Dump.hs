@@ -14,6 +14,7 @@ import Data.Macaw.Dump.Discover qualified as MDD
 import Data.Macaw.Dump.EntryPoints qualified as MDE
 import Data.Macaw.Dump.Memory qualified as MDM
 import Data.Macaw.Dump.Plt qualified as MDP
+import Data.Macaw.Dump.Relocations qualified as MDR
 import Data.Macaw.CFG qualified as MC
 import Data.Macaw.Memory.ElfLoader.PLTStubs qualified as MMEP
 import Data.Macaw.Symbolic qualified as MS
@@ -39,3 +40,4 @@ main archInfo archVals pltStubInfo = do
     MDC.CommandEntryPoints cfg -> MDE.entryPoints archInfo cfg
     MDC.CommandMemory cfg -> MDM.memory archInfo cfg
     MDC.CommandPlt cfg -> MDP.plt archInfo pltStubInfo cfg
+    MDC.CommandRelocations cfg -> MDR.relocations archInfo cfg

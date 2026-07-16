@@ -120,6 +120,7 @@ library
     parameterized-utils,
     prettyprinter,
     text,
+    vector,
     what4
 
   hs-source-dirs: src
@@ -132,3 +133,4 @@ library
     Data.Macaw.Dump.EntryPoints
     Data.Macaw.Dump.Memory
     Data.Macaw.Dump.Plt
+    Data.Macaw.Dump.Relocations
