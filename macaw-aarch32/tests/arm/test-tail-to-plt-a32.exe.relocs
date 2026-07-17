@@ -1,0 +1,2 @@
+Address  Size  Endian  Flags    Symbol + Addend
+0x2100c  4     LE      JMPSLOT  printf + 0x0

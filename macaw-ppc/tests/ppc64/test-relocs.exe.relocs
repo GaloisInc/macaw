@@ -1,0 +1,2 @@
+Address     Size  Endian  Flags    Symbol + Addend
+0x10020018  8     BE      JMPSLOT  printf@libc.so.6(GLIBC_2.4) + 0x0

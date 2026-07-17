@@ -63,6 +63,7 @@ test-suite macaw-ppc-tests
   main-is: Main.hs
   other-modules: PPCTests
                  PPC64InstructionCoverage
+                 Relocs
                  Shared
   hs-source-dirs: tests
   build-depends: base >=4.9 && <5,
@@ -74,11 +75,12 @@ test-suite macaw-ppc-tests
                  dismantle-ppc:opcodes,
                  elf-edit,
                  exceptions,
-                 filemanip,
                  filepath,
+                 Glob >= 0.9 && < 0.11,
                  microlens >= 0.4.0,
                  prettyprinter,
                  macaw-base,
+                 macaw-dump,
                  macaw-semmc,
                  macaw-ppc,
                  macaw-loader,
@@ -89,6 +91,7 @@ test-suite macaw-ppc-tests
                  template-haskell,
                  temporary,
                  tasty,
+                 tasty-golden,
                  tasty-hunit,
                  text,
                  what4

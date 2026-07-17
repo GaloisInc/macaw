@@ -2,13 +2,14 @@
 module Main ( main ) where
 
 import           Data.Proxy ( Proxy(..) )
-import           System.FilePath.Glob ( namesMatching )
+import           System.FilePath.Glob ( glob )
 import qualified Test.Tasty as T
 import qualified Test.Tasty.Options as TTO
 import qualified Test.Tasty.Runners as TTR
 
 import qualified PPCTests as PPC
 import qualified PPC64InstructionCoverage as PPC64
+import qualified Relocs
 
 ingredients :: [TTR.Ingredient]
 ingredients = T.includingOptions [ TTO.Option (Proxy @PPC.SaveMacaw)
@@ -17,11 +18,13 @@ ingredients = T.includingOptions [ TTO.Option (Proxy @PPC.SaveMacaw)
 
 main :: IO ()
 main = do
-  testFiles64 <- namesMatching "tests/ppc64/*.s.expected"
-  testFiles32 <- namesMatching "tests/ppc32/*.s.expected"
-  bins <- namesMatching "tests/ppc64/bin/*"
+  testFiles64 <- glob "tests/ppc64/*.s.expected"
+  testFiles32 <- glob "tests/ppc32/*.s.expected"
+  bins <- glob "tests/ppc64/bin/*"
+  relocsTests <- Relocs.tests
   T.defaultMainWithIngredients ingredients $ T.testGroup "PPCMacawTests" [
     PPC.ppcAsmTests "PPC64" testFiles64,
     PPC.ppcAsmTests "PPC32" testFiles32,
-    PPC64.ppc64InstructionCoverageTests bins
+    PPC64.ppc64InstructionCoverageTests bins,
+    relocsTests
     ]

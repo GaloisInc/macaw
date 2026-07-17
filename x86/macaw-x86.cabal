@@ -60,7 +60,9 @@ test-suite macaw-x86-tests
   default-language: Haskell2010
   ghc-options: -Wall -Wcompat
   main-is: Main.hs
-  other-modules: ElfX64Linux
+  other-modules:
+    ElfX64Linux
+    Relocs
   hs-source-dirs: tests
   build-depends:
     base,
@@ -68,13 +70,16 @@ test-suite macaw-x86-tests
     containers,
     elf-edit,
     exceptions,
-    filemanip,
     filepath,
+    Glob >= 0.9 && < 0.11,
     microlens,
     macaw-base,
+    macaw-dump,
     parameterized-utils,
     prettyprinter,
     macaw-x86,
     temporary,
     tasty,
-    tasty-hunit
+    tasty-golden,
+    tasty-hunit,
+    text

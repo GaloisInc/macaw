@@ -1,0 +1,2 @@
+Address  Size  Endian  Flags    Symbol + Addend
+0x3ff8   8     LE      JMPSLOT  fib + 0x0

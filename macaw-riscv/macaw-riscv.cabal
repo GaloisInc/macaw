@@ -45,6 +45,7 @@ test-suite macaw-riscv-tests
   ghc-options: -Wall
   main-is: Main.hs
   other-modules: RISCVTests
+                 Relocs
                  Shared
   hs-source-dirs: tests
   build-depends: base >=4.9 && <5,
@@ -53,16 +54,19 @@ test-suite macaw-riscv-tests
                  containers,
                  elf-edit,
                  exceptions,
-                 filemanip,
                  filepath,
+                 Glob >= 0.9 && < 0.11,
                  grift,
                  macaw-base,
+                 macaw-dump,
                  macaw-riscv,
                  macaw-loader,
                  microlens >= 0.4.0,
                  parameterized-utils,
+                 prettyprinter,
                  template-haskell,
                  temporary,
                  tasty,
+                 tasty-golden,
                  tasty-hunit,
                  text

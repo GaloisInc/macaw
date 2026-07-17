@@ -1,0 +1,4 @@
+Address  Size  Endian  Flags    Symbol + Addend
+0x2008   4     LE      JMPSLOT  fib + 0x0
+Warnings:
+Multiple relocations modify 2008.
