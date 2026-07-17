@@ -10,6 +10,8 @@ module Data.Macaw.Dump.Relocations
   ( RelocationConfig(..)
   , relocationsConfig
   , relocations
+  , memRelocations
+  , ppRelocations
   ) where
 
 import Data.ByteString qualified as BS

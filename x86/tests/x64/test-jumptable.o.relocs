@@ -1,0 +1,29 @@
+Address         Size  Endian  Flags        Symbol + Addend
+segment1+0x2d   4     LE      S            .rodata (section 4) + 0x0
+segment1+0x39   4     LE      REL|JMPSLOT  a + 0xfffffffffffffffc
+segment1+0x48   4     LE      REL|JMPSLOT  b + 0xfffffffffffffffc
+segment1+0x57   4     LE      REL|JMPSLOT  c + 0xfffffffffffffffc
+segment1+0x66   4     LE      REL|JMPSLOT  d + 0xfffffffffffffffc
+segment1+0x75   4     LE      REL|JMPSLOT  e + 0xfffffffffffffffc
+segment1+0xfb   4     LE      S            .rodata (section 4) + 0x48
+segment1+0x104  4     LE      REL|JMPSLOT  b + 0xfffffffffffffffc
+segment1+0x113  4     LE      REL|JMPSLOT  c + 0xfffffffffffffffc
+segment1+0x122  4     LE      REL|JMPSLOT  d + 0xfffffffffffffffc
+segment1+0x131  4     LE      REL|JMPSLOT  e + 0xfffffffffffffffc
+segment2+0x20   4     LE      REL          .text (section 2) + 0x0
+segment2+0x40   4     LE      REL          .text (section 2) + 0xd0
+segment5+0x0    8     LE      -            .text (section 2) + 0x33
+segment5+0x8    8     LE      -            .text (section 2) + 0x45
+segment5+0x10   8     LE      -            .text (section 2) + 0x54
+segment5+0x18   8     LE      -            .text (section 2) + 0x63
+segment5+0x20   8     LE      -            .text (section 2) + 0x72
+segment5+0x28   8     LE      -            .text (section 2) + 0x81
+segment5+0x30   8     LE      -            .text (section 2) + 0x8d
+segment5+0x38   8     LE      -            .text (section 2) + 0x99
+segment5+0x40   8     LE      -            .text (section 2) + 0xa5
+segment5+0x48   8     LE      -            .text (section 2) + 0x101
+segment5+0x50   8     LE      -            .text (section 2) + 0x110
+segment5+0x58   8     LE      -            .text (section 2) + 0x11f
+segment5+0x60   8     LE      -            .text (section 2) + 0x12e
+segment5+0x68   8     LE      -            .text (section 2) + 0x13d
+segment5+0x70   8     LE      -            .text (section 2) + 0x149

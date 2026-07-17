@@ -1,0 +1,11 @@
+Address   Size  Endian  Flags    Symbol + Addend
+0x200900  8     LE      -        base_addr + 0xffffffffffdffde0
+0x200908  8     LE      -        base_addr + 0xffffffffffdffd98
+0x200af8  8     LE      -        _ITM_deregisterTMCloneTable + 0x0
+0x200b00  8     LE      -        __gmon_start__ + 0x0
+0x200b08  8     LE      -        _Jv_RegisterClasses + 0x0
+0x200b10  8     LE      -        _ITM_registerTMCloneTable + 0x0
+0x200b18  8     LE      -        __cxa_finalize@libc.so.6(GLIBC_2.2.5) + 0x0
+0x200b38  8     LE      JMPSLOT  puts@libc.so.6(GLIBC_2.2.5) + 0x0
+0x200b40  8     LE      JMPSLOT  __libc_start_main@libc.so.6(GLIBC_2.2.5) + 0x0
+0x200b50  8     LE      -        base_addr + 0x0

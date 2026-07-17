@@ -1,0 +1,48 @@
+Address        Size  Endian  Flags        Symbol + Addend
+segment3+0x20  8     LE      -            fixture_symbol + 0x0
+segment3+0x30  4     LE      REL          fixture_symbol + 0x0
+segment3+0x50  4     LE      REL|JMPSLOT  fixture_symbol + 0x0
+segment3+0x70  8     LE      -            fixture_symbol + 0x0
+segment3+0x80  8     LE      JMPSLOT      fixture_symbol + 0x0
+segment3+0x90  8     LE      -            base_addr + 0xffffffffffffff70
+segment3+0xb0  4     LE      -            fixture_symbol + 0x0
+segment3+0xc0  4     LE      S            fixture_symbol + 0x0
+Warnings:
+Unsupported relocation type R_X86_64_GOT32
+Unsupported relocation type R_X86_64_GOTPCREL
+Unsupported relocation type R_X86_64_16
+Unsupported relocation type R_X86_64_PC16
+Unsupported relocation type R_X86_64_8
+Unsupported relocation type R_X86_64_PC8
+Unsupported relocation type R_X86_64_DTPMOD64
+Unsupported relocation type R_X86_64_DTPOFF64
+Unsupported relocation type R_X86_64_TPOFF64
+Unsupported relocation type R_X86_64_TLSGD
+Unsupported relocation type R_X86_64_TLSLD
+Unsupported relocation type R_X86_64_DTPOFF32
+Unsupported relocation type R_X86_64_GOTTPOFF
+Unsupported relocation type R_X86_64_TPOFF32
+Unsupported relocation type R_X86_64_PC64
+Unsupported relocation type R_X86_64_GOTOFF64
+Unsupported relocation type R_X86_64_GOTPC32
+Unsupported relocation type R_X86_64_GOT64
+Unsupported relocation type R_X86_64_GOTPCREL64
+Unsupported relocation type R_X86_64_GOTPC64
+Unsupported relocation type R_X86_64_PLTOFF64
+Unsupported relocation type R_X86_64_SIZE32
+Unsupported relocation type R_X86_64_SIZE64
+Unsupported relocation type R_X86_64_GOTPC32_TLSDESC
+Unsupported relocation type R_X86_64_TLSDESC
+Unsupported relocation type R_X86_64_IRELATIVE
+Unsupported relocation type R_X86_64_RELATIVE64
+Unsupported relocation type R_X86_64_GOTPCRELX
+Unsupported relocation type R_X86_64_REX_GOTPCRELX
+Unsupported relocation type R_X86_64_CODE_4_GOTPCRELX
+Unsupported relocation type R_X86_64_CODE_4_GOTTPOFF
+Unsupported relocation type R_X86_64_CODE_4_GOTPC32_TLSDESC
+Unsupported relocation type R_X86_64_CODE_5_GOTPCRELX
+Unsupported relocation type R_X86_64_CODE_5_GOTTPOFF
+Unsupported relocation type R_X86_64_CODE_5_GOTPC32_TLSDESC
+Unsupported relocation type R_X86_64_CODE_6_GOTPCRELX
+Unsupported relocation type R_X86_64_CODE_6_GOTTPOFF
+Unsupported relocation type R_X86_64_CODE_6_GOTPC32_TLSDESC

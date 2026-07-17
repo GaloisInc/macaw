@@ -1,0 +1,37 @@
+Address         Size  Endian  Flags  Symbol + Addend
+segment3+0x20   4     BE      -      fixture_symbol + 0x0
+segment3+0x150  4     BE      -      fixture_symbol + 0x0
+Warnings:
+Unsupported relocation type R_PPC_ADDR24
+Unsupported relocation type R_PPC_ADDR14
+Unsupported relocation type R_PPC_ADDR14_BRTAKEN
+Unsupported relocation type R_PPC_ADDR14_BRNTAKEN
+Unsupported relocation type R_PPC_REL24
+Unsupported relocation type R_PPC_REL14
+Unsupported relocation type R_PPC_REL14_BRTAKEN
+Unsupported relocation type R_PPC_REL14_BRNTAKEN
+Unsupported relocation type R_PPC_PLTREL24
+Unsupported relocation type R_PPC_LOCAL24PC
+Unsupported relocation type R_PPC_ADDR16
+Unsupported relocation type R_PPC_ADDR16_LO
+Unsupported relocation type R_PPC_ADDR16_HI
+Unsupported relocation type R_PPC_ADDR16_HA
+Unsupported relocation type R_PPC_GOT16
+Unsupported relocation type R_PPC_GOT16_LO
+Unsupported relocation type R_PPC_GOT16_HI
+Unsupported relocation type R_PPC_GOT16_HA
+A relocation entry referred to invalid 0 symbol index.
+Unsupported relocation type R_PPC_UADDR32
+Unsupported relocation type R_PPC_UADDR16
+Unsupported relocation type R_PPC_REL32
+Unsupported relocation type R_PPC_PLT32
+Unsupported relocation type R_PPC_PLTREL32
+Unsupported relocation type R_PPC_PLT16_LO
+Unsupported relocation type R_PPC_PLT16_HI
+Unsupported relocation type R_PPC_PLT16_HA
+Unsupported relocation type R_PPC_SDAREL16
+Unsupported relocation type R_PPC_SECTOFF
+Unsupported relocation type R_PPC_SECTOFF_LO
+Unsupported relocation type R_PPC_SECTOFF_HI
+Unsupported relocation type R_PPC_SECTOFF_HA
+Unsupported relocation type R_PPC_ADDR30

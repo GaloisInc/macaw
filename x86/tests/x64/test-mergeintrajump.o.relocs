@@ -1,0 +1,4 @@
+Address        Size  Endian  Flags        Symbol + Addend
+segment1+0x2   4     LE      REL|JMPSLOT  probe + 0xfffffffffffffffc
+segment1+0x32  4     LE      REL|JMPSLOT  sink + 0xfffffffffffffffc
+segment2+0x20  4     LE      REL          .text (section 2) + 0x0
