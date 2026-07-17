@@ -1112,15 +1112,14 @@ resolveRel :: ( MemWidth w
               , Elf.RelocationWidth tp ~ w
               , Elf.IsRelocationType tp
               )
-           => Endianness -- ^ Endianness of Elf file
+           => Int -- ^ Number of bits in the relocation target
+           -> Endianness -- ^ Endianness of Elf file
            -> SymbolTable w -- ^ Symbol table
            -> RelocationResolver tp
            -> Integer -- ^ Index of relocation
            -> Elf.RelEntry tp
            -> ResolveFn (MemLoader w) w
-resolveRel end symtab resolver _relIdx rel msegIdx bytes = do
-  -- Get the number of bits in the addend
-  let bits = Elf.relocTargetBits (Elf.relType rel)
+resolveRel bits end symtab resolver _relIdx rel msegIdx bytes = do
   -- Compute the addended by masking off the low order bits, and
   -- then sign extending them.
   let mask = (1 `shiftL` (bits - 1)) - 1
@@ -1140,10 +1139,8 @@ resolveRel end symtab resolver _relIdx rel msegIdx bytes = do
     Right r -> do
       pure $ Just r
 
-relocTargetBytes :: (Elf.IsRelocationType tp, MemWidth (Elf.RelocationWidth tp))
-                 => tp
-                 -> MemWord (Elf.RelocationWidth tp)
-relocTargetBytes tp = fromIntegral $ (Elf.relocTargetBits tp + 7) `shiftR` 3
+relocTargetBytes :: MemWidth w => Int -> MemWord w
+relocTargetBytes bits = fromIntegral $ (bits + 7) `shiftR` 3
 
 
 -- | Maps address that relocations apply to to the relocation information.
@@ -1171,11 +1168,16 @@ addRelaEntry :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
 addRelaEntry symtab resolver (idx,m) r = do
   w <- memAddrWidth <$> use mlsMemory
   reprConstraints w $ do
-    let addr = fromIntegral (Elf.relaAddr r)
-        e =  RelocEntry { relocEntrySize = relocTargetBytes (Elf.relaType r)
-                        , applyReloc = resolveRela symtab resolver idx r
-                        }
-    (idx+1,) <$> addRelocEntry m addr e
+    case Elf.relocTargetBits (Elf.relaType r) of
+      Nothing -> do
+        addWarning $ IgnoreRelocation $ RelocationUnsupportedType (show (Elf.relaType r))
+        pure (idx+1, m)
+      Just bits -> do
+        let addr = fromIntegral (Elf.relaAddr r)
+            e =  RelocEntry { relocEntrySize = relocTargetBytes bits
+                            , applyReloc = resolveRela symtab resolver idx r
+                            }
+        (idx+1,) <$> addRelocEntry m addr e
 
 addRelaEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
               => RelocMap w
@@ -1223,11 +1225,16 @@ addRelEntry :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
 addRelEntry end symtab resolver (idx,m) r = do
   w <- memAddrWidth <$> use mlsMemory
   reprConstraints w $ do
-    let addr = fromIntegral (Elf.relAddr r)
-        e =  RelocEntry { relocEntrySize = relocTargetBytes (Elf.relType r)
-                        , applyReloc = resolveRel end symtab resolver idx r
-                        }
-    (idx+1,) <$> addRelocEntry m addr e
+    case Elf.relocTargetBits (Elf.relType r) of
+      Nothing -> do
+        addWarning $ IgnoreRelocation $ RelocationUnsupportedType (show (Elf.relType r))
+        pure (idx+1, m)
+      Just bits -> do
+        let addr = fromIntegral (Elf.relAddr r)
+            e =  RelocEntry { relocEntrySize = relocTargetBytes bits
+                            , applyReloc = resolveRel bits end symtab resolver idx r
+                            }
+        (idx+1,) <$> addRelocEntry m addr e
 
 addRelEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
               => RelocMap w

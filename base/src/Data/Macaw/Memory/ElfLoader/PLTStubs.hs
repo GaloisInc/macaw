@@ -211,7 +211,7 @@ instance Show (EE.ElfWordType w) => EE.IsRelocationType (NoRelocationType w) whe
   relaWidth = noRelocationTypeError
   toRelocType = noRelocationTypeError
   isRelative = noRelocationTypeError
-  relocTargetBits = noRelocationTypeError
+  relocTargetBits _ = Nothing
 
 noPLTStubInfo :: String -> PLTStubInfo (NoRelocationType w)
 noPLTStubInfo arch = error $
