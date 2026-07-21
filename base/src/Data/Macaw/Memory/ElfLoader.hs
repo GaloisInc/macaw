@@ -1095,10 +1095,9 @@ resolveRela :: ( MemWidth w
                )
             => SymbolTable w
             -> RelocationResolver tp
-            -> Integer -- ^ Index of relocation
             -> Elf.RelaEntry tp
             -> ResolveFn (MemLoader w) w
-resolveRela symtab resolver _relaIdx rela msegIdx _ = do
+resolveRela symtab resolver rela msegIdx _ = do
   er <- runSymbolResolver $
           resolver msegIdx symtab (Elf.relaToRel rela) (fromIntegral (Elf.relaAddend rela)) IsRela
   case er of
@@ -1116,10 +1115,9 @@ resolveRel :: ( MemWidth w
            -> Endianness -- ^ Endianness of Elf file
            -> SymbolTable w -- ^ Symbol table
            -> RelocationResolver tp
-           -> Integer -- ^ Index of relocation
            -> Elf.RelEntry tp
            -> ResolveFn (MemLoader w) w
-resolveRel bits end symtab resolver _relIdx rel msegIdx bytes = do
+resolveRel bits end symtab resolver rel msegIdx bytes = do
   -- Compute the addended by masking off the low order bits, and
   -- then sign extending them.
   let mask = (1 `shiftL` (bits - 1)) - 1
@@ -1162,22 +1160,22 @@ addRelocEntry m addr e =
 addRelaEntry :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
             => SymbolTable w
             -> RelocationResolver tp
-            -> (Integer, RelocMap w)
+            -> RelocMap w
             -> Elf.RelaEntry tp
-            -> MemLoader w (Integer, RelocMap w)
-addRelaEntry symtab resolver (idx,m) r = do
+            -> MemLoader w (RelocMap w)
+addRelaEntry symtab resolver m r = do
   w <- memAddrWidth <$> use mlsMemory
   reprConstraints w $ do
     case Elf.relocTargetBits (Elf.relaType r) of
       Nothing -> do
         addWarning $ IgnoreRelocation $ RelocationUnsupportedType (show (Elf.relaType r))
-        pure (idx+1, m)
+        pure m
       Just bits -> do
         let addr = fromIntegral (Elf.relaAddr r)
             e =  RelocEntry { relocEntrySize = relocTargetBytes bits
-                            , applyReloc = resolveRela symtab resolver idx r
+                            , applyReloc = resolveRela symtab resolver r
                             }
-        (idx+1,) <$> addRelocEntry m addr e
+        addRelocEntry m addr e
 
 addRelaEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
               => RelocMap w
@@ -1188,8 +1186,8 @@ addRelaEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
               -> [Elf.RelaEntry tp]
               -- ^ Buffer containing relocation entries in Rel format
               -> MemLoader w (RelocMap w)
-addRelaEntries m symtab resolver entries = do
-  snd <$> foldlM (addRelaEntry symtab resolver) (0,m) entries
+addRelaEntries m symtab resolver =
+  foldlM (addRelaEntry symtab resolver) m
 
 -- | Add rela relocation entries to map.
 addElfRelaEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
@@ -1219,22 +1217,22 @@ addRelEntry :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
             => Endianness
             -> SymbolTable w
             -> RelocationResolver tp
-            -> (Integer, RelocMap w)
+            -> RelocMap w
             -> Elf.RelEntry tp
-            -> MemLoader w (Integer, RelocMap w)
-addRelEntry end symtab resolver (idx,m) r = do
+            -> MemLoader w (RelocMap w)
+addRelEntry end symtab resolver m r = do
   w <- memAddrWidth <$> use mlsMemory
   reprConstraints w $ do
     case Elf.relocTargetBits (Elf.relType r) of
       Nothing -> do
         addWarning $ IgnoreRelocation $ RelocationUnsupportedType (show (Elf.relType r))
-        pure (idx+1, m)
+        pure m
       Just bits -> do
         let addr = fromIntegral (Elf.relAddr r)
             e =  RelocEntry { relocEntrySize = relocTargetBytes bits
-                            , applyReloc = resolveRel bits end symtab resolver idx r
+                            , applyReloc = resolveRel bits end symtab resolver r
                             }
-        (idx+1,) <$> addRelocEntry m addr e
+        addRelocEntry m addr e
 
 addRelEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
               => RelocMap w
@@ -1247,8 +1245,8 @@ addRelEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
               -> [Elf.RelEntry tp]
               -- ^ Buffer containing relocation entries in Rel format
               -> MemLoader w (RelocMap w)
-addRelEntries m dta symtab resolver entries =
-  snd <$> foldlM (addRelEntry (toEndianness dta) symtab resolver) (0,m) entries
+addRelEntries m dta symtab resolver =
+  foldlM (addRelEntry (toEndianness dta) symtab resolver) m
 
 -- | Add rel relocation entries to map.
 addElfRelEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
