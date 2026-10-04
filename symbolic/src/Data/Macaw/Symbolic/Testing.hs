@@ -34,6 +34,7 @@ module Data.Macaw.Symbolic.Testing (
   initialMem,
   lazyInitialMem,
   simDiscoveredFunction,
+  simDiscoveredFunctionWithLookupOverride,
   summarizeExecution,
   -- * Execution features
   SomeBackend(..),
@@ -670,12 +671,70 @@ simDiscoveredFunction ::
      , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
      )
 simDiscoveredFunction bak execFeatures archVals halloc iMem regs binfo dfi = do
+  simDiscoveredFunctionWithLookupOverride
+    (\_ functionLookup -> functionLookup)
+    bak
+    execFeatures
+    archVals
+    halloc
+    iMem
+    regs
+    binfo
+    dfi
+
+-- | Simulate a discovered Macaw function while allowing callers to wrap the
+-- function-lookup callback. This is useful for replacing selected discovered
+-- callees with Crucible overrides while retaining the default behavior for all
+-- other calls.
+simDiscoveredFunctionWithLookupOverride ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , CLM.HasLLVMAnn sym
+  , MS.SymArchConstraints arch
+  , ?memOpts :: CLM.MemOptions
+  ) =>
+  ( CS.GlobalVar CLM.Mem ->
+    MS.LookupFunctionHandle (MS.MacawLazySimulatorState sym w) sym arch ->
+    MS.LookupFunctionHandle (MS.MacawLazySimulatorState sym w) sym arch
+  ) ->
+  bak ->
+  [CS.GenericExecutionFeature sym] ->
+  MS.ArchVals arch ->
+  CFH.HandleAllocator ->
+  InitialMem (MS.MacawLazySimulatorState sym w) sym arch ->
+  CS.RegEntry sym (MS.ArchRegStruct arch) ->
+  BinariesInfo arch ->
+  MD.DiscoveryFunInfo arch ids ->
+  IO
+    ( CS.GlobalVar CLM.Mem
+    , CS.ExecResult
+        (MS.MacawLazySimulatorState sym w)
+        sym
+        ext
+        (CS.RegEntry sym (MS.ArchRegStruct arch))
+    )
+simDiscoveredFunctionWithLookupOverride
+  wrapLookup
+  bak
+  execFeatures
+  archVals
+  halloc
+  iMem
+  regs
+  binfo
+  dfi = do
   let sym = CB.backendGetSym bak
   let InitialMem mem mmConf = iMem
   memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
+  let mmConf' =
+        mmConf
+          { MS.lookupFunctionHandle =
+              wrapLookup memVar (MS.lookupFunctionHandle mmConf)
+          }
   extImpl <-
     MS.withArchEval archVals sym $ \archEvalFn ->
-      pure (MS.macawExtensions archEvalFn memVar mmConf)
+      pure (MS.macawExtensions archEvalFn memVar mmConf')
 
   let funName = functionName dfi
   let mainInfo = mainBinaryInfo binfo
