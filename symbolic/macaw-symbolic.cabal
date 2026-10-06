@@ -29,7 +29,7 @@ library
     text,
     vector >= 0.13.2,
     bytestring,
-    what4 >= 1.1 && < 1.8,
+    what4 >= 1.1 && < 1.9,
     what4-domains
 
   hs-source-dirs: src
