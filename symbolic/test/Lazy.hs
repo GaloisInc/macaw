@@ -622,9 +622,9 @@ prop_concreteUnmutatedGlobalRead = testPropertyNamed
 --
 -- (These are contrapositives, but testing both catches different failure modes.)
 --
--- Note: the validity predicate checks a single offset, while the read checks a
--- range. So the read can fail even when validity is True (e.g., multi-byte read
--- past end of region). We only test when the block number matches.
+-- The validity predicate and concrete read both check the complete byte range.
+-- The read can still conservatively return Nothing for other reasons, so that
+-- outcome does not imply that the validity predicate is False.
 prop_readValidityConsistency :: TestTree
 prop_readValidityConsistency = testPropertyNamed
   "concreteUnmutatedGlobalRead consistent with validity predicate"
@@ -652,7 +652,7 @@ prop_readValidityConsistency = testPropertyNamed
       let mutMap = fmap smcMutability imap
       let ptrEntry = CS.RegEntry (CL.LLVMPointerRepr WI.knownNat) ptr
       let puse = MS.PointerUse Nothing MS.PointerRead
-      vResult <- mkGlobalPointerValidityPredCommon mutMap sym puse Nothing ptrEntry
+      vResult <- mkGlobalPointerValidityPredCommon mutMap sym puse (MC.memReprBytes repr) Nothing ptrEntry
       let vr = case vResult of
                  Nothing -> Nothing
                  Just (CB.LabeledPred p _) -> Just (WI.asConstantPred p)

@@ -96,7 +96,21 @@ testValidityPred ::
   -- access with false condition)
   ValidityResult ->
   TestTree
-testValidityPred name intervals blk off tag mcondVal expected =
+testValidityPred name intervals blk off =
+  testValidityPredSized name intervals blk off 1
+
+-- | Like 'testValidityPred', but with an explicit access size in bytes.
+testValidityPredSized ::
+  String ->
+  [(Word64, Word64, CL.Mutability)] ->
+  Natural ->
+  Word64 ->
+  Natural ->
+  MS.PointerUseTag ->
+  Maybe Bool ->
+  ValidityResult ->
+  TestTree
+testValidityPredSized name intervals blk off accessSize tag mcondVal expected =
   testCase name $ do
     result <- withSym $ \sym -> do
       let ?processMacawAssert = defaultProcessMacawAssertion
@@ -110,7 +124,7 @@ testValidityPred name intervals blk off tag mcondVal expected =
           let p = if b then WI.truePred sym else WI.falsePred sym
           pure (Just (CS.RegEntry CT.BoolRepr p))
       extractValidityResult <$>
-        mkGlobalPointerValidityPredCommon tbl sym puse mcondEntry ptrEntry
+        mkGlobalPointerValidityPredCommon tbl sym puse accessSize mcondEntry ptrEntry
     result @?= expected
 
 -- | Like testValidityPred but for a symbolic block ID.
@@ -133,7 +147,7 @@ testValidityPredSymbolicBlock name intervals off tag expected =
       let ptr = CLP.LLVMPointer blkSym offSym
       let ptrEntry = mkRegEntry ptr
       extractValidityResult <$>
-        mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
+        mkGlobalPointerValidityPredCommon tbl sym puse 1 Nothing ptrEntry
     result @?= expected
 
 -- | Test with a symbolic offset that is an ite of two concrete values.
@@ -161,7 +175,7 @@ testValidityPredIteOffset name intervals off1 off2 tag expected =
       let ptr = CLP.LLVMPointer blkSym offSym
       let ptrEntry = mkRegEntry ptr
       extractValidityResult <$>
-        mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
+        mkGlobalPointerValidityPredCommon tbl sym puse 1 Nothing ptrEntry
     result @?= expected
 
 ------------------------------------------------------------------------
@@ -270,8 +284,44 @@ tests = testGroup "Shared memory model"
               MS.PointerRead
               Nothing
               ValidityFalse
+          , testValidityPredSized
+              "Multi-byte read ending at upper bound"
+              [(100, 200, CL.Mutable)]
+              0
+              198
+              2
+              MS.PointerRead
+              Nothing
+              ValidityTrue
+          , testValidityPredSized
+              "Multi-byte read straddling upper bound (rejected)"
+              [(100, 200, CL.Mutable)]
+              0
+              199
+              2
+              MS.PointerRead
+              Nothing
+              ValidityFalse
+          , testValidityPredSized
+              "Multi-byte write straddling mutable boundary (rejected)"
+              [(100, 200, CL.Mutable), (200, 300, CL.Immutable)]
+              0
+              198
+              4
+              MS.PointerWrite
+              Nothing
+              ValidityFalse
+          , testValidityPredSized
+              "Multi-byte access wrapping address space (rejected)"
+              [(0, 0xffffffff, CL.Mutable)]
+              0
+              0xfffffffe
+              4
+              MS.PointerRead
+              Nothing
+              ValidityFalse
           ]
-      , testGroup "Conditional writes"
+      , testGroup "Conditional accesses"
           [ testValidityPred
               "Conditional write with false condition is trivially true"
               [(100, 200, CL.Immutable)]
@@ -280,6 +330,42 @@ tests = testGroup "Shared memory model"
               MS.PointerWrite
               (Just False)
               ValidityTrue
+          , testValidityPredSized
+              "Disabled conditional write may straddle a boundary"
+              [(100, 200, CL.Mutable)]
+              0
+              199
+              2
+              MS.PointerWrite
+              (Just False)
+              ValidityTrue
+          , testValidityPredSized
+              "Enabled conditional write may not straddle a boundary"
+              [(100, 200, CL.Mutable)]
+              0
+              199
+              2
+              MS.PointerWrite
+              (Just True)
+              ValidityFalse
+          , testValidityPredSized
+              "Disabled conditional read may straddle a boundary"
+              [(100, 200, CL.Immutable)]
+              0
+              199
+              2
+              MS.PointerRead
+              (Just False)
+              ValidityTrue
+          , testValidityPredSized
+              "Enabled conditional read may not straddle a boundary"
+              [(100, 200, CL.Immutable)]
+              0
+              199
+              2
+              MS.PointerRead
+              (Just True)
+              ValidityFalse
           ]
       , testGroup "Symbolic offsets (ite of two concrete values)"
           [ testValidityPredIteOffset
@@ -418,7 +504,7 @@ runValidityPred sym tbl off tag mcondEntry = do
   ptr <- mkPtr sym MC.Addr32 0 (fromIntegral off)
   let ptrEntry = mkRegEntry ptr
   extractValidityResult <$>
-    mkGlobalPointerValidityPredCommon tbl sym puse mcondEntry ptrEntry
+    mkGlobalPointerValidityPredCommon tbl sym puse 1 mcondEntry ptrEntry
 
 -- | Generate an offset that is likely to land in a mapped region.
 genOffsetInEntries :: [IntervalEntry] -> H.Gen Word32
@@ -451,7 +537,7 @@ runValidityPredIte sym tbl off1 off2 tag = do
   let ptr = CLP.LLVMPointer blkSym offSym
   let ptrEntry = mkRegEntry ptr
   extractValidityResult <$>
-    mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
+    mkGlobalPointerValidityPredCommon tbl sym puse 1 Nothing ptrEntry
 
 -- | If a write to a concrete block-0 pointer succeeds (pred = True),
 -- a read at the same pointer must also succeed.
@@ -538,7 +624,7 @@ prop_nonZeroBlockNothing =
       ptr <- mkPtr sym MC.Addr32 blk (fromIntegral off)
       let ptrEntry = mkRegEntry ptr
       extractValidityResult <$>
-        mkGlobalPointerValidityPredCommon tbl sym puse Nothing ptrEntry
+        mkGlobalPointerValidityPredCommon tbl sym puse 1 Nothing ptrEntry
     result H.=== NonGlobalBlock
 
 -- | A conditional access with a false condition should always produce

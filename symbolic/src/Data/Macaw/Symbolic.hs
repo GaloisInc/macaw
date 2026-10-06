@@ -1070,6 +1070,8 @@ type MkGlobalPointerValidityAssertion sym w = sym
                                             -- ^ The symbolic backend in use
                                             -> PointerUse
                                             -- ^ A tag marking the pointer use as a read or a write
+                                            -> Natural
+                                            -- ^ The size of the memory access in bytes
                                             -> Maybe (C.RegEntry sym C.BoolType)
                                             -- ^ If this is a conditional read or write, the predicate
                                             -- determining whether or not the memory operation is executed.  If
@@ -1298,7 +1300,7 @@ doReadMemModel mvar mmConf addrWidth memRep ptr0 st0 =
       Nothing -> do
         st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
         let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
-        mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
+        mGlobalPtrValid <- toMemPred sym puse (M.memReprBytes memRep) Nothing ptr0
         case mGlobalPtrValid of
           Just globalPtrValid -> addAssertion bak globalPtrValid
           Nothing -> return ()
@@ -1335,7 +1337,7 @@ doCondReadMemModel mvar mmConf addrWidth memRep cond ptr0 condFalseValue st0 =
       Nothing -> do
         st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
         let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
-        mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
+        mGlobalPtrValid <- toMemPred sym puse (M.memReprBytes memRep) (Just cond) ptr0
         case mGlobalPtrValid of
           Just globalPtrValid -> addAssertion bak globalPtrValid
           Nothing -> return ()
@@ -1362,7 +1364,7 @@ doWriteMemModel mvar mmConf addrWidth memRep ptr0 v st0 =
     ptr2 <- resolvePointer mmConf ptr1
     st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
     let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
-    mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
+    mGlobalPtrValid <- toMemPred sym puse (M.memReprBytes memRep) Nothing ptr0
     case mGlobalPtrValid of
       Just globalPtrValid -> addAssertion bak globalPtrValid
       Nothing -> return ()
@@ -1392,7 +1394,7 @@ doCondWriteMemModel mvar mmConf addrWidth memRep cond ptr0 v st0 =
     ptr2 <- resolvePointer mmConf ptr1
     st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st0
     let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
-    mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
+    mGlobalPtrValid <- toMemPred sym puse (M.memReprBytes memRep) (Just cond) ptr0
     case mGlobalPtrValid of
       Just globalPtrValid -> addAssertion bak globalPtrValid
       Nothing -> return ()
@@ -1615,7 +1617,7 @@ runCodeBlock bak archFns archEval halloc initMem mmConf g regStruct = do
 --     -- For demonstration purposes, do not enforce any pointer validity constraints
 --     -- See Data.Macaw.Symbolic.Memory for an example of a more sophisticated approach.
 --     let mkValidityPred :: MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
---         mkValidityPred _ _ _ _ = return Nothing
+--         mkValidityPred _ _ _ _ _ = return Nothing
 --     let extImpl = MS.macawExtensions archEvalFns memModelVar globalMap lfh mkValidityPred
 --     let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr (CS.FnBindings CFH.emptyHandleMap) extImpl MS.MacawSimulatorState
 --     let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals

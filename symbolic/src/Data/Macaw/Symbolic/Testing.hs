@@ -32,6 +32,7 @@ module Data.Macaw.Symbolic.Testing (
   freshRegs,
   InitialMem(..),
   initialMem,
+  initialMemWithMemoryModelContents,
   lazyInitialMem,
   simDiscoveredFunction,
   simDiscoveredFunctionWithLookupOverride,
@@ -555,10 +556,38 @@ initialMem ::
   MS.ArchVals arch ->
   IO (InitialMem p sym arch)
 initialMem binfo bak archInfo archVals = do
+  initialMemWithMemoryModelContents
+    MSM.ConcreteMutable
+    binfo
+    bak
+    archInfo
+    archVals
+
+initialMemWithMemoryModelContents ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , CLM.HasLLVMAnn sym
+  , MS.SymArchConstraints arch
+  , w ~ MC.ArchAddrWidth arch
+  , 16 <= w
+  , sym ~ WE.ExprBuilder scope st fs
+  , bak ~ CBO.OnlineBackend solver scope st fs
+  , WPO.OnlineSolver solver
+  , ?memOpts :: CLM.MemOptions
+  , MSMC.MacawProcessAssertion sym
+  ) =>
+  MSM.MemoryModelContents ->
+  BinariesInfo arch ->
+  bak ->
+  MAI.ArchitectureInfo arch ->
+  MS.ArchVals arch ->
+  IO (InitialMem p sym arch)
+initialMemWithMemoryModelContents memoryContents binfo bak archInfo archVals = do
   let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
   (mem, memPtrTbl) <-
     MSM.newMergedGlobalMemoryWith populateRelocation archInfo bak
-      endianness MSM.ConcreteMutable (binariesMems binfo)
+      endianness memoryContents (binariesMems binfo)
   let mmConf = (MSM.memModelConfig bak memPtrTbl)
                  { MS.lookupFunctionHandle = lookupFunction archVals binfo
                  , MS.lookupSyscallHandle = lookupSyscall
@@ -924,7 +953,7 @@ lookupSyscall = MS.unsupportedSyscalls "macaw-symbolic-tests"
 -- conditions (though it could be changed to do so).  This could become a
 -- parameter.
 validityCheck :: MS.MkGlobalPointerValidityAssertion sym w
-validityCheck _ _ _ _ = return Nothing
+validityCheck _ _ _ _ _ = return Nothing
 
 -- | The test harness currently treats relocations as entirely symbolic data.
 -- Most test cases will be unaffected by this, provided that they do not use

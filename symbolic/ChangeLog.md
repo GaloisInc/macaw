@@ -9,6 +9,13 @@
 
 ### API Changes
 
+- Add `initialMemWithMemoryModelContents` so clients can choose symbolic
+  pre-state values for mutable ELF memory without changing the testing default.
+
+- `MkGlobalPointerValidityAssertion` now receives the size of the memory access
+  in bytes. The default and lazy global-memory policies use this size to require
+  the complete access range to fit within a single mapped interval.
+
 - The `newGlobalMemory` and `newGlobalMemoryWith` functions now requires that `sym ~ ExprBuilder` due to some optimizations in populating the initial memory contents of large binaries
 
 - The types of various functions, such as `macawExtensions`, are now parametric
