@@ -148,14 +148,35 @@ mkGlobalPointerValidityPredCommon ::
      )
   => IM.IntervalMap (MC.MemWord w) CL.Mutability
   -> MS.MkGlobalPointerValidityAssertion sym w
-mkGlobalPointerValidityPredCommon tbl sym puse mcond ptr = do
+mkGlobalPointerValidityPredCommon tbl sym puse accessSize mcond ptr = do
   let w = MC.memWidthNatRepr @w
+  let ptrVal = CS.regValue ptr
+  let (ptrBase, ptrOff) = CL.llvmPointerView ptrVal
+  let maxAccessSize = 2 ^ WI.natValue w
+
+  -- Memory representations always occupy at least one byte. Treat a zero-sized
+  -- access, or one larger than the address space, as invalid if a custom caller
+  -- constructs one directly.
+  let validAccessSize = accessSize > 0 && accessSize <= maxAccessSize
+
+  lastByteOffset <-
+    if validAccessSize
+      then do
+        sizeMinusOne <- WI.bvLit sym w (BV.mkBV w (toInteger accessSize - 1))
+        WI.bvAdd sym ptrOff sizeMinusOne
+      else pure ptrOff
+
+  noWrap <-
+    if validAccessSize
+      then WI.bvUle sym ptrOff lastByteOffset
+      else pure (WI.falsePred sym)
 
   -- If this is a write, the pointer cannot be in an immutable range (so just
   -- return False for the predicate on that range).
   --
-  -- Otherwise, the pointer is allowed to be between the lo/hi range
-  let inMappedRange off (range, mut)
+  -- Otherwise, every byte from the pointer through lastByteOffset must be
+  -- contained in one mapped interval.
+  let inMappedRange off lastOff (range, mut)
         | MS.pointerUseTag puse == MS.PointerWrite && mut == CL.Immutable = return (WI.falsePred sym)
         | otherwise =
           case range of
@@ -163,36 +184,34 @@ mkGlobalPointerValidityPredCommon tbl sym puse mcond ptr = do
               lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
               hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
               lob <- WI.bvUle sym lobv off
-              hib <- WI.bvUlt sym off hibv
+              hib <- WI.bvUlt sym lastOff hibv
               WI.andPred sym lob hib
             IM.ClosedInterval lo hi -> do
               lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
               hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
               lob <- WI.bvUle sym lobv off
-              hib <- WI.bvUle sym off hibv
+              hib <- WI.bvUle sym lastOff hibv
               WI.andPred sym lob hib
             IM.OpenInterval lo hi -> do
               lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
               hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
               lob <- WI.bvUlt sym lobv off
-              hib <- WI.bvUlt sym off hibv
+              hib <- WI.bvUlt sym lastOff hibv
               WI.andPred sym lob hib
             IM.IntervalOC lo hi -> do
               lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
               hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
               lob <- WI.bvUlt sym lobv off
-              hib <- WI.bvUle sym off hibv
+              hib <- WI.bvUle sym lastOff hibv
               WI.andPred sym lob hib
 
   let mkPred off = do
-        ps <- mapM (inMappedRange off) (IM.toList tbl)
+        ps <- mapM (inMappedRange off lastByteOffset) (IM.toList tbl)
         ps' <- WI.orOneOf sym (L.folded . id) ps
-        -- Add the condition from a conditional write
-        WI.itePred sym (maybe (WI.truePred sym) CS.regValue mcond) ps' (WI.truePred sym)
+        rangeValid <- WI.andPred sym noWrap ps'
+        -- Add the condition from a conditional memory operation.
+        WI.itePred sym (maybe (WI.truePred sym) CS.regValue mcond) rangeValid (WI.truePred sym)
 
-
-  let ptrVal = CS.regValue ptr
-  let (ptrBase, ptrOff) = CL.llvmPointerView ptrVal
   case WI.asNat ptrBase of
     Just 0 -> do
       p <- mkPred ptrOff
