@@ -36,6 +36,7 @@ module Data.Macaw.Symbolic.Testing (
   lazyInitialMem,
   simDiscoveredFunction,
   simDiscoveredFunctionWithLookupOverride,
+  simDiscoveredFunctionWithLookupOverrideAndExtension,
   summarizeExecution,
   -- * Execution features
   SomeBackend(..),
@@ -752,6 +753,68 @@ simDiscoveredFunctionWithLookupOverride
   iMem
   regs
   binfo
+  dfi =
+  simDiscoveredFunctionWithLookupOverrideAndExtension
+    wrapLookup
+    id
+    bak
+    execFeatures
+    archVals
+    halloc
+    iMem
+    regs
+    binfo
+    dfi
+
+-- | Simulate a discovered function while allowing callers to instrument the
+-- Macaw extension evaluator.
+simDiscoveredFunctionWithLookupOverrideAndExtension ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , CLM.HasLLVMAnn sym
+  , MS.SymArchConstraints arch
+  , ?memOpts :: CLM.MemOptions
+  ) =>
+  ( CS.GlobalVar CLM.Mem ->
+    MS.LookupFunctionHandle (MS.MacawLazySimulatorState sym w) sym arch ->
+    MS.LookupFunctionHandle (MS.MacawLazySimulatorState sym w) sym arch
+  ) ->
+  ( CS.ExtensionImpl
+      (MS.MacawLazySimulatorState sym w)
+      sym
+      (MS.MacawExt arch) ->
+    CS.ExtensionImpl
+      (MS.MacawLazySimulatorState sym w)
+      sym
+      (MS.MacawExt arch)
+  ) ->
+  bak ->
+  [CS.GenericExecutionFeature sym] ->
+  MS.ArchVals arch ->
+  CFH.HandleAllocator ->
+  InitialMem (MS.MacawLazySimulatorState sym w) sym arch ->
+  CS.RegEntry sym (MS.ArchRegStruct arch) ->
+  BinariesInfo arch ->
+  MD.DiscoveryFunInfo arch ids ->
+  IO
+    ( CS.GlobalVar CLM.Mem
+    , CS.ExecResult
+        (MS.MacawLazySimulatorState sym w)
+        sym
+        ext
+        (CS.RegEntry sym (MS.ArchRegStruct arch))
+    )
+simDiscoveredFunctionWithLookupOverrideAndExtension
+  wrapLookup
+  wrapExtension
+  bak
+  execFeatures
+  archVals
+  halloc
+  iMem
+  regs
+  binfo
   dfi = do
   let sym = CB.backendGetSym bak
   let InitialMem mem mmConf = iMem
@@ -763,7 +826,7 @@ simDiscoveredFunctionWithLookupOverride
           }
   extImpl <-
     MS.withArchEval archVals sym $ \archEvalFn ->
-      pure (MS.macawExtensions archEvalFn memVar mmConf')
+      pure (wrapExtension (MS.macawExtensions archEvalFn memVar mmConf'))
 
   let funName = functionName dfi
   let mainInfo = mainBinaryInfo binfo
