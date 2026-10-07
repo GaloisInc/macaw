@@ -37,6 +37,7 @@ module Data.Macaw.Symbolic.Testing (
   simDiscoveredFunction,
   simDiscoveredFunctionWithLookupOverride,
   simDiscoveredFunctionWithLookupOverrideAndExtension,
+  simDiscoveredFunctionWithLookupOverrideAndExtensionAndRegCFG,
   summarizeExecution,
   -- * Execution features
   SomeBackend(..),
@@ -88,6 +89,7 @@ import qualified Lang.Crucible.Backend.Online as CBO
 import qualified Lang.Crucible.Backend.Prove as Prove
 import qualified Lang.Crucible.CFG.Core as CCC
 import qualified Lang.Crucible.CFG.Extension as CCE
+import qualified Lang.Crucible.CFG.Reg as CCR
 import qualified Lang.Crucible.FunctionHandle as CFH
 import qualified Lang.Crucible.LLVM.Intrinsics as CLI
 import qualified Lang.Crucible.LLVM.MemModel as CLM
@@ -815,6 +817,81 @@ simDiscoveredFunctionWithLookupOverrideAndExtension
   iMem
   regs
   binfo
+  dfi =
+  simDiscoveredFunctionWithLookupOverrideAndExtensionAndRegCFG
+    wrapLookup
+    wrapExtension
+    pure
+    bak
+    execFeatures
+    archVals
+    halloc
+    iMem
+    regs
+    binfo
+    dfi
+
+-- | Simulate a discovered function while allowing callers to post-process its
+-- registerized Crucible CFG before SSA conversion.
+simDiscoveredFunctionWithLookupOverrideAndExtensionAndRegCFG ::
+  ( ext ~ MS.MacawExt arch
+  , CCE.IsSyntaxExtension ext
+  , CB.IsSymBackend sym bak
+  , CLM.HasLLVMAnn sym
+  , MS.SymArchConstraints arch
+  , ?memOpts :: CLM.MemOptions
+  ) =>
+  ( CS.GlobalVar CLM.Mem ->
+    MS.LookupFunctionHandle (MS.MacawLazySimulatorState sym w) sym arch ->
+    MS.LookupFunctionHandle (MS.MacawLazySimulatorState sym w) sym arch
+  ) ->
+  ( CS.ExtensionImpl
+      (MS.MacawLazySimulatorState sym w)
+      sym
+      (MS.MacawExt arch) ->
+    CS.ExtensionImpl
+      (MS.MacawLazySimulatorState sym w)
+      sym
+      (MS.MacawExt arch)
+  ) ->
+  ( CCR.SomeCFG
+      (MS.MacawExt arch)
+      (Ctx.EmptyCtx Ctx.::> MS.ArchRegStruct arch)
+      (MS.ArchRegStruct arch) ->
+    IO
+      ( CCR.SomeCFG
+          (MS.MacawExt arch)
+          (Ctx.EmptyCtx Ctx.::> MS.ArchRegStruct arch)
+          (MS.ArchRegStruct arch)
+      )
+  ) ->
+  bak ->
+  [CS.GenericExecutionFeature sym] ->
+  MS.ArchVals arch ->
+  CFH.HandleAllocator ->
+  InitialMem (MS.MacawLazySimulatorState sym w) sym arch ->
+  CS.RegEntry sym (MS.ArchRegStruct arch) ->
+  BinariesInfo arch ->
+  MD.DiscoveryFunInfo arch ids ->
+  IO
+    ( CS.GlobalVar CLM.Mem
+    , CS.ExecResult
+        (MS.MacawLazySimulatorState sym w)
+        sym
+        ext
+        (CS.RegEntry sym (MS.ArchRegStruct arch))
+    )
+simDiscoveredFunctionWithLookupOverrideAndExtensionAndRegCFG
+  wrapLookup
+  wrapExtension
+  transformRegCFG
+  bak
+  execFeatures
+  archVals
+  halloc
+  iMem
+  regs
+  binfo
   dfi = do
   let sym = CB.backendGetSym bak
   let InitialMem mem mmConf = iMem
@@ -831,11 +908,14 @@ simDiscoveredFunctionWithLookupOverrideAndExtension
   let funName = functionName dfi
   let mainInfo = mainBinaryInfo binfo
   let pos = posFn (binaryPath mainInfo)
-  CCC.SomeCFG g <-
-    MS.mkFunCFG (MS.archFunctions archVals) halloc funName pos dfi
-  let regMap = CS.RegMap (Ctx.singleton regs)
-  res <- simMacawCfg bak execFeatures halloc extImpl memVar mem regMap g
-  pure (memVar, res)
+  regCFG <-
+    MS.mkFunRegCFG (MS.archFunctions archVals) halloc funName pos dfi
+  transformedRegCFG <- transformRegCFG regCFG
+  case MS.toCoreCFG (MS.archFunctions archVals) transformedRegCFG of
+    CCC.SomeCFG g -> do
+      let regMap = CS.RegMap (Ctx.singleton regs)
+      res <- simMacawCfg bak execFeatures halloc extImpl memVar mem regMap g
+      pure (memVar, res)
 
 -- | Simulate a Macaw CFG, given initial registers and memory
 simMacawCfg ::

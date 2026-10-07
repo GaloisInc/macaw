@@ -1212,6 +1212,13 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar mmConf s0 st =
       do v <- freshCrucibleConstant sym (safeSymbol "macawFresh") t
          return (v,st)
 
+    MacawValueOverride _ name ->
+      fail
+        ( "Macaw value override "
+            ++ show name
+            ++ " has no evaluator"
+        )
+
     MacawLookupFunctionHandle _ args -> do
       (hv, st') <- doLookupFunctionHandle lookupH st mvar (C.regValue args)
       return (C.HandleFnVal hv, st')

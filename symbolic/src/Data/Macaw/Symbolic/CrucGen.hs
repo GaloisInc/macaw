@@ -310,6 +310,16 @@ data MacawStmtExtension (arch :: K.Type)
     :: !(M.TypeRepr tp)
     -> MacawStmtExtension arch f (ToCrucibleType tp)
 
+  -- | A named, type-preserving replacement for an assignment value.
+  --
+  -- This statement is intended to be inserted by CFG post-processing. The
+  -- default Macaw evaluator rejects it; callers that insert one must provide
+  -- its interpretation by wrapping the Crucible extension evaluator.
+  MacawValueOverride
+    :: !(C.TypeRepr tp)
+    -> !Text.Text
+    -> MacawStmtExtension arch f tp
+
   -- | Look up the function handle for the current call given the entire register and memory state
   --
   -- This special statement takes an entire register state and computes the
@@ -632,6 +642,8 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
       MacawGlobalPtr _ x -> sexpr "global" [ viaShow x ]
 
       MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ viaShow r ]
+      MacawValueOverride r name ->
+        sexpr "macawValueOverride" [pretty r, pretty name]
       MacawLookupFunctionHandle _ regs -> sexpr "macawLookupFunctionHandle" [ f regs ]
       MacawLookupSyscallHandle _ _ regs -> sexpr "macawLookupSyscallHandle" [ f regs ]
       MacawArchStmtExtension a -> C.ppApp f a
@@ -666,6 +678,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawGlobalPtr w _)
     | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
   appType (MacawFreshSymbolic r) = typeToCrucible r
+  appType (MacawValueOverride r _) = r
   appType (MacawLookupFunctionHandle regTypes _) =
     C.FunctionHandleRepr (Ctx.singleton (C.StructRepr regTypes)) (C.StructRepr regTypes)
   appType (MacawLookupSyscallHandle argTypes retType _) =
