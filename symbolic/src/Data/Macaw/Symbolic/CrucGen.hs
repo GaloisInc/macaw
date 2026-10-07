@@ -314,10 +314,23 @@ data MacawStmtExtension (arch :: K.Type)
   --
   -- This statement is intended to be inserted by CFG post-processing. The
   -- default Macaw evaluator rejects it; callers that insert one must provide
-  -- its interpretation by wrapping the Crucible extension evaluator.
+  -- its interpretation by wrapping the Crucible extension evaluator. The
+  -- final operand is the original assignment value.
   MacawValueOverride
     :: !(C.TypeRepr tp)
     -> !Text.Text
+    -> f tp
+    -> MacawStmtExtension arch f tp
+
+  -- | A named, type-preserving observation of an assignment value.
+  --
+  -- Like 'MacawValueOverride', this is intended for CFG post-processing and
+  -- requires a caller-supplied evaluator. Its evaluator should record the
+  -- input and return it unchanged.
+  MacawValueObservation
+    :: !(C.TypeRepr tp)
+    -> !Text.Text
+    -> f tp
     -> MacawStmtExtension arch f tp
 
   -- | Look up the function handle for the current call given the entire register and memory state
@@ -642,8 +655,10 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
       MacawGlobalPtr _ x -> sexpr "global" [ viaShow x ]
 
       MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ viaShow r ]
-      MacawValueOverride r name ->
-        sexpr "macawValueOverride" [pretty r, pretty name]
+      MacawValueOverride r name original ->
+        sexpr "macawValueOverride" [pretty r, pretty name, f original]
+      MacawValueObservation r name original ->
+        sexpr "macawValueObservation" [pretty r, pretty name, f original]
       MacawLookupFunctionHandle _ regs -> sexpr "macawLookupFunctionHandle" [ f regs ]
       MacawLookupSyscallHandle _ _ regs -> sexpr "macawLookupSyscallHandle" [ f regs ]
       MacawArchStmtExtension a -> C.ppApp f a
@@ -678,7 +693,8 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawGlobalPtr w _)
     | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
   appType (MacawFreshSymbolic r) = typeToCrucible r
-  appType (MacawValueOverride r _) = r
+  appType (MacawValueOverride r _ _) = r
+  appType (MacawValueObservation r _ _) = r
   appType (MacawLookupFunctionHandle regTypes _) =
     C.FunctionHandleRepr (Ctx.singleton (C.StructRepr regTypes)) (C.StructRepr regTypes)
   appType (MacawLookupSyscallHandle argTypes retType _) =
