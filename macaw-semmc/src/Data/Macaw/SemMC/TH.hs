@@ -794,13 +794,47 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
               case FC.toListFC Some args of
                 [Some loc] -> do
                   locExp <- addEltTH endianness bvi loc
-                  liftQ [| addApp =<< (M.Bsr (NR.knownNat @32) <$> $(refBinding locExp)) |]
+                  liftQ [| do
+                    value <- $(refBinding locExp)
+                    isZero <- addApp
+                      (M.Eq value (M.BVValue (NR.knownNat @32) 0))
+                    highestSetBit <- addApp
+                      (M.Bsr (NR.knownNat @32) value)
+                    nonzeroCount <- addApp
+                      (M.BVSub
+                        (NR.knownNat @32)
+                        (M.BVValue (NR.knownNat @32) 31)
+                        highestSetBit)
+                    addApp
+                      (M.Mux
+                        (M.BVTypeRepr (NR.knownNat @32))
+                        isZero
+                        (M.BVValue (NR.knownNat @32) 32)
+                        nonzeroCount)
+                    |]
                 _ -> fail ("Unsupported argument list for clz: " ++ showF args)
             "uf_clz_64" ->
               case FC.toListFC Some args of
                 [Some loc] -> do
                   locExp <- addEltTH endianness bvi loc
-                  liftQ [| addApp =<< (M.Bsr (NR.knownNat @64) <$> $(refBinding locExp)) |]
+                  liftQ [| do
+                    value <- $(refBinding locExp)
+                    isZero <- addApp
+                      (M.Eq value (M.BVValue (NR.knownNat @64) 0))
+                    highestSetBit <- addApp
+                      (M.Bsr (NR.knownNat @64) value)
+                    nonzeroCount <- addApp
+                      (M.BVSub
+                        (NR.knownNat @64)
+                        (M.BVValue (NR.knownNat @64) 63)
+                        highestSetBit)
+                    addApp
+                      (M.Mux
+                        (M.BVTypeRepr (NR.knownNat @64))
+                        isZero
+                        (M.BVValue (NR.knownNat @64) 64)
+                        nonzeroCount)
+                    |]
                 _ -> fail ("Unsupported argument list for clz: " ++ showF args)
             "uf_popcnt_32" ->
               case FC.toListFC Some args of
