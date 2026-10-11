@@ -481,6 +481,17 @@ translateFormula thConf df ipVarName semantics interps varNames = do
               newVal <- addEltTH (archEndianness thConf) interps expr
               appendStmt [| G.setRegVal (O.toRegister $(varE name)) =<< $(refBinding newVal) |]
             LiteralParameter loc
+              | L.isMemoryLocation loc
+              , S.AppExpr app <- expr
+              , S.BaseIte CT.BaseArrayRepr{} _ _ _ _ <- S.appExprApp app
+              -> do
+                  translateConditionalMemory
+                    (archEndianness thConf)
+                    interps
+                    Nothing
+                    expr
+                  appendStmt [| return () |]
+
               -- FIXME: The below case is necessary for calls to
               -- defined functions that write to memory, but we end up
               -- calling locToRegTH on the memory object, which is a
@@ -721,6 +732,20 @@ writeMemTH :: forall arch t fs args ret
            -> M.Endianness
            -> MacawQ arch t fs (Some (S.Expr t))
 writeMemTH bvi symFn args endianness =
+  writeMemTHWithCondition bvi Nothing symFn args endianness
+
+-- | Create Generator code to write a value to memory, optionally guarding the
+-- write with a condition.  Conditional memory formulas arise naturally when
+-- an instruction writes a decoded-operand-dependent number of locations.
+writeMemTHWithCondition :: forall arch t fs args ret
+                        . (A.Architecture arch)
+                       => BoundVarInterpretations arch t fs
+                       -> Maybe BoundExp
+                       -> S.ExprSymFn t args ret
+                       -> Ctx.Assignment (S.Expr t) args
+                       -> M.Endianness
+                       -> MacawQ arch t fs (Some (S.Expr t))
+writeMemTHWithCondition bvi mcond symFn args endianness =
   case FC.toListFC Some args of
     [Some mem, Some addr, Some val] -> case SI.exprType val of
       SI.BaseBVRepr memWidthRepr -> do
@@ -728,10 +753,76 @@ writeMemTH bvi symFn args endianness =
         let memWidth = fromIntegral (intValue memWidthRepr) `div` 8
         addrValExp <- addEltTH endianness bvi addr
         writtenValExp <- addEltTH endianness bvi val
-        appendStmt [| G.addStmt =<< (M.WriteMem <$> $(refBinding addrValExp) <*> pure (M.BVMemRepr $(natReprFromIntTH memWidth) endianness) <*> $(refBinding writtenValExp)) |]
+        case mcond of
+          Nothing ->
+            appendStmt [| G.addStmt =<< (M.WriteMem <$> $(refBinding addrValExp) <*> pure (M.BVMemRepr $(natReprFromIntTH memWidth) endianness) <*> $(refBinding writtenValExp)) |]
+          Just cond ->
+            appendStmt
+              [| do
+                   condition <- $(refBinding cond)
+                   case condition of
+                     M.BoolValue True ->
+                       G.addStmt =<<
+                         (M.WriteMem
+                           <$> $(refBinding addrValExp)
+                           <*> pure (M.BVMemRepr $(natReprFromIntTH memWidth) endianness)
+                           <*> $(refBinding writtenValExp))
+                     M.BoolValue False -> return ()
+                     _ ->
+                       G.addStmt =<<
+                         (M.CondWriteMem
+                           <$> pure condition
+                           <*> $(refBinding addrValExp)
+                           <*> pure (M.BVMemRepr $(natReprFromIntTH memWidth) endianness)
+                           <*> $(refBinding writtenValExp))
+               |]
         return (Some mem)
       tp -> fail ("Invalid memory write value type for " <> symFnName symFn <> ": " <> showF tp)
     l -> fail ("Invalid memory write argument list for " <> symFnName symFn <> ": " <> show l)
+
+-- | Translate an array-valued ITE whose leaves are memory-write chains into
+-- conditional Macaw writes.  Macaw has no first-class memory value to place in
+-- a 'Mux', but it can represent the equivalent effects with 'M.CondWriteMem'.
+translateConditionalMemory :: forall arch t fs tp
+                            . A.Architecture arch
+                           => M.Endianness
+                           -> BoundVarInterpretations arch t fs
+                           -> Maybe BoundExp
+                           -> S.Expr t tp
+                           -> MacawQ arch t fs ()
+translateConditionalMemory endianness bvi mcond expr =
+  case expr of
+    S.BoundVarExpr _ -> return ()
+    S.NonceAppExpr n
+      | S.FnApp symFn args <- S.nonceExprApp n
+      , Just _ <- matchWriteMemWidth (symFnName symFn)
+      -> case FC.toListFC Some args of
+          Some mem : _ -> do
+            translateConditionalMemory endianness bvi mcond mem
+            void $ writeMemTHWithCondition bvi mcond symFn args endianness
+          [] -> fail ("Invalid memory write argument list for " <> symFnName symFn)
+    S.AppExpr app
+      | S.BaseIte CT.BaseArrayRepr{} _ test trueMem falseMem <-
+          S.appExprApp app
+      -> do
+          testExp <- addEltTH endianness bvi test
+          trueCond <- combineConditions mcond testExp
+          falseTestExpr <-
+            liftQ $ joinPure1 [| addApp |] [| M.NotApp |] testExp
+          falseTest <- bindTH (return falseTestExpr)
+          falseCond <- combineConditions mcond falseTest
+          translateConditionalMemory endianness bvi (Just trueCond) trueMem
+          translateConditionalMemory endianness bvi (Just falseCond) falseMem
+    _ -> fail ("Unsupported conditional memory expression: " <> showF expr)
+  where
+    combineConditions :: Maybe BoundExp
+                      -> BoundExp
+                      -> MacawQ arch t fs BoundExp
+    combineConditions Nothing condition = return condition
+    combineConditions (Just outer) condition = do
+      conjunction <-
+        liftQ $ joinPure2 [| addApp |] [| M.AndApp |] outer condition
+      bindTH (return conjunction)
 
 -- FIXME: Generalize this to take a symFn, checking the name, argument
 -- types, and return type (possibly)
@@ -933,16 +1024,30 @@ defaultAppEvaluator endianness elt interps = case elt of
         tms <- liftQ $ listE $ map (\(bnd, b) -> (tupE [refBinding bnd, lift b])) l
         liftQ [| joinPreds $(return tms) |]
   S.BaseIte bt _ test t f -> do
-    -- FIXME: Generate code that dynamically checks for a concrete condition and
-    -- make an ite instead of a mux if possible
-
     testE <- addEltTH endianness interps test
-    tE <- addEltTH endianness interps t
-    fE <- addEltTH endianness interps f
+    tE <- inConditionalContext $ addEltTH endianness interps t
+    fE <- inConditionalContext $ addEltTH endianness interps f
+    let concreteOrMux :: Q Exp -> MacawQ arch t fs Exp
+        concreteOrMux mux = do
+          muxE <- liftQ mux
+          liftQ
+            [| do
+                 condition <- $(refBinding testE)
+                 case condition of
+                   M.BoolValue True -> $(refBinding tE)
+                   M.BoolValue False -> $(refBinding fE)
+                   _ -> $(return muxE)
+             |]
     case bt of
-      CT.BaseBoolRepr -> liftQ $ joinPure3 [| addApp |] [| M.Mux M.BoolTypeRepr |] testE tE fE
-      CT.BaseBVRepr w -> liftQ $ joinPure3 [| addApp |] [| M.Mux (M.BVTypeRepr $(natReprTH w)) |] testE tE fE
-      CT.BaseFloatRepr fpp -> liftQ $ joinPure3 [| addApp |] [| M.Mux (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp)) |] testE tE fE
+      CT.BaseBoolRepr ->
+        concreteOrMux $
+          joinPure3 [| addApp |] [| M.Mux M.BoolTypeRepr |] testE tE fE
+      CT.BaseBVRepr w ->
+        concreteOrMux $
+          joinPure3 [| addApp |] [| M.Mux (M.BVTypeRepr $(natReprTH w)) |] testE tE fE
+      CT.BaseFloatRepr fpp ->
+        concreteOrMux $
+          joinPure3 [| addApp |] [| M.Mux (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp)) |] testE tE fE
       CT.BaseIntegerRepr -> liftQ [| error "Macaw semantics for integer ITE unsupported" |]
       CT.BaseRealRepr -> liftQ [| error "Macaw semantics for real ITE unsupported" |]
       CT.BaseStringRepr {} -> liftQ [| error "Macaw semantics for string ITE unsupported" |]
