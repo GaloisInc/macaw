@@ -1068,18 +1068,27 @@ lookupFunction archVals binariesInfo = MS.LookupFunctionHandle $ \s0 _memImpl re
     -- resides in.
     resolveFunAddrAndBin :: MM.MemWord w -> IO (MM.MemSegmentOff w, BinaryInfo arch)
     resolveFunAddrAndBin funAddr =
-      case binaryInfoAt binariesInfo binIndex of
-        Just binaryInfo ->
-          case resolveAbsoluteAddress (MD.memory (binaryDiscState binaryInfo)) funAddr of
-            Just funAddrOff -> pure (funAddrOff, binaryInfo)
+      case resolveInBinary (mainBinaryInfo binariesInfo) of
+        Just result -> pure result
+        Nothing ->
+          case binaryInfoAt binariesInfo binIndex of
+            Just binaryInfo ->
+              case resolveInBinary binaryInfo of
+                Just result -> pure result
+                Nothing -> error $
+                  "Failed to resolve function address: " ++ show funAddr
             Nothing -> error $
-              "Failed to resolve function address: " ++ show funAddr
-        Nothing -> error $
-          "Requested address " ++ show funAddr ++ " from binary with index " ++
-          show binIndex ++ ", but only " ++ show (countBinaries binariesInfo) ++
-          " binaries were discovered."
+              "Requested address " ++ show funAddr ++ " from binary with index " ++
+              show binIndex ++ ", but only " ++ show (countBinaries binariesInfo) ++
+              " binaries were discovered."
       where
         binIndex = fromInteger $ addressToIndex funAddr
+        resolveInBinary binaryInfo = do
+          funAddrOff <-
+            resolveAbsoluteAddress
+              (MD.memory (binaryDiscState binaryInfo))
+              funAddr
+          pure (funAddrOff, binaryInfo)
 
     dispatchFunAddrOff ::
          forall args ret ext rtp blocks r ctx
