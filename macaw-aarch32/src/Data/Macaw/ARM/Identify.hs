@@ -7,6 +7,7 @@
 
 module Data.Macaw.ARM.Identify
     ( identifyCall
+    , callClassifier
     , identifyReturn
     , isReturnValue
     , conditionalReturnClassifier
@@ -31,7 +32,9 @@ import qualified Data.Macaw.SemMC.Simplify as MSS
 import qualified Data.Macaw.Types as MT
 import           Data.Maybe ( maybeToList )
 import qualified Data.Sequence as Seq
-import           Lens.Micro ( (^.) )
+import qualified Data.Set as Set
+import qualified Language.ASL.Globals as ASL
+import           Lens.Micro ( (&), (^.), (.~) )
 
 import qualified SemMC.Architecture.AArch32 as ARM
 
@@ -97,6 +100,48 @@ identifyCall mem stmts0 rs
   , Just retAddr <- MM.asSegmentOff mem retAddrVal =
       Just (stmts0, retAddr)
   | otherwise = Nothing
+
+-- | Update the abstract state at a call's return address.
+--
+-- A BLX instruction sets PSTATE_T from the low bit of its call target.  That
+-- value describes the callee's instruction set, not the instruction set to use
+-- when execution returns to the caller.  Recover the caller's mode from the
+-- low bit of the link address.
+postCallAbsState
+  :: MAI.ArchitectureInfo ARM.AArch32
+  -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
+  -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
+  -> MC.ArchSegmentOff ARM.AArch32
+  -> MA.AbsBlockState (MC.ArchReg ARM.AArch32)
+postCallAbsState ainfo absState regs returnAddr =
+  MAI.postCallAbsState ainfo absState regs returnAddr
+    & MA.absRegState
+        . MC.boundValue
+            (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T"))
+        .~ MA.FinSet (Set.singleton returnMode)
+  where
+    returnMode
+      | MC.clearSegmentOffLeastBit returnAddr == returnAddr = 0
+      | otherwise = 1
+
+-- | Classify calls while restoring the instruction-set mode of their return
+-- continuation.
+callClassifier :: MAI.BlockClassifier ARM.AArch32 ids
+callClassifier = do
+  absState <- CMR.asks MAI.classifierAbsState
+  regs <- CMR.asks MAI.classifierFinalRegState
+  ainfo <- CMR.asks (MAI.pctxArchInfo . MAI.classifierParseContext)
+  contents <- MDC.callClassifier
+  let updateTarget (returnAddr, _, jumpBounds) =
+        ( returnAddr
+        , postCallAbsState ainfo absState regs returnAddr
+        , jumpBounds
+        )
+  pure
+    contents
+      { Parsed.intraJumpTargets =
+          map updateTarget (Parsed.intraJumpTargets contents)
+      }
 
 -- | Intended to identify a return statement.
 --
@@ -351,7 +396,7 @@ conditionalCallClassifier = do
       let notTakenJumpState =
             if callBranch == CallsOnTrue then falseJumpState else trueJumpState
       let notTakenTarget = (fallthroughIP, notTakenAbs, notTakenJumpState)
-      let takenAbs = MAI.postCallAbsState ainfo absState regs fallthroughIP
+      let takenAbs = postCallAbsState ainfo absState regs fallthroughIP
       let takenJumpState =
             Jmp.postCallBounds (MAI.archCallParams ainfo) jmpBounds regs
       let takenTarget = (fallthroughIP, takenAbs, takenJumpState)
